@@ -1,0 +1,37 @@
+dist
+node_modules
+
+# Debug log from npm
+npm-debug.log
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+client/.DS_Store
+server/.DS_Store
+
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+*.lnk
+
+# IDEs 
+.vscode/*
+.idea
+
+.env
+
+# Google Credentials
+credentials.json
+*.tsbuildinfo
+/.supa
+/test_reports/
+/coverage/
+/supabase/.temp
+
+# Whatsapp cache
+.wwebjs_auth
+.wwebjs_cache

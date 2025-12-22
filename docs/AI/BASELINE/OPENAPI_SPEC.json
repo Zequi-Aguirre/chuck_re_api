@@ -1,0 +1,423 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AskZack Local Assistant API",
+    "version": "0.2.1",
+    "description": "Local developer copilot API for context, workspace, repo, project, and git operations. Author field removed from commit endpoints."
+  },
+  "servers": [
+    {
+      "url": "https://askzack-local.ngrok.app"
+    }
+  ],
+  "paths": {
+    "/api/context/load": {
+      "get": {
+        "operationId": "loadContext",
+        "summary": "Load assistant context",
+        "responses": {
+          "200": { "description": "Context loaded successfully" }
+        }
+      }
+    },
+    "/api/context/active": {
+      "put": {
+        "operationId": "updateActiveContext",
+        "summary": "Update active runtime context",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "content": {
+                    "type": "string",
+                    "description": "Markdown content for runtime context"
+                  }
+                },
+                "required": ["content"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Context updated successfully" }
+        }
+      }
+    },
+
+    "/api/workspaces": {
+      "get": {
+        "operationId": "listWorkspaces",
+        "summary": "List all attached workspaces",
+        "responses": {
+          "200": { "description": "List of available workspaces" }
+        }
+      }
+    },
+    "/api/workspaces/active": {
+      "get": {
+        "operationId": "getActiveWorkspace",
+        "summary": "Get current active workspace",
+        "responses": {
+          "200": { "description": "Active workspace metadata" }
+        }
+      },
+      "post": {
+        "operationId": "setActiveWorkspace",
+        "summary": "Set workspace as active",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "workspaceId": {
+                    "type": "string",
+                    "description": "Workspace ID"
+                  }
+                },
+                "required": ["workspaceId"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Workspace set as active" }
+        }
+      }
+    },
+    "/api/workspaces/attach": {
+      "post": {
+        "operationId": "attachWorkspace",
+        "summary": "Attach a local repo as workspace",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "repoPath": {
+                    "type": "string",
+                    "description": "Absolute path to local repo"
+                  }
+                },
+                "required": ["repoPath"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Workspace attached successfully" }
+        }
+      }
+    },
+
+    "/api/projects": {
+      "get": {
+        "operationId": "listProjects",
+        "summary": "List all known projects",
+        "responses": {
+          "200": { "description": "List of projects returned" }
+        }
+      }
+    },
+    "/api/projects/active": {
+      "get": {
+        "operationId": "getActiveProject",
+        "summary": "Get active project",
+        "responses": {
+          "200": { "description": "Active project information" }
+        }
+      },
+      "post": {
+        "operationId": "setActiveProject",
+        "summary": "Set active project and repo path",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "projectSlug": {
+                    "type": ["string", "null"],
+                    "description": "Project identifier"
+                  },
+                  "repoPath": {
+                    "type": ["string", "null"],
+                    "description": "Repo path for the project"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Project activated successfully" }
+        }
+      }
+    },
+
+    "/api/repo/tree": {
+      "get": {
+        "operationId": "repoTree",
+        "summary": "List repository tree",
+        "responses": {
+          "200": { "description": "Repository file tree returned" }
+        }
+      }
+    },
+    "/api/repo/read": {
+      "get": {
+        "operationId": "repoRead",
+        "summary": "Read a file from repo",
+        "parameters": [
+          {
+            "name": "path",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Path to file within repo"
+          }
+        ],
+        "responses": {
+          "200": { "description": "File contents returned" }
+        }
+      }
+    },
+    "/api/repo/search": {
+      "post": {
+        "operationId": "repoSearch",
+        "summary": "Search within repo",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "query": { "type": "string" },
+                  "basePath": { "type": "string" }
+                },
+                "required": ["query"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Search results returned" }
+        }
+      }
+    },
+    "/api/repo/apply-patch": {
+      "post": {
+        "operationId": "repoApplyPatch",
+        "summary": "Apply unified diff patch",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "patch": {
+                    "type": "string",
+                    "description": "Unified diff patch text"
+                  }
+                },
+                "required": ["patch"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Patch applied successfully" }
+        }
+      }
+    },
+
+    "/api/git/status": {
+      "get": {
+        "operationId": "gitStatus",
+        "summary": "Get git status",
+        "responses": {
+          "200": { "description": "Current branch and file status returned" }
+        }
+      }
+    },
+    "/api/git/diff": {
+      "get": {
+        "operationId": "gitDiff",
+        "summary": "Show git diff for working tree (optionally scoped to a filepath)",
+        "parameters": [
+          {
+            "name": "filepath",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string" },
+            "description": "Optional filepath to scope diff output"
+          }
+        ],
+        "responses": {
+          "200": { "description": "Git diff output returned" }
+        }
+      }
+    },
+    "/api/git/add": {
+      "post": {
+        "operationId": "gitAdd",
+        "summary": "Stage a file for commit",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "filepath": {
+                    "type": "string",
+                    "description": "Path to file to stage"
+                  }
+                },
+                "required": ["filepath"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "File successfully staged" }
+        }
+      }
+    },
+    "/api/git/commit": {
+      "post": {
+        "operationId": "gitCommit",
+        "summary": "Commit staged changes (uses system git identity)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "message": { "type": "string", "description": "Commit message" }
+                },
+                "required": ["message"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Commit completed successfully" }
+        }
+      }
+    },
+
+    "/api/git/branch/current": {
+      "get": {
+        "operationId": "gitBranchCurrent",
+        "summary": "Get current branch name",
+        "responses": {
+          "200": { "description": "Current branch returned" }
+        }
+      }
+    },
+    "/api/git/branch/new": {
+      "post": {
+        "operationId": "gitBranchNew",
+        "summary": "Create and checkout a new branch",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "branch": { "type": "string", "description": "New branch name" }
+                },
+                "required": ["branch"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "New branch created and checked out" }
+        }
+      }
+    },
+    "/api/git/branch/checkout": {
+      "post": {
+        "operationId": "gitBranchCheckout",
+        "summary": "Checkout an existing branch",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "branch": { "type": "string", "description": "Branch name to checkout" }
+                },
+                "required": ["branch"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Branch checked out" }
+        }
+      }
+    },
+
+    "/api/git/push-current": {
+      "post": {
+        "operationId": "gitPushCurrent",
+        "summary": "Push current branch to remote (sets upstream)",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "remote": { "type": "string", "description": "Remote name (defaults to origin)" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Push current operation completed successfully" }
+        }
+      }
+    },
+    "/api/git/push": {
+      "post": {
+        "operationId": "gitPush",
+        "summary": "Push a branch to remote (sets upstream)",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "remote": { "type": "string", "description": "Remote name (e.g., origin)" },
+                  "branch": { "type": "string", "description": "Branch name to push" }
+                },
+                "required": ["remote", "branch"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Push operation completed successfully" }
+        }
+      }
+    }
+  }
+}

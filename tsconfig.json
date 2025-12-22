@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "lib": ["DOM", "DOM.Iterable", "ESNext"],
+
+    /* Bundler mode */
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+    "baseUrl": "src",
+
+    /* dependency injection */
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+
+    "noEmit": true, // vite/esbuild will do this
+    "composite": true
+  }
+}

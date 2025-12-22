@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.json",
+
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+  },
+  "include": ["./**/*.ts", "./**/*.tsx", "./**/*.json", "./**/*.css"],
+  "exclude": ["../node_modules", "client"]
+}
