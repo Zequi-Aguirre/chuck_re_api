@@ -9,7 +9,7 @@ import { EnvConfig } from "./config/envConfig.ts";
 import { Authenticator } from "./middleware/authenticator.ts";
 
 // Resources
-import ProjectsResource from "./resources/projectsResource.ts";
+import { GhlWebhookResource } from "./resources/GhlWebhookResource.ts";
 
 dotenv.config();
 
@@ -38,9 +38,9 @@ export class ChuckREAPILocalServer {
 
         // APIs (protected)
         this.app.use(
-            "/api/projects",
+            "/api/ghl",
             authenticateApiKey,
-            container.resolve(ProjectsResource).routes()
+            container.resolve(GhlWebhookResource).router
         );
 
         // catch all unhandled errors in the application
