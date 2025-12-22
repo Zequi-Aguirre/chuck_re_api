@@ -5,7 +5,7 @@ import http from "http";
 import { container } from "tsyringe";
 
 import { appConfig } from "./config";
-import { EnvConfig } from "./config/envConfig.ts";
+import { EnvConfig } from "./config/EnvConfig.ts";
 import { Authenticator } from "./middleware/authenticator.ts";
 
 // Resources

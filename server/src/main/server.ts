@@ -1,5 +1,5 @@
 import { ChuckREAPILocalServer } from './chuckREAPILocalServer.ts';
-import { EnvConfig } from './config/envConfig';
+import { EnvConfig } from './config/EnvConfig';
 
 const PORT = process.env.PORT || 8080;
 
