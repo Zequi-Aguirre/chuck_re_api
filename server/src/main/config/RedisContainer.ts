@@ -1,18 +1,29 @@
-import { injectable } from 'tsyringe';
-import IORedis from 'ioredis';
-import { EnvConfig } from './EnvConfig';
+import { injectable } from "tsyringe";
+import { Redis as UpstashRedis } from "@upstash/redis";
+import { EnvConfig } from "./EnvConfig";
 
 @injectable()
 export class RedisContainer {
-  public readonly redis: IORedis;
+  public readonly redis: UpstashRedis | any;
 
   constructor(private readonly env: EnvConfig) {
-    this.redis = new IORedis(this.env.redisUrl, {
-      maxRetriesPerRequest: null,
-      enableReadyCheck: true,
-    });
+    if (this.env.redisProvider === "upstash") {
+      // ✅ Upstash REST-based Redis
+      this.redis = new UpstashRedis({
+        url: this.env.upstashRedisUrl,
+        token: this.env.upstashRedisToken,
+      });
 
-    this.redis.on('connect', () => console.log('✅ Redis connected'));
-    this.redis.on('error', (err) => console.error('❌ Redis error:', err));
+      console.log("✅ Connected to Upstash Redis:", this.env.upstashRedisUrl);
+    } else {
+      // 🧩 Fallback: Local Redis via ioredis
+      const IORedis = require("ioredis");
+      this.redis = new IORedis(this.env.redisUrl, {
+        maxRetriesPerRequest: null,
+        enableReadyCheck: true,
+      });
+
+      console.log("✅ Connected to Local Redis:", this.env.redisUrl);
+    }
   }
 }

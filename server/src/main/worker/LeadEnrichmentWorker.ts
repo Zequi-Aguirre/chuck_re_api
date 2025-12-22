@@ -1,54 +1,56 @@
-import { Worker } from 'bullmq';
-import { injectable } from 'tsyringe';
-import { EnvConfig } from '../config/EnvConfig';
-import { RedisContainer } from '../config/RedisContainer';
-import { LeadEnrichmentService } from '../services/LeadEnrichmentService';
-import { EnrichmentJobPayload } from '../types/LeadEnrichment';
+import { Worker, Job } from "bullmq";
+import { container } from "tsyringe";
+import { EnvConfig } from "../config/EnvConfig";
+import { RedisContainer } from "../config/RedisContainer";
+import { LeadEnrichmentService } from "../services/LeadEnrichmentService";
+import { EnrichmentJobPayload } from "../types/LeadEnrichment";
 
-@injectable()
 export class LeadEnrichmentWorker {
-  constructor(
-    private readonly env: EnvConfig,
-    private readonly redis: RedisContainer,
-    private readonly svc: LeadEnrichmentService
-  ) {}
+  private readonly worker: Worker<EnrichmentJobPayload> | null = null;
 
-  /**
-   * Start the BullMQ worker that processes enrichment jobs.
-   * It will stay alive and automatically pick up new jobs as they arrive.
-   */
-  public start(): Worker<EnrichmentJobPayload> {
-    const worker = new Worker<EnrichmentJobPayload>(
-      this.env.enrichQueueName,
-      async (job) => {
-        try {
-          const result = await this.svc.processJob(job.data);
-          console.log(`✅ Processed job ${job.id}:`, result);
-          return result;
-        } catch (err) {
-          console.error(`❌ Job ${job.id} failed:`, err);
-          throw err;
-        }
-      },
-      {
-        connection: this.redis.redis,
-        concurrency: 5,
-        limiter: {
-          max: this.env.enrichRatePerSecond,
-          duration: 1000,
+  constructor() {
+    const env = container.resolve(EnvConfig);
+    const redisContainer = container.resolve(RedisContainer);
+
+    // Upstash REST API is not compatible with BullMQ Worker
+    if (env.redisProvider === "upstash") {
+      console.warn(
+          "⚠️ Upstash Redis detected — BullMQ Worker is disabled (REST API is not supported for queues).\n" +
+          "You can still use the LeadEnrichmentService directly for API-triggered enrichment."
+      );
+      return;
+    }
+
+    // ✅ Create BullMQ Worker when using local Redis
+    this.worker = new Worker<EnrichmentJobPayload>(
+        env.enrichQueueName,
+        async (job: Job<EnrichmentJobPayload>) => {
+          const leadEnrichmentService = container.resolve(LeadEnrichmentService);
+          console.log(`🧠 Processing job: ${job.id} (${job.name})`);
+
+          try {
+            await leadEnrichmentService.processLead(job.data);
+            console.log(`✅ Lead enrichment completed: ${job.id}`);
+          } catch (err) {
+            console.error(`❌ Lead enrichment failed (${job.id}):`, err);
+            throw err;
+          }
         },
-      }
+        {
+          connection: redisContainer.redis,
+          concurrency: Number(process.env.WORKER_CONCURRENCY ?? 5),
+        }
     );
 
-    worker.on('completed', (job) => {
-      console.log(`✅ Job completed: ${job.id}`);
-    });
+    // Worker lifecycle events
+    this.worker.on("completed", (job) =>
+        console.log(`🎯 Job completed → ${job.id}`)
+    );
 
-    worker.on('failed', (job, err) => {
-      console.error(`❌ Job failed: ${job?.id}`, err);
-    });
+    this.worker.on("failed", (job, err) =>
+        console.error(`💥 Job failed → ${job?.id}:`, err.message)
+    );
 
-    console.log(`🚀 LeadEnrichmentWorker started (queue: ${this.env.enrichQueueName})`);
-    return worker;
+    console.log(`👷 Lead Enrichment Worker initialized for queue: ${env.enrichQueueName}`);
   }
 }

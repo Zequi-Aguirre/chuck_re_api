@@ -1,39 +1,26 @@
-import axios, { AxiosInstance } from 'axios';
+import axios, { AxiosInstance, CreateAxiosDefaults } from 'axios';
 import { injectable } from 'tsyringe';
 import { EnvConfig } from '../config/EnvConfig';
-
-type PropertySearchResponse = {
-  data: Array<{ id: number }>;
-};
-
-type PropertyDetailResponse = {
-  data: {
-    ownerInfo?: { owner1FullName?: string };
-    lastSale?: { saleDate?: string };
-    mlsActive?: boolean;
-    mlsHistory?: Array<{ status?: string; statusDate?: string; price?: number }>;
-    mortgageHistory?: Array<{ amount?: number }>;
-    foreclosureInfo?: Array<{ active?: boolean }>;
-  };
-};
 
 @injectable()
 export class RealEstateApiDao {
   private readonly http: AxiosInstance;
 
   constructor(private readonly env: EnvConfig) {
-    this.http = axios.create({
+    const config: CreateAxiosDefaults = {
       baseURL: this.env.realEstateBaseUrl,
       headers: {
-        'content-type': 'application/json',
+        'Content-Type': 'application/json',
         'x-api-key': this.env.realEstateApiKey,
       },
       timeout: 30000,
-    });
+    };
+
+    this.http = axios.create(config);
   }
 
-  async findPropertyIdByAddress(addressString: string): Promise<number | null> {
-    const resp = await this.http.post<PropertySearchResponse>('/v2/PropertySearch', {
+  public async findPropertyIdByAddress(addressString: string): Promise<number | null> {
+    const resp = await this.http.post<{ data: Array<{ id: number }> }>('/v2/PropertySearch', {
       size: 1,
       address: addressString,
     });
@@ -42,8 +29,8 @@ export class RealEstateApiDao {
     return first?.id ?? null;
   }
 
-  async getPropertyDetailById(id: number): Promise<PropertyDetailResponse['data']> {
-    const resp = await this.http.post<PropertyDetailResponse>('/v2/PropertyDetail', { id });
+  public async getPropertyDetailById(id: number): Promise<any> {
+    const resp = await this.http.post<{ data: any }>('/v2/PropertyDetail', { id });
     return resp.data.data;
   }
 }
