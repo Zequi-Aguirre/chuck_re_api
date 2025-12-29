@@ -1,43 +1,55 @@
-import { Router, Request, Response } from 'express';
-import { injectable } from 'tsyringe';
-import { LeadEnrichmentQueueService } from '../services/LeadEnrichmentQueueService';
-import { GhlLeadImportedWebhookBody } from '../types/LeadEnrichment';
+import { Router, Request, Response } from "express";
+import { injectable, inject } from "tsyringe";
+import { LeadEnrichmentQueueService } from "../services/LeadEnrichmentQueueService";
 
 @injectable()
 export class GhlWebhookResource {
   public readonly router: Router;
 
-  constructor(private readonly queue: LeadEnrichmentQueueService) {
+  constructor(
+      @inject(LeadEnrichmentQueueService) private readonly queue: LeadEnrichmentQueueService
+  ) {
     this.router = Router();
+    this.configureRoutes();
+  }
 
-    // Webhook endpoint for GHL lead imports
+  private configureRoutes(): void {
     this.router.post(
-      '/webhooks/lead-imported',
-      async (req: Request, res: Response) => {
-        try {
-          const body = req.body as GhlLeadImportedWebhookBody;
-
-          if (!body?.contactId || !body?.locationId || !body?.address) {
-            return res
-              .status(400)
-              .json({ ok: false, error: 'Missing required lead fields' });
-          }
-
-          const addressString = `${body.address.address1}, ${body.address.city} ${body.address.state} ${body.address.postalCode}`;
-          const jobId = await this.queue.enqueue({
-            locationId: body.locationId,
-            contactId: body.contactId,
-            addressString,
-          });
-
-          return res.status(202).json({ ok: true, jobId });
-        } catch (error: any) {
-          console.error('Error handling GHL webhook:', error);
-          return res
-            .status(500)
-            .json({ ok: false, error: error.message ?? 'Internal error' });
-        }
-      }
+        "/webhook",
+        this.handleWebhook.bind(this)
     );
+  }
+
+  private async handleWebhook(req: Request, res: Response): Promise<Response> {
+    try {
+      const {
+        contact_id,
+        address1,
+        city,
+        state,
+        postal_code,
+      } = req.body;
+
+      // Validate required fields
+      if (!contact_id || !address1 || !city || !state || !postal_code) {
+        return res.status(400).json({ error: "Missing required address fields" });
+      }
+
+      // ✅ Build a consistent, comma-formatted full address
+      const full_address = `${address1.trim()}, ${city.trim()}, ${state.trim()} ${postal_code.trim()}`;
+
+      console.log(`🏗️ Constructed full_address: "${full_address}"`);
+
+      // Enqueue enrichment job using the normalized address
+      const job = await this.queue.enqueue({
+        contact_id,
+        full_address,
+      });
+
+      return res.status(202).json({ ok: true, jobId: job.id, full_address });
+    } catch (err) {
+      console.error("❌ Error in GHL webhook handler:", err);
+      return res.status(500).json({ error: "Internal Server Error" });
+    }
   }
 }

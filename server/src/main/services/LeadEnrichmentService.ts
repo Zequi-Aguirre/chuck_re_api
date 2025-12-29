@@ -1,97 +1,50 @@
-import { injectable } from 'tsyringe';
-import { RealEstateApiDao } from '../data/RealEstateApiDao';
-import { GhlApiDao } from '../data/GhlApiDao';
-import { EnrichmentJobPayload, EnrichmentResult } from '../types/LeadEnrichment';
+import { injectable } from "tsyringe";
+import { GhlApiDao } from "../data/GhlApiDao";
+import { RealEstateApiDao } from "../data/RealEstateApiDao";
+import { EnrichmentJobPayload, EnrichmentResult } from "../types/LeadEnrichment";
 
 @injectable()
 export class LeadEnrichmentService {
   constructor(
-    private readonly reDao: RealEstateApiDao,
-    private readonly ghlDao: GhlApiDao
+      private readonly ghlDao: GhlApiDao,
+      private readonly reDao: RealEstateApiDao
   ) {}
 
-  /**
-   * Process one enrichment job:
-   * - Look up the property by address
-   * - Fetch detail data
-   * - Compute disqualification logic
-   * - Write back results to GHL
-   */
-  public async processJob(payload: EnrichmentJobPayload): Promise<EnrichmentResult> {
-    const propertyId = await this.reDao.findPropertyIdByAddress(payload.addressString);
+  public async processLead(jobData: EnrichmentJobPayload): Promise<void> {
+    const { contact_id, full_address } = jobData;
 
-    if (!propertyId) {
-      const result: EnrichmentResult = {
-        ownerName: null,
-        isActiveListed: false,
-        lastListedPrice: null,
-        lastListedDate: null,
-        lastSoldDate: null,
-        mortgageAmount: null,
-        foreclosureActive: false,
-        disqualify: false,
-        disqualifyReasons: ['NO_PROPERTY_MATCH'],
-      };
-
-      await this.ghlDao.upsertContactCustomFields(payload.locationId, payload.contactId, result);
-      await this.ghlDao.applyTag(payload.locationId, payload.contactId, 'ENRICH_NO_MATCH');
-      return result;
+    // Fetch contact details from GHL
+    const contact = await this.ghlDao.getContact(contact_id);
+    if (!contact) {
+      console.warn(`⚠️ Contact not found: ${contact_id}`);
+      return;
     }
 
-    const pd = await this.reDao.getPropertyDetailById(propertyId);
+    // Fetch property details from Real Estate API
+    const propertyData = await this.reDao.getEnrichmentDataByAddress(full_address);
+    if (!propertyData) {
+      console.warn(`⚠️ No property data found for: ${full_address}`);
+      return;
+    }
 
-    const ownerName = pd.ownerInfo?.owner1FullName ?? null;
-    const isActiveListed = Boolean(pd.mlsActive);
+    console.log(`ℹ️ Fetched property data for ${full_address}:`, propertyData);
 
-    // Extract last listed price/date from MLS history
-    const lastMls = (pd.mlsHistory ?? [])
-      .slice()
-      .sort((a, b) => (a.statusDate ?? '').localeCompare(b.statusDate ?? ''))
-      .pop();
-
-    const lastListedPrice = lastMls?.price ?? null;
-    const lastListedDate = lastMls?.statusDate ?? null;
-
-    const lastSoldDate = pd.lastSale?.saleDate ?? null;
-    const soldAfter2022 = Boolean(lastSoldDate && new Date(lastSoldDate).getUTCFullYear() > 2022);
-
-    const mortgageAmount =
-      (pd.mortgageHistory ?? [])
-        .map((m) => m.amount ?? 0)
-        .sort((a, b) => b - a)[0] || null;
-
-    const foreclosureActive = Boolean((pd.foreclosureInfo ?? []).some((f) => f.active));
-
-    const disqualifyReasons: string[] = [];
-    if (isActiveListed) disqualifyReasons.push('ACTIVE_LISTED');
-    if (soldAfter2022) disqualifyReasons.push('SOLD_AFTER_2022');
-
-    const disqualify = disqualifyReasons.length > 0;
-
+    // Prepare result matching EnrichmentResult interface
     const result: EnrichmentResult = {
-      ownerName,
-      isActiveListed,
-      lastListedPrice,
-      lastListedDate,
-      lastSoldDate,
-      mortgageAmount,
-      foreclosureActive,
-      disqualify,
-      disqualifyReasons,
+      ownerName: propertyData.ownerName ?? null,
+      isActiveListed: propertyData.isActiveListed ? 'YES' : 'NO',
+      lastSalePrice: propertyData.lastSalePrice ?? null,
+      lastSoldDate: propertyData.lastSoldDate ? new Date(propertyData.lastSoldDate).toISOString().split('T')[0] : null,
+      mortgageAmount: propertyData.mortgageAmount ?? null,
+      foreclosureActive: propertyData.foreclosureActive ?? false,
+      disqualify: false, // Default until logic is added
+      disqualifyReasons: [],
     };
 
-    await this.ghlDao.upsertContactCustomFields(payload.locationId, payload.contactId, result);
+    console.log(`ℹ️ Enrichment data for ${contact_id}:`, result);
 
-    if (disqualify) {
-      await this.ghlDao.applyTag(
-        payload.locationId,
-        payload.contactId,
-        `DQ_${disqualifyReasons.join('_')}`
-      );
-    } else {
-      await this.ghlDao.applyTag(payload.locationId, payload.contactId, 'QUALIFIED');
-    }
-
-    return result;
+    // Update GHL contact with enriched data
+    await this.ghlDao.updateContactCustomFields(contact_id, result);
+    console.log(`✅ Lead enrichment completed for ${contact_id}`);
   }
 }

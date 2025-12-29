@@ -12,16 +12,14 @@ export type GhlLeadImportedWebhookBody = {
 };
 
 export type EnrichmentJobPayload = {
-  locationId: string;
-  contactId: string;
-  addressString: string; // normalized single-line address
+  contact_id: string;
+  full_address: string; // normalized single-line address
 };
 
 export type EnrichmentResult = {
   ownerName: string | null;
-  isActiveListed: boolean;
-  lastListedPrice: number | null;
-  lastListedDate: string | null; // ISO date string
+  isActiveListed: string;
+  lastSalePrice: number | null;
   lastSoldDate: string | null;   // ISO date string
   mortgageAmount: number | null;
   foreclosureActive: boolean;

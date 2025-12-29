@@ -1,29 +1,25 @@
 import { injectable } from "tsyringe";
-import { Redis as UpstashRedis } from "@upstash/redis";
-import { EnvConfig } from "./EnvConfig";
+import { Redis } from "@upstash/redis";
+import IORedis from "ioredis";
+import { EnvConfig } from "./envConfig.ts";
 
 @injectable()
 export class RedisContainer {
-  public readonly redis: UpstashRedis | any;
+  public readonly redis: IORedis; // For BullMQ (TCP)
+  public readonly upstash: Redis; // For REST interactions
 
   constructor(private readonly env: EnvConfig) {
-    if (this.env.redisProvider === "upstash") {
-      // ✅ Upstash REST-based Redis
-      this.redis = new UpstashRedis({
-        url: this.env.upstashRedisUrl,
-        token: this.env.upstashRedisToken,
-      });
+    // ✅ Upstash REST client
+    this.upstash = new Redis({
+      url: this.env.upstashRedisRestUrl,
+      token: this.env.upstashRedisRestToken,
+    });
 
-      console.log("✅ Connected to Upstash Redis:", this.env.upstashRedisUrl);
-    } else {
-      // 🧩 Fallback: Local Redis via ioredis
-      const IORedis = require("ioredis");
-      this.redis = new IORedis(this.env.redisUrl, {
-        maxRetriesPerRequest: null,
-        enableReadyCheck: true,
-      });
+    // ✅ BullMQ / ioredis client (TLS over TCP)
+    this.redis = new IORedis(this.env.upstashRedisTcpUrl, {
+      tls: { rejectUnauthorized: false },
+    });
 
-      console.log("✅ Connected to Local Redis:", this.env.redisUrl);
-    }
+    console.log(`✅ Connected to Upstash Redis REST: ${this.env.upstashRedisRestUrl}`);
   }
 }

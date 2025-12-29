@@ -1,6 +1,6 @@
 import { Worker, Job } from "bullmq";
 import { container } from "tsyringe";
-import { EnvConfig } from "../config/EnvConfig";
+import { EnvConfig } from "../config/envConfig";
 import { RedisContainer } from "../config/RedisContainer";
 import { LeadEnrichmentService } from "../services/LeadEnrichmentService";
 import { EnrichmentJobPayload } from "../types/LeadEnrichment";

@@ -1,5 +1,5 @@
-import { ChuckREAPILocalServer } from './chuckREAPILocalServer.ts';
-import { EnvConfig } from './config/EnvConfig';
+import { ChuckREAPIServer } from './chuckREAPIServer.ts';
+import { EnvConfig } from './config/envConfig';
 
 const PORT = process.env.PORT || 8080;
 
@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 8080;
         const config = new EnvConfig();
 
         // Create and setup the server
-        const server = await new ChuckREAPILocalServer(config).setup();
+        const server = await new ChuckREAPIServer(config).setup();
 
         // Start listening using the internally created HTTP server
         const httpServer = server.getHttpServer();
