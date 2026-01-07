@@ -24,7 +24,7 @@ type PropertyDetail = {
   };
   lastSalePrice?: number | null;
   lastSaleDate?: string | null;
-  mlsActive?: string | null;
+  mlsActive: boolean;
   mlsSold?: boolean;
   mlsListingPrice?: number | null;
   mlsListingDate?: string | null;
@@ -213,8 +213,7 @@ export class RealEstateApiDao {
    */
   private mapToEnrichment(detail: PropertyDetail): EnrichmentResult {
     const ownerName = detail.ownerInfo?.owner1FullName ?? detail.ownerInfo?.owner2FullName ?? null;
-
-    const isActiveListed = detail.mlsActive === "true";
+    const isActiveListed = detail.mlsActive;
     const lastSalePrice = detail.lastSale?.saleAmount ?? null;
     const lastSoldDate = detail.lastSale?.saleDate ?? null;
 

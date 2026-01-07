@@ -27,12 +27,10 @@ export class LeadEnrichmentService {
       return;
     }
 
-    console.log(`ℹ️ Fetched property data for ${full_address}:`, propertyData);
-
     // Prepare result matching EnrichmentResult interface
     const result: EnrichmentResult = {
       ownerName: propertyData.ownerName ?? null,
-      isActiveListed: propertyData.isActiveListed ? 'YES' : 'NO',
+      isActiveListed: propertyData.isActiveListed,
       lastSalePrice: propertyData.lastSalePrice ?? null,
       lastSoldDate: propertyData.lastSoldDate ? new Date(propertyData.lastSoldDate).toISOString().split('T')[0] : null,
       mortgageAmount: propertyData.mortgageAmount ?? null,
@@ -40,8 +38,6 @@ export class LeadEnrichmentService {
       disqualify: false, // Default until logic is added
       disqualifyReasons: [],
     };
-
-    console.log(`ℹ️ Enrichment data for ${contact_id}:`, result);
 
     // Update GHL contact with enriched data
     await this.ghlDao.updateContactCustomFields(contact_id, result);

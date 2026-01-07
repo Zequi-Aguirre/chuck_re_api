@@ -24,15 +24,16 @@ export class GhlApiDao {
   }
 
   async updateContactCustomFields(contactId: string, result: EnrichmentResult): Promise<void> {
+    console.log(`Updating contact ${contactId} with enrichment data`, result);
     await this.http.put(`/contacts/${contactId}`, {
       customFields: [
         { key: 'ownername', value: result.ownerName },
-        { key: 'activelisted', value: result.isActiveListed ? 'Y' : 'N' },
+        { key: 'isactivelisted', value: result.isActiveListed ? 'YES' : 'NO' },
         { key: 'lastlistedprice', value: result.lastSalePrice },
         { key: 'lastsolddate', value: result.lastSoldDate },
         { key: 'mortgageamount', value: result.mortgageAmount },
-        { key: 'foreclosureactive', value: result.foreclosureActive ? 'Y' : 'N' },
-        { key: 'disqualify', value: result.disqualify ? 'Y' : 'N' },
+        { key: 'foreclosureactive', value: result.foreclosureActive ? 'YES' : 'NO' },
+        { key: 'disqualify', value: result.disqualify ? 'YES' : 'NO' },
         { key: 'disqualifyreasons', value: result.disqualifyReasons.join(',') },
       ],
     });

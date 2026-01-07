@@ -18,9 +18,9 @@ export type EnrichmentJobPayload = {
 
 export type EnrichmentResult = {
   ownerName: string | null;
-  isActiveListed: string;
+  isActiveListed: boolean;
   lastSalePrice: number | null;
-  lastSoldDate: string | null;   // ISO date string
+  lastSoldDate: string | null;
   mortgageAmount: number | null;
   foreclosureActive: boolean;
   disqualify: boolean;
