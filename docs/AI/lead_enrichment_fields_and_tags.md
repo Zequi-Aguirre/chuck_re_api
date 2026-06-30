@@ -1,7 +1,7 @@
 # Lead Enrichment Fields and Tags
 
 ## Overview
-This document describes how the **Lead Enrichment Pipeline** works in the Chuck Real Estate API project.
+This document describes how the **Lead Enrichment Pipeline** works in the Jake project.
 It explains how data flows from GoHighLevel (GHL) into the enrichment system, how property data is retrieved from RealEstateAPI, and how results are written back into GHL using both **custom fields** and **tags**.
 
 ---

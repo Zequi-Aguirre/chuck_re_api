@@ -5,18 +5,20 @@ import http from "http";
 import cors from "cors";
 import { container } from "tsyringe";
 
-import { appConfig } from "./config/index.ts";
+import { appConfig } from "./config";
 import { EnvConfig } from "./config/envConfig.ts";
 import { Authenticator } from "./middleware/authenticator.ts";
 
 // Resources
+import { MailerResource } from "./resources/MailerResource.ts";
 import { GhlWebhookResource } from "./resources/GhlWebhookResource.ts";
+import { JakeSmsResource } from "./resources/JakeSmsResource.ts";
 // Services
 import { LeadEnrichmentQueueService } from "./services/LeadEnrichmentQueueService.ts";
 
 dotenv.config();
 
-export class ChuckREAPIServer {
+export class JakeServer {
     private readonly app: Express;
     private httpServer?: http.Server;
 
@@ -27,7 +29,7 @@ export class ChuckREAPIServer {
     /**
      * Bootstraps and configures the Express server and background worker.
      */
-    async setup(): Promise<ChuckREAPIServer> {
+    async setup(): Promise<JakeServer> {
         appConfig(this.app);
 
         // Create HTTP server manually
@@ -43,16 +45,31 @@ export class ChuckREAPIServer {
         this.app.use(cors());
         this.app.use(express.json());
 
+        // The lead-enrichment pipeline (Redis queue + worker) is parked legacy
+        // functionality — it is only wired up when Redis is actually configured,
+        // so the MVP server boots cleanly on environments without Redis secrets.
+        const redisConfigured = Boolean(this.config.upstashRedisTcpUrl?.trim());
+
         // 🧠 API Routes
-        this.app.use("/api/ghl", container.resolve(GhlWebhookResource).router);
+        if (redisConfigured) {
+            this.app.use("/api/ghl", container.resolve(GhlWebhookResource).router);
+        } else {
+            console.log("ℹ️ Redis not configured — skipping /api/ghl lead-enrichment webhook.");
+        }
+        this.app.use("/api/mailer", container.resolve(MailerResource).router);
+        this.app.use("/api/sms", container.resolve(JakeSmsResource).router);
 
         // 🚀 Start Lead Enrichment Worker (but NOT the HTTP server)
-        try {
-            const queueService = container.resolve(LeadEnrichmentQueueService);
-            await queueService.startWorker();
-            console.log("🧠 Lead Enrichment Worker started successfully.");
-        } catch (err) {
-            console.error("❌ Failed to start Lead Enrichment Worker:", err);
+        if (redisConfigured) {
+            try {
+                const queueService = container.resolve(LeadEnrichmentQueueService);
+                await queueService.startWorker();
+                console.log("🧠 Lead Enrichment Worker started successfully.");
+            } catch (err) {
+                console.error("❌ Failed to start Lead Enrichment Worker:", err);
+            }
+        } else {
+            console.log("ℹ️ Redis not configured — Lead Enrichment Worker not started.");
         }
 
         // Global error handling

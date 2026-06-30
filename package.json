@@ -1,5 +1,5 @@
 {
-  "name": "chuck_re_api",
+  "name": "jake",
   "version": "1.0.0",
   "description": "",
   "type": "commonjs",
@@ -8,13 +8,13 @@
     "doc": "server/training_docs"
   },
   "scripts": {
-    "local-dev-be": "doppler run -p chuck_re_api -c local-dev -- nodemon --exec ts-node-esm server/src/main/server.ts",
+    "local-dev-be": "doppler run -p jake -c dev -- nodemon --exec ts-node-esm server/src/main/server.ts",
     "build-be": "tsc --p server/tsconfig.json && node server/bundler.mjs",
-    "start": "doppler run -p chuck_re_api -c local-dev_built -- node dist/server.js",
+    "start": "doppler run -p jake -c dev -- node dist/server.js",
     "local-built-ngrok": "pkill -f ngrok || true && ngrok http 8080 --url https://askzack-local.ngrok.app",
-    "dev-db-migrate": "doppler run -p chuck_re_api -c local-dev -- npx supabase db push",
-    "dev-db-reset": "doppler run -p chuck_re_api -c local-dev -- npx supabase db reset",
-    "dev-db-status": "doppler run -p chuck_re_api -c local-dev -- npx supabase db status"
+    "dev-db-migrate": "doppler run -p jake -c dev -- npx supabase db push",
+    "dev-db-reset": "doppler run -p jake -c dev -- npx supabase db reset",
+    "dev-db-status": "doppler run -p jake -c dev -- npx supabase db status"
   },
   "keywords": [],
   "author": "",

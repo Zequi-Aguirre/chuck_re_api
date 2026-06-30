@@ -45,6 +45,31 @@ export class GhlApiDao {
     });
   }
 
+  /**
+   * Send an outbound SMS to a contact via the GHL Conversations API.
+   * Uses the same authenticated client (Bearer + Version: 2021-07-28) as the
+   * contact/tag calls above. `fromNumber` is optional — when omitted GHL sends
+   * from the location's default number.
+   */
+  async sendSms(params: {
+    contactId: string;
+    message: string;
+    fromNumber?: string;
+  }): Promise<any> {
+    const body: Record<string, unknown> = {
+      type: 'SMS',
+      contactId: params.contactId,
+      message: params.message,
+    };
+    if (params.fromNumber) {
+      body.fromNumber = params.fromNumber;
+    }
+
+    const response = await this.http.post('/conversations/messages', body);
+    console.log(`📤 SMS sent to contact ${params.contactId}`);
+    return response.data;
+  }
+
   public async getContact(contactId: string): Promise<any | null> {
     try {
       const response = await this.http.get(`/contacts/${contactId}`);
