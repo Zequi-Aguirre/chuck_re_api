@@ -9,6 +9,7 @@ import {
   RealEstateApiPropertyDetail,
   RealEstateApiPropertyDetailResponse,
   RealEstateApiPropertySearchResponse,
+  RealEstateApiPropertySearchResult,
   RealEstateApiAddress,
 } from "../types/RealEstateApi.ts";
 
@@ -44,7 +45,28 @@ export class RealEstateApiDao {
       const idStr = first?.id;
       const id = typeof idStr === "string" ? Number(idStr) : idStr;
 
-      return Number.isFinite(id) ? id : null;
+      return id != null && Number.isFinite(id) ? id : null;
+    } catch (err: any) {
+      console.error(`❌ PropertySearch error: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * PropertySearch summary lookup — returns the top matching property's
+   * summary record (or null). Used by the SMS assistant core path to build a
+   * reply directly from a single /v2/PropertySearch call.
+   */
+  public async searchPropertyByAddress(
+    addressString: string
+  ): Promise<RealEstateApiPropertySearchResult | null> {
+    try {
+      const resp = await this.http.post<RealEstateApiPropertySearchResponse>("/v2/PropertySearch", {
+        size: 1,
+        address: addressString,
+      });
+
+      return resp.data.data?.[0] ?? null;
     } catch (err: any) {
       console.error(`❌ PropertySearch error: ${err.message}`);
       return null;

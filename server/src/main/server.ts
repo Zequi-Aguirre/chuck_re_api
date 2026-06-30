@@ -1,4 +1,4 @@
-import { ChuckREAPIServer } from './chuckREAPIServer.ts';
+import { JakeServer } from './jakeServer.ts';
 import { EnvConfig } from './config/envConfig';
 
 const PORT = process.env.PORT || 8080;
@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 8080;
         const config = new EnvConfig();
 
         // Create and setup the server
-        const server = await new ChuckREAPIServer(config).setup();
+        const server = await new JakeServer(config).setup();
 
         // Start listening using the internally created HTTP server
         const httpServer = server.getHttpServer();

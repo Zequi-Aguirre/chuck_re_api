@@ -118,8 +118,37 @@ export type RealEstateApiPropertyDetail = {
     propertyBasics?: RealEstateApiPropertyBasics;
 };
 
+/**
+ * A single summary record returned by /v2/PropertySearch. The API returns
+ * flattened summary fields (unlike PropertyDetail's nested objects), and the
+ * exact field set varies by query, so every field is optional and an index
+ * signature keeps mapping null-safe and forward-compatible.
+ */
+export type RealEstateApiPropertySearchResult = {
+    id?: string | number;
+    address?: RealEstateApiAddress | string | null;
+    city?: string | null;
+    state?: string | null;
+    zip?: string | null;
+    propertyType?: string | null;
+    bedrooms?: number | null;
+    bathrooms?: number | null;
+    squareFeet?: number | null;
+    lotSquareFeet?: number | null;
+    yearBuilt?: number | null;
+    estimatedValue?: number | null;
+    lastSaleAmount?: number | null;
+    lastSaleDate?: string | null;
+    owner1FirstName?: string | null;
+    owner1LastName?: string | null;
+    owner1FullName?: string | null;
+    mlsActive?: boolean | null;
+    mlsStatus?: string | null;
+    [key: string]: unknown;
+};
+
 export type RealEstateApiPropertySearchResponse = {
-    data: Array<{ id: string | number }>;
+    data: RealEstateApiPropertySearchResult[];
 };
 
 export type RealEstateApiPropertyDetailResponse = {
