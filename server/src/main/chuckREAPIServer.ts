@@ -5,11 +5,12 @@ import http from "http";
 import cors from "cors";
 import { container } from "tsyringe";
 
-import { appConfig } from "./config/index.ts";
+import { appConfig } from "./config";
 import { EnvConfig } from "./config/envConfig.ts";
 import { Authenticator } from "./middleware/authenticator.ts";
 
 // Resources
+import { MailerResource } from "./resources/MailerResource.ts";
 import { GhlWebhookResource } from "./resources/GhlWebhookResource.ts";
 // Services
 import { LeadEnrichmentQueueService } from "./services/LeadEnrichmentQueueService.ts";
@@ -45,6 +46,7 @@ export class ChuckREAPIServer {
 
         // 🧠 API Routes
         this.app.use("/api/ghl", container.resolve(GhlWebhookResource).router);
+        this.app.use("/api/mailer", container.resolve(MailerResource).router);
 
         // 🚀 Start Lead Enrichment Worker (but NOT the HTTP server)
         try {
