@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jake — Property data by text</title>
+  <meta name="description" content="Text an address, get the property intel back. Fast property data for investors, wholesalers, and operators — owner, equity, liens, comps, and skip trace, all by text message. No portals, no logins.">
+  <meta name="theme-color" content="#0a0e14">
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Jake — Property data by text">
+  <meta property="og:description" content="Text an address, get the property intel back. Owner, equity, liens, comps, and skip trace — all by text. No portals, no logins.">
+  <meta property="og:url" content="https://gotextjake.com">
+  <meta property="og:site_name" content="Jake">
+
+  <!-- Twitter card -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Jake — Property data by text">
+  <meta name="twitter:description" content="Text an address, get the property intel back. Owner, equity, liens, comps, and skip trace — all by text. No portals, no logins.">
+  <meta name="twitter:url" content="https://gotextjake.com">
+
+  <!-- Inter (referenced by the CSS but never imported) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+</head>
+<body>
+<div id="jake">
+  <style>
+    #jake{
+      --ink:#0a0e14;
+      --panel:#10151f;
+      --line:#1d2533;
+      --mut:#8b97a8;
+      --txt:#e7ecf3;
+      --jake:#0a84ff;       /* iPhone blue */
+      --jake-deep:#0a3a78;
+      --you:#0a84ff;        /* your sent bubbles (iMessage blue) */
+      --warn:#fbbf24;
+      --mono:"SF Mono",ui-monospace,"Roboto Mono",Menlo,Consolas,monospace;
+      --sans:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+      font-family:var(--sans);
+      color:var(--txt);
+      background:var(--ink);
+      line-height:1.5;
+      -webkit-font-smoothing:antialiased;
+    }
+    #jake *{box-sizing:border-box;margin:0;padding:0}
+    #jake a{color:inherit;text-decoration:none}
+
+    #jake .wrap{max-width:560px;margin:0 auto;padding:0 20px}
+
+    /* ---------- HERO ---------- */
+    #jake .hero{
+      padding:56px 0 14px;
+      text-align:center;
+    }
+    #jake .eyebrow{
+      display:inline-flex;align-items:center;gap:8px;
+      font-family:var(--mono);
+      font-size:12px;letter-spacing:.12em;text-transform:uppercase;
+      color:var(--jake);
+      border:1px solid var(--line);
+      background:var(--panel);
+      padding:7px 13px;border-radius:999px;
+      margin-bottom:26px;
+    }
+    #jake .dot{
+      width:7px;height:7px;border-radius:50%;background:#34d399;
+      box-shadow:0 0 0 0 rgba(52,211,153,.6);
+      animation:pulse 2s infinite;
+    }
+    @keyframes pulse{
+      0%{box-shadow:0 0 0 0 rgba(52,211,153,.55)}
+      70%{box-shadow:0 0 0 9px rgba(52,211,153,0)}
+      100%{box-shadow:0 0 0 0 rgba(52,211,153,0)}
+    }
+    #jake h1{
+      font-size:clamp(36px,10vw,52px);
+      line-height:1.02;
+      letter-spacing:-.03em;
+      font-weight:800;
+      margin-bottom:18px;
+    }
+    #jake h1 em{
+      font-style:normal;
+      color:var(--jake);
+    }
+    #jake .sub{
+      color:var(--mut);
+      font-size:17px;
+      max-width:400px;
+      margin:0 auto 6px;
+    }
+
+    /* ---------- PHONE THREAD (signature) ---------- */
+    #jake .phone{
+      margin:34px auto 0;
+      background:#000;
+      border:1px solid #2a2a2e;
+      border-radius:26px;
+      padding:14px 12px 16px;
+      box-shadow:0 30px 90px rgba(0,0,0,.6);
+    }
+    #jake .phone-top{
+      display:flex;align-items:center;gap:11px;
+      padding:4px 6px 14px;
+      border-bottom:1px solid #1c1c1f;
+      margin-bottom:14px;
+    }
+    #jake .avatar{
+      width:38px;height:38px;border-radius:50%;
+      background:var(--jake);
+      display:flex;align-items:center;justify-content:center;
+      font-weight:800;color:#fff;font-size:17px;
+      flex:0 0 auto;
+    }
+    #jake .who{flex:1;text-align:left}
+    #jake .who b{font-size:15px;display:block;color:#fff}
+    #jake .who span{font-size:12px;color:var(--mut)}
+    #jake .sig{font-size:11px;color:var(--mut)}
+
+    #jake .thread{
+      display:flex;flex-direction:column;gap:9px;
+      height:420px;
+      overflow-y:auto;
+      padding:2px 4px;
+      scroll-behavior:smooth;
+      -webkit-overflow-scrolling:touch;
+    }
+    #jake .thread::-webkit-scrollbar{width:0;background:transparent}
+    #jake .row{display:flex}
+    #jake .row.me{justify-content:flex-end}
+    #jake .row.jk{justify-content:flex-start}
+
+    #jake .msg{
+      max-width:82%;
+      padding:11px 14px;
+      border-radius:19px;
+      font-size:15px;
+      line-height:1.45;
+      text-align:left;
+      animation:pop .55s cubic-bezier(.22,1,.36,1) both;
+      transform-origin:bottom left;
+    }
+    @keyframes pop{
+      from{opacity:0;transform:translateY(10px) scale(.94)}
+      to{opacity:1;transform:none}
+    }
+    #jake .me .msg{transform-origin:bottom right;
+      background:var(--you);color:#fff;
+      border-bottom-right-radius:6px;
+    }
+    #jake .jk .msg{
+      background:#26262b;color:#fff;
+      border-bottom-left-radius:6px;
+    }
+    #jake .jk .msg:has(.report){max-width:88%}
+    #jake .jk .msg .lead{display:block;margin-bottom:7px}
+
+    /* property report = plain text, like a real long SMS */
+    #jake .report{
+      white-space:pre-wrap;
+      text-align:left;
+      font-family:var(--sans);
+      font-size:14.5px;
+      line-height:1.5;
+      color:#fff;
+    }
+    #jake .report .rt{font-weight:700}
+    #jake .report .rv{font-weight:700;font-size:17px}
+    #jake .report .good{color:#30d158;font-weight:600}
+    #jake .report .warn{color:#ffd60a}
+    #jake .report .hot{color:#ff453a}
+    #jake .report .dim{color:#9aa0aa}
+
+    /* typing indicator */
+    #jake .typing{
+      display:inline-flex;gap:4px;
+      padding:14px 16px;background:#26262b;
+      border-radius:19px;border-bottom-left-radius:6px;
+    }
+    #jake .typing i{
+      width:7px;height:7px;border-radius:50%;background:var(--mut);
+      animation:blink 1.3s infinite;
+    }
+    #jake .typing i:nth-child(2){animation-delay:.2s}
+    #jake .typing i:nth-child(3){animation-delay:.4s}
+    @keyframes blink{0%,60%,100%{opacity:.25;transform:translateY(0)}30%{opacity:1;transform:translateY(-3px)}}
+
+    #jake .replay{
+      display:block;margin:14px auto 0;
+      font-family:var(--mono);font-size:12px;color:var(--mut);
+      background:none;border:1px solid var(--line);border-radius:8px;
+      padding:7px 13px;cursor:pointer;transition:.2s;
+    }
+    #jake .replay:hover{color:var(--txt);border-color:var(--mut)}
+
+    /* ---------- CTA ROW ---------- */
+    #jake .ctas{margin-top:30px;display:flex;flex-direction:column;gap:11px}
+    #jake .btn{
+      display:flex;align-items:center;justify-content:center;gap:9px;
+      padding:17px;border-radius:14px;font-weight:700;font-size:16px;
+      transition:.18s ease;
+    }
+    #jake .btn-go{background:var(--jake);color:#fff}
+    #jake .btn-go:hover{transform:translateY(-2px);background:#3a9dff}
+    #jake .btn-ghost{border:1px solid var(--line);color:var(--txt);background:var(--panel)}
+    #jake .btn-ghost:hover{border-color:var(--mut)}
+
+    /* ---------- SECTION SHELL ---------- */
+    #jake section{padding:54px 0}
+    #jake .kicker{
+      font-family:var(--mono);font-size:12px;letter-spacing:.14em;
+      text-transform:uppercase;color:var(--jake);margin-bottom:12px;
+    }
+    #jake h2{
+      font-size:clamp(26px,7vw,34px);letter-spacing:-.02em;
+      line-height:1.08;font-weight:800;margin-bottom:13px;
+    }
+    #jake .lede{color:var(--mut);font-size:16px;max-width:440px}
+
+    /* ---------- COMPARE (PropStream vs Jake) ---------- */
+    #jake .vs{margin-top:26px;display:grid;gap:12px}
+    #jake .vrow{
+      display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;
+      padding:14px 16px;border:1px solid var(--line);border-radius:13px;
+      background:var(--panel);font-size:14px;
+    }
+    #jake .vrow .lbl{color:var(--txt)}
+    #jake .vrow .c{font-family:var(--mono);font-size:12px;text-align:center;width:62px}
+    #jake .vrow .them{color:var(--mut)}
+    #jake .vrow .us{color:var(--jake);font-weight:700}
+    #jake .vhead{background:none;border:none;padding:4px 16px;font-size:11px;
+      font-family:var(--mono);text-transform:uppercase;letter-spacing:.1em;color:var(--mut)}
+
+    /* ---------- WHAT YOU GET (data manifest) ---------- */
+    #jake .manifest{margin-top:24px;border:1px solid var(--line);border-radius:16px;
+      overflow:hidden;background:var(--panel)}
+    #jake .mitem{
+      display:flex;gap:13px;padding:16px 18px;border-bottom:1px solid var(--line);
+    }
+    #jake .mitem:last-child{border-bottom:none}
+    #jake .mk{font-family:var(--mono);color:var(--jake);font-size:13px;flex:0 0 26px;padding-top:1px}
+    #jake .mitem b{display:block;font-size:15px;margin-bottom:2px}
+    #jake .mitem p{color:var(--mut);font-size:13.5px}
+
+    /* ---------- USE CASES ---------- */
+    #jake .uses{margin-top:24px;display:grid;gap:11px}
+    #jake .use{
+      padding:18px;border:1px solid var(--line);border-radius:14px;background:var(--panel);
+    }
+    #jake .use b{font-size:15px}
+    #jake .use p{color:var(--mut);font-size:14px;margin-top:4px}
+
+    /* ---------- PRICING / SERVICES ---------- */
+    #jake .tiers{margin-top:24px;display:grid;gap:14px}
+    #jake .tier{
+      border:1px solid var(--line);border-radius:18px;padding:22px;background:var(--panel);
+    }
+    #jake .tier.feat{border-color:var(--jake);box-shadow:0 0 0 1px var(--jake) inset}
+    #jake .tier .tag{font-family:var(--mono);font-size:11px;text-transform:uppercase;
+      letter-spacing:.1em;color:var(--jake);margin-bottom:8px;display:block}
+    #jake .tier h3{font-size:20px;margin-bottom:6px}
+    #jake .tier .desc{color:var(--mut);font-size:14px;margin-bottom:14px}
+    #jake .tier ul{list-style:none;display:grid;gap:8px}
+    #jake .tier li{display:flex;gap:9px;font-size:14px;color:var(--txt)}
+    #jake .tier li:before{content:"";flex:0 0 auto;width:16px;height:16px;margin-top:2px;
+      border-radius:50%;background:var(--jake-deep);
+      box-shadow:inset 0 0 0 2px var(--jake)}
+
+    /* ---------- FINAL ---------- */
+    #jake .final{
+      text-align:center;padding:60px 0 70px;
+    }
+    #jake .final h2{font-size:clamp(30px,9vw,42px)}
+    #jake .final .lede{margin:0 auto 28px}
+    #jake .foot{
+      font-family:var(--mono);font-size:11px;color:var(--mut);
+      text-align:center;padding-bottom:40px;
+    }
+    #jake .foot a{color:var(--jake)}
+
+    @media (prefers-reduced-motion:reduce){
+      #jake .msg,#jake .dot,#jake .typing i{animation:none!important}
+    }
+  </style>
+
+  <!-- ============ HERO ============ -->
+  <header class="hero">
+    <div class="wrap">
+      <div class="eyebrow"><span class="dot"></span> Property data by text message</div>
+      <h1>Text an address.<br>Get the <em>property intel.</em></h1>
+      <p class="sub">Fast property data for investors, wholesalers, and operators — without logging into another platform. No portals. No friction.</p>
+
+      <!-- SIGNATURE: live SMS demo -->
+      <div class="phone">
+        <div class="phone-top">
+          <div class="avatar">J</div>
+          <div class="who"><b>Jake</b><span>online</span></div>
+          <div class="sig">SMS</div>
+        </div>
+        <div class="thread" id="thread"></div>
+      </div>
+      <button class="replay" id="replay" type="button">Replay the text ↺</button>
+
+      <div class="ctas">
+        <a class="btn btn-go" href="sms:+18333105253?&body=Hey%20Jake">Text Jake an address →</a>
+        <a class="btn btn-ghost" href="#how">See what comes back</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============ COMPARE ============ -->
+  <section>
+    <div class="wrap">
+      <div class="kicker">Like PropStream, minus the friction</div>
+      <h2>Built for speed,<br>not another login.</h2>
+      <p class="lede">You're already moving — talking to sellers, driving for dollars, checking leads. Jake gives you the quick read while you're still in motion.</p>
+
+      <div class="vs">
+        <div class="vrow vhead"><span></span><span class="c">Portals</span><span class="c">Jake</span></div>
+        <div class="vrow"><span class="lbl">Log in to pull a record</span><span class="c them">yes</span><span class="c us">no</span></div>
+        <div class="vrow"><span class="lbl">Works from your phone instantly</span><span class="c them">sorta</span><span class="c us">yes</span></div>
+        <div class="vrow"><span class="lbl">Answer in seconds, not tabs</span><span class="c them">no</span><span class="c us">yes</span></div>
+        <div class="vrow"><span class="lbl">Monthly seat just to look once</span><span class="c them">yes</span><span class="c us">no</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ WHAT YOU GET ============ -->
+  <section id="how">
+    <div class="wrap">
+      <div class="kicker">One text back</div>
+      <h2>What Jake returns</h2>
+      <p class="lede">The fast version first. No bloated dashboard. No wasted hunt. Just what matters, pulled from public record and trusted data.</p>
+
+      <div class="manifest">
+        <div class="mitem"><span class="mk">01</span><div><b>Owner &amp; mailing</b><p>Owner name, mailing address, and owner-occupied vs. absentee signals.</p></div></div>
+        <div class="mitem"><span class="mk">02</span><div><b>Property facts</b><p>Beds, baths, sqft, lot size, year built, type, and assessed value.</p></div></div>
+        <div class="mitem"><span class="mk">03</span><div><b>Equity &amp; ownership length</b><p>Estimated equity percentage and how long they've held the property.</p></div></div>
+        <div class="mitem"><span class="mk">04</span><div><b>Liens &amp; mortgage signals</b><p>Open mortgage, lien, tax, and transfer history where available.</p></div></div>
+        <div class="mitem"><span class="mk">05</span><div><b>Value &amp; comps</b><p>Nearby sales and a rough value range to underwrite on the spot.</p></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ USE CASES ============ -->
+  <section>
+    <div class="wrap">
+      <div class="kicker">Who texts Jake</div>
+      <h2>Built for people in motion</h2>
+      <div class="uses">
+        <div class="use"><b>Wholesalers</b><p>Qualify a lead before you call, comp, or pass it to a buyer.</p></div>
+        <div class="use"><b>Investors</b><p>Property context without opening PropStream, Zillow, and county records.</p></div>
+        <div class="use"><b>Acquisition teams</b><p>Give the whole team one fast way to vet addresses and enrich leads.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SERVICES ============ -->
+  <section>
+    <div class="wrap">
+      <div class="kicker">How it works</div>
+      <h2>Start with the lookup. Go deeper when it pays.</h2>
+      <div class="tiers">
+        <div class="tier feat">
+          <span class="tag">Core</span>
+          <h3>Property Lookup</h3>
+          <p class="desc">Text an address, get the full property read back from public record and property data.</p>
+          <ul>
+            <li>Owner &amp; mailing info</li>
+            <li>Property details &amp; tax data</li>
+            <li>Equity &amp; ownership length</li>
+            <li>Liens, mortgage &amp; sales history</li>
+            <li>Distress, vacancy &amp; absentee signals</li>
+          </ul>
+        </div>
+        <div class="tier">
+          <span class="tag">Add-on</span>
+          <h3>Comps</h3>
+          <p class="desc">Reply <b>comps</b> and Jake texts back nearby sales and an ARV range on the spot.</p>
+          <ul>
+            <li>Recent nearby sales</li>
+            <li>Beds, baths &amp; sqft matched</li>
+            <li>ARV / value range</li>
+            <li>Underwrite without leaving the text</li>
+          </ul>
+        </div>
+        <div class="tier">
+          <span class="tag">Add-on</span>
+          <h3>Skip Trace</h3>
+          <p class="desc">Reply <b>skip</b> when you need to reach the owner. Jake traces contact info on demand.</p>
+          <ul>
+            <li>Possible phone numbers</li>
+            <li>Possible emails</li>
+            <li>Contact enrichment for outreach</li>
+            <li>Pay only when you need it</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ FINAL ============ -->
+  <section class="final">
+    <div class="wrap">
+      <h2>Stop hunting.<br>Just text Jake.</h2>
+      <p class="lede">Property answers now — not after logging into five tools.</p>
+      <div class="ctas">
+        <a class="btn btn-go" href="sms:+18333105253?&body=Hey%20Jake">Text Jake an address →</a>
+      </div>
+    </div>
+  </section>
+
+  <p class="foot">gotextjake.com &nbsp;·&nbsp; Text Jake: <a href="sms:+18333105253?&body=Hey%20Jake">1-833-310-JAKE</a></p>
+
+  <script>
+  (function(){
+    var thread = document.getElementById('thread');
+    if(!thread) return;
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion:reduce)').matches;
+
+    var script = [
+      {who:'me', html:'4127 Whitlock Ave, Atlanta GA'},
+      {who:'type', ms:1800},
+      {who:'jk', html:'Found it 👇'},
+      {who:'jk', html:'<div class="report">'+
+'<span class="rt">Jake Property Report</span>\n'+
+'\n'+
+'4127 Whitlock Ave\n'+
+'Atlanta, GA 30315\n'+
+'\n'+
+'<span class="rt">Estimated Value</span>\n'+
+'<span class="rv">$284,000</span>\n'+
+'<span class="dim">Est. equity: </span><span class="good">100% · Free &amp; Clear</span>\n'+
+'\n'+
+'<span class="rt">Property</span>\n'+
+'• Single Family\n'+
+'• 3 Bed | 2 Bath\n'+
+'• 1,648 Sq Ft · Built 1962\n'+
+'• 0.31 Acres\n'+
+'\n'+
+'<span class="rt">Owner</span>\n'+
+'• Est. of Raymond T. Coyle\n'+
+'• Mailing: Phoenix, AZ (heir)\n'+
+'• Owned 31 Years\n'+
+'<span class="warn">• Out-of-State Absentee Owner</span>\n'+
+'\n'+
+'<span class="rt">Signals</span>\n'+
+'• Vacant 90+ days\n'+
+'• 2 yrs tax delinquent\n'+
+'• Not listed on MLS\n'+
+'\n'+
+'<span class="rt">History</span>\n'+
+'• Last Sold: 03/1994 — $61,500\n'+
+'• No mortgage on record\n'+
+'\n'+
+'Reply <span class="rt">comps</span> for nearby sales or <span class="rt">skip</span> for heir contact info.'+
+'</div>'},
+      {who:'me', html:'comps'},
+      {who:'type', ms:1900},
+      {who:'jk', html:'<div class="report">'+
+'<span class="rt">Recent Comps · 0.4 mi</span>\n'+
+'\n'+
+'• 4109 Whitlock Ave\n'+
+'<span class="dim">  3/2 · 1,610 sf · sold </span><span class="good">$291K</span><span class="dim"> (11d ago)</span>\n'+
+'• 88 Dunmore St\n'+
+'<span class="dim">  3/2 · 1,720 sf · sold </span><span class="good">$278K</span><span class="dim"> (6 wk)</span>\n'+
+'• 4203 Whitlock Ave\n'+
+'<span class="dim">  3/1 · 1,540 sf · sold </span><span class="good">$268K</span><span class="dim"> (2 mo)</span>\n'+
+'\n'+
+'<span class="rt">ARV range:</span> <span class="good">$278K–$294K</span>\n'+
+'Reply <span class="rt">skip</span> for heir contact info.'+
+'</div>'},
+      {who:'me', html:'skip'},
+      {who:'type', ms:1600},
+      {who:'jk', html:'Heir traced — 2 numbers + 1 email. Sending now. Go get it. 📞'}
+    ];
+
+    var typingEl = '<div class="typing"><i></i><i></i><i></i></div>';
+    var timers = [];
+
+    function clearAll(){ timers.forEach(clearTimeout); timers = []; thread.innerHTML=''; }
+
+    function stick(){ thread.scrollTop = thread.scrollHeight; }
+
+    function addMsg(who, html){
+      var row = document.createElement('div');
+      row.className = 'row ' + (who==='me'?'me':'jk');
+      row.innerHTML = '<div class="msg">'+html+'</div>';
+      thread.appendChild(row);
+      // for a long report, scroll so its TOP is in view (read it top-down);
+      // everything else sticks to the newest message at the bottom
+      if(html.indexOf('class="report"') !== -1){
+        thread.scrollTop = row.offsetTop - 6;
+      } else {
+        stick();
+      }
+    }
+    function showTyping(){
+      var row = document.createElement('div');
+      row.className = 'row jk';
+      row.id = 'typing-row';
+      row.innerHTML = typingEl;
+      thread.appendChild(row);
+      stick();
+    }
+    function killTyping(){
+      var t = document.getElementById('typing-row');
+      if(t) t.remove();
+    }
+
+    function run(){
+      clearAll();
+      if(reduce){ // show all at once, no animation
+        script.forEach(function(s){ if(s.who!=='type') addMsg(s.who, s.html); });
+        return;
+      }
+      // hold a beat so the headline + subline land first, then the address sends
+      var delay = 1800;
+      script.forEach(function(step){
+        if(step.who==='type'){
+          timers.push(setTimeout(showTyping, delay));
+          delay += step.ms;
+          timers.push(setTimeout(killTyping, delay-10));
+        }else{
+          timers.push(setTimeout(function(){ addMsg(step.who, step.html); }, delay));
+          // long reports need real reading time; quick texts get a comfortable beat
+          var big = step.html.indexOf('class="report"') !== -1;
+          delay += big ? 3400 : 1100;
+        }
+      });
+    }
+
+    // start when scrolled into view
+    var started=false;
+    function maybeStart(){
+      if(started) return;
+      var r = thread.getBoundingClientRect();
+      if(r.top < window.innerHeight*0.85){ started=true; run(); }
+    }
+    window.addEventListener('scroll', maybeStart, {passive:true});
+    maybeStart();
+    setTimeout(maybeStart, 400);
+
+    var replay = document.getElementById('replay');
+    if(replay) replay.addEventListener('click', function(){ started=true; run(); });
+
+    // smooth anchor scroll
+    document.querySelectorAll('#jake a[href^="#"]').forEach(function(a){
+      a.addEventListener('click', function(e){
+        var t = document.querySelector(this.getAttribute('href'));
+        if(t){ e.preventDefault(); t.scrollIntoView({behavior:'smooth'}); }
+      });
+    });
+  })();
+  </script>
+</div>
+</body>
+</html>
