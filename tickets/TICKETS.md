@@ -7,7 +7,7 @@
 
 Epic: `ghl-enrichment`
 
-## Open (12)
+## Open (13)
 - [ ] **JAK-102** (P0) Encrypted connection/credential store — depends: JAK-101
 - [ ] **JAK-103** (P0) Token refresh service — depends: JAK-102
 - [ ] **JAK-104** (P0) GHL API client (axios, per-location auth, retries, rate-limit) — depends: JAK-103
@@ -20,6 +20,7 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-111** (P1) Failure handling: retries, dead-letter, error surfacing — depends: JAK-107
 - [ ] **JAK-112** (P2) Minimal install/usage status view — depends: JAK-109
 - [ ] **JAK-113** (P0) Admin dashboard: email/password auth + sub-account connection CRUD — depends: JAK-101, JAK-102
+- [ ] **JAK-114** (P0) Multi-tenant text-Jake routing (migrate MVP off single Doppler key) — depends: JAK-102
 
 ## Deferred / blocked (5)
 - [ ] **JAK-150** (P3) [LATER] GHL Marketplace listing + approval requirements
