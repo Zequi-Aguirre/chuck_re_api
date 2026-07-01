@@ -1,4 +1,5 @@
 import { container } from "tsyringe";
+import { registerGhlEnrichment } from "../ghlEnrichment";
 
 export const TOKENS = {
     ROOT_DIR: "ROOT_DIR",
@@ -10,4 +11,7 @@ export const registerDependencies = (): void => {
     if (!container.isRegistered(TOKENS.ROOT_DIR)) {
         container.register(TOKENS.ROOT_DIR, { useValue: process.cwd() });
     }
+
+    // GHL enrichment module wiring (SPEC: docs/ghl-enrichment).
+    registerGhlEnrichment(container);
 };

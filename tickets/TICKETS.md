@@ -7,9 +7,6 @@
 
 Epic: `ghl-enrichment`
 
-## In progress (1)
-- [ ] **JAK-101** (P0) GHL app scaffolding + Doppler config + env helper — depends: JAK-100
-
 ## Open (12)
 - [ ] **JAK-102** (P0) Encrypted connection/credential store — depends: JAK-101
 - [ ] **JAK-103** (P0) Token refresh service — depends: JAK-102
@@ -31,5 +28,6 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-153** (P3) [LATER] Privacy Policy + Terms pages for Jake
 - [ ] **JAK-154** (P3) [LATER] CRM upsell bundle (GHL SaaS resale + AskZoe concierge)
 
-## Done (1)
+## Done (2)
 - [x] **JAK-100** (P0) Project ticket store (SQLite in-repo)
+- [x] **JAK-101** (P0) GHL app scaffolding + Doppler config + env helper — depends: JAK-100

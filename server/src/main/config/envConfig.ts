@@ -28,6 +28,14 @@ export class EnvConfig {
     public readonly ghlApiKey: string;
     public readonly ghlBaseUrl: string;
 
+    // 🧠 GoHighLevel Marketplace app (OAuth + webhooks) — Doppler-provided.
+    // Wired now so all GHL secrets live in one place; consumed by later tickets
+    // (OAuth install JAK-150, webhook verify JAK-106, credential store JAK-102).
+    public readonly ghlClientId: string;
+    public readonly ghlClientSecret: string;
+    public readonly ghlWebhookSecret: string;
+    public readonly ghlCredentialEncKey: string;
+
     constructor() {
         // 🌐 App
         this.clientUrl = process.env.VITE_ASKZACK_CLIENT_URL!;
@@ -54,5 +62,28 @@ export class EnvConfig {
         // 🧠 GoHighLevel API
         this.ghlApiKey = process.env.GHL_API_KEY!;
         this.ghlBaseUrl = process.env.GHL_BASE_URL!;
+
+        // 🧠 GoHighLevel Marketplace app secrets (Doppler)
+        this.ghlClientId = process.env.GHL_CLIENT_ID ?? "";
+        this.ghlClientSecret = process.env.GHL_CLIENT_SECRET ?? "";
+        this.ghlWebhookSecret = process.env.GHL_WEBHOOK_SECRET ?? "";
+        this.ghlCredentialEncKey = process.env.GHL_CREDENTIAL_ENC_KEY ?? "";
+    }
+
+    // 🌱 Canonical env-stage helper (Automator pattern). This is the single
+    // source of truth for "which environment am I in". The dev/staging
+    // write-safety rule (SPEC §8: never write to a real GHL sub-account off
+    // prod) reads these — do not re-derive the stage anywhere else.
+    get isProduction(): boolean {
+        const s = this.envStage.toLowerCase();
+        return s === "production" || s === "prod";
+    }
+
+    get isStaging(): boolean {
+        return this.envStage.toLowerCase() === "staging";
+    }
+
+    get isDev(): boolean {
+        return !this.isProduction && !this.isStaging;
     }
 }
