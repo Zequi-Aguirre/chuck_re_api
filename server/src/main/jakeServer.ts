@@ -7,6 +7,7 @@ import { container } from "tsyringe";
 
 import { appConfig } from "./config";
 import { EnvConfig } from "./config/envConfig.ts";
+import { registerDependencies } from "./di/registerDependencies.ts";
 import { Authenticator } from "./middleware/authenticator.ts";
 
 // Resources
@@ -37,6 +38,7 @@ export class JakeServer {
 
         // Dependency Injection setup
         container.registerInstance(EnvConfig, this.config);
+        registerDependencies();
 
         const authenticator = container.resolve(Authenticator);
         container.registerInstance(Authenticator, authenticator);
