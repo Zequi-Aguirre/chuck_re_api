@@ -14,7 +14,7 @@ import { Authenticator } from "./middleware/authenticator.ts";
 import { MailerResource } from "./resources/MailerResource.ts";
 import { GhlWebhookResource } from "./resources/GhlWebhookResource.ts";
 import { JakeSmsResource } from "./resources/JakeSmsResource.ts";
-import { GhlEnrichmentWebhookResource } from "./ghlEnrichment/index.ts";
+import { GhlEnrichmentWebhookResource, GhlStatusResource } from "./ghlEnrichment/index.ts";
 // Services
 import { LeadEnrichmentQueueService } from "./services/LeadEnrichmentQueueService.ts";
 
@@ -66,6 +66,12 @@ export class JakeServer {
         }
 
         this.app.use(express.json());
+
+        // 📊 JAK-112 — read-only enrichment status API (internal, MASTER_API_KEY
+        // protected). NOT gated on Redis: it only reads Postgres, so it works even
+        // on a queue-less boot. Mounted BEFORE /api/ghl so its more specific
+        // /api/ghl/status prefix is matched first.
+        this.app.use("/api/ghl/status", container.resolve(GhlStatusResource).router);
 
         // 🧠 API Routes
         if (redisConfigured) {

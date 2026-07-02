@@ -19,6 +19,12 @@ export interface GhlCustomFieldRow {
   deleted_at: Date | null;
 }
 
+/** Provisioned (non-deleted) field count for a location — status view (JAK-112). */
+export interface LocationFieldCount {
+  location_id: string;
+  count: number;
+}
+
 export interface InsertGhlCustomFieldRow {
   location_id: string;
   jake_field_key: string;
@@ -67,5 +73,23 @@ export class GhlCustomFieldStore {
       [locationId]
     );
     return result.rows;
+  }
+
+  /**
+   * Count provisioned (non-deleted) fields per location in one grouped scan —
+   * the overview list (JAK-112) reads this instead of a per-location query, and
+   * it doubles as the "is this location fully provisioned?" health signal.
+   */
+  async countByLocationForAll(): Promise<LocationFieldCount[]> {
+    const result = await this.db.query<{ location_id: string; count: string }>(
+      `SELECT location_id, count(*)::int AS count
+       FROM ghl_custom_fields
+       WHERE deleted_at IS NULL
+       GROUP BY location_id`
+    );
+    return result.rows.map((r) => ({
+      location_id: r.location_id,
+      count: Number(r.count),
+    }));
   }
 }

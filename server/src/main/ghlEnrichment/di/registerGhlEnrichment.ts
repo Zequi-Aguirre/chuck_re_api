@@ -16,6 +16,8 @@ import { GhlEnrichmentEventStore } from "../worker/GhlEnrichmentEventStore";
 import { GhlEnrichmentWorker } from "../worker/GhlEnrichmentWorker";
 import { CreditLedgerStore } from "../metering/CreditLedgerStore";
 import { CreditService } from "../metering/CreditService";
+import { GhlStatusService } from "../status/GhlStatusService";
+import { GhlStatusResource } from "../status/GhlStatusResource";
 
 /**
  * DI registration for the GHL enrichment module.
@@ -127,5 +129,16 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
 
   if (!c.isRegistered(GhlEnrichmentWorker)) {
     c.registerSingleton(GhlEnrichmentWorker);
+  }
+
+  // JAK-112 — read-only status view: an internal API that aggregates the stores
+  // above (connections + custom fields + events + credit ledger) into per-location
+  // health. Adds no persistence and duplicates no query logic — it wraps what
+  // JAK-102/105/107/109/111 already expose. The admin-dash UI is JAK-113.
+  if (!c.isRegistered(GhlStatusService)) {
+    c.registerSingleton(GhlStatusService);
+  }
+  if (!c.isRegistered(GhlStatusResource)) {
+    c.registerSingleton(GhlStatusResource);
   }
 };

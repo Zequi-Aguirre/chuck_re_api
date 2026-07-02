@@ -109,3 +109,18 @@ export type {
   CreditLedgerReason,
   CreditChargeLine,
 } from "./metering/CreditCosts";
+
+// JAK-112 — read-only status view: an internal API surfacing per-location health
+// (connection state, credit balance + ledger, enrichment outcome counts + recent
+// list, and the JAK-111 failed / dead-lettered records). Aggregates the existing
+// stores; never returns a decrypted credential. The admin-dash UI is JAK-113.
+export { GhlStatusService } from "./status/GhlStatusService";
+export { GhlStatusResource } from "./status/GhlStatusResource";
+export type {
+  ConnectionStatusView,
+  EnrichmentOutcomeCounts,
+  LedgerEntryView,
+  EnrichmentEventView,
+  LocationStatusSummary,
+  LocationStatusDetail,
+} from "./status/GhlStatusTypes";
