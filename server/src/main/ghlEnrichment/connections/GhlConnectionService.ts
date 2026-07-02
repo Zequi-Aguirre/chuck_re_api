@@ -3,6 +3,7 @@ import { CredentialCipher } from "./CredentialCipher";
 import { GhlConnectionRow, GhlConnectionStore } from "./GhlConnectionStore";
 import {
   CreateGhlConnectionInput,
+  DEFAULT_TEXT_MODE,
   GhlConnection,
   UpdateGhlConnectionInput,
 } from "./GhlConnectionTypes";
@@ -34,6 +35,7 @@ export class GhlConnectionService {
       base_url: input.baseUrl,
       phone_numbers: input.phoneNumbers ?? [],
       status: input.status ?? "active",
+      text_mode: input.textMode ?? DEFAULT_TEXT_MODE,
     });
     return this.toConnection(row);
   }
@@ -70,6 +72,7 @@ export class GhlConnectionService {
       base_url: patch.baseUrl,
       phone_numbers: patch.phoneNumbers,
       status: patch.status,
+      text_mode: patch.textMode,
     });
     return row ? this.toConnection(row) : null;
   }
@@ -88,6 +91,7 @@ export class GhlConnectionService {
       baseUrl: row.base_url,
       phoneNumbers: row.phone_numbers ?? [],
       status: row.status,
+      textMode: row.text_mode ?? DEFAULT_TEXT_MODE,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

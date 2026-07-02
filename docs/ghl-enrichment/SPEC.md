@@ -83,6 +83,45 @@ Enrichment worker (consumes queue)
 
 ---
 
+## 4a. Text-Jake: two modes + master gateway key (JAK-115)
+
+Text-Jake (the top-of-funnel "text me an address" product) runs in **two modes,
+selected per customer** via a `text_mode` field on the connection record. This
+supersedes part of JAK-114 (which had made ALL text send/receive use per-location
+connection-store creds).
+
+**Mode `gateway` — DEFAULT (tier-1 / trial).** Inbound and outbound texts flow
+through **one Zequi-owned "Jake" GHL sub-account** — the SMS gateway — using a
+**single MASTER GATEWAY KEY**. That key + its location id + base URL are
+**app-level Doppler secrets** (`JAKE_GATEWAY_GHL_API_KEY`,
+`JAKE_GATEWAY_LOCATION_ID`, `JAKE_GATEWAY_BASE_URL`) — **never stored in the DB,
+never per-tenant.** Zequi's number, Zequi pays the SMS. This is for trial users
+and anyone not on the tier-2 enrichment plan.
+
+**Mode `own_number` — OPT-IN (offered at tier-2 enrichment signup).** Text-Jake
+runs **inside the customer's OWN GHL sub-account**, using their already-stored
+**encrypted per-tenant key** (the JAK-102 connection store) + a phone number they
+assign to Jake. Their team texts that number → their GHL → Jake → replies out
+their number. **The SMS cost shifts to the customer.** This is exactly the
+per-tenant text routing JAK-114 built — preserved, now as the `own_number` path.
+
+**Billing (both modes).** The texting customer is resolved by **sender phone
+number** → a `text_jake_customers` row (upserted, keyed by phone) → that
+customer's prepaid credits are drawn down via the JAK-109 ledger. A texter always
+maps to the same customer + credit account; two phones never share one.
+
+**Status notes (both modes).** Jake writes short status notes onto the customer's
+contact ("looked up 123 Main St", "out of credits", "lookup failed") via
+whichever mode's client.
+
+**Isolation.** `own_number` customers never share creds or numbers (per-tenant key
++ a reply-from number proven to belong to that connection). The `gateway` path
+never touches a tenant key. **Tier-2 enrichment write-back still uses the correct
+per-tenant key** — the connection store remains the credential source for
+enrichment and for `own_number` text.
+
+---
+
 ## 5. Components (→ tickets)
 
 - **App scaffolding + env/secrets** — module structure, Doppler config, env helper.
@@ -108,6 +147,10 @@ Enrichment worker (consumes queue)
   targets the right field ids).
 - `ghl_enrichment_events` — per contact: location_id, contact_id, status,
   enriched_at, cost estimate, error. Powers idempotency + metering.
+- `ghl_connections.text_mode` — `gateway` (default) | `own_number` per customer
+  (JAK-115): which text-Jake mode + credential path handles their SMS.
+- `text_jake_customers` — the tier-1 billing identity (JAK-115): one row per
+  sender phone; its id doubles as the credit-account key against `credit_ledger`.
 
 (Names/timestamps follow existing Jake/Automator column conventions.)
 
@@ -163,3 +206,8 @@ JAK-108 field mapping → JAK-107 enrichment worker`
 Everything else (metering, status view, dead-letter) hangs off that spine.
 Deferred to post-beta: marketplace approval, tiers/billing, onboarding,
 privacy/terms, CRM upsell.
+
+**JAK-115** is an architecture correction on top of the spine: the master
+gateway key + two-mode (`gateway`/`own_number`) text-Jake routing described in
+§4a. It reconciles JAK-114 — per-location text creds become the `own_number`
+path, and the default `gateway` path uses the app-level master key.

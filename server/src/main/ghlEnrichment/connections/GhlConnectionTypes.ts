@@ -23,11 +23,24 @@ export interface GhlConnection {
   phoneNumbers: string[];
   /** active | inactive — inactive stops processing (uninstall, JAK-105). */
   status: GhlConnectionStatus;
+  /**
+   * How text-Jake runs for this customer (JAK-115). 'gateway' (default): texts go
+   * through Zequi's shared Jake sub-account on the master gateway key. 'own_number'
+   * (opt-in): texts run INSIDE this sub-account on THIS connection's per-tenant key
+   * + assigned number (the JAK-114 path). Optional in this shape (the service
+   * always populates it from the row); treat absent as the 'gateway' default.
+   */
+  textMode?: GhlTextMode;
   createdAt: Date;
   updatedAt: Date;
 }
 
 export type GhlConnectionStatus = "active" | "inactive";
+
+export type GhlTextMode = "gateway" | "own_number";
+
+/** The default text mode for any connection that hasn't opted into own_number. */
+export const DEFAULT_TEXT_MODE: GhlTextMode = "gateway";
 
 /** Input for creating a connection. `apiKey` is plaintext; the service encrypts it. */
 export interface CreateGhlConnectionInput {
@@ -36,6 +49,8 @@ export interface CreateGhlConnectionInput {
   baseUrl: string;
   phoneNumbers?: string[];
   status?: GhlConnectionStatus;
+  /** Text mode for this customer (JAK-115). Defaults to 'gateway' when omitted. */
+  textMode?: GhlTextMode;
 }
 
 /**
@@ -47,4 +62,6 @@ export interface UpdateGhlConnectionInput {
   baseUrl?: string;
   phoneNumbers?: string[];
   status?: GhlConnectionStatus;
+  /** Switch this customer between 'gateway' and 'own_number' text mode (JAK-115). */
+  textMode?: GhlTextMode;
 }

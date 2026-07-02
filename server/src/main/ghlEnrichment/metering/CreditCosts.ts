@@ -18,6 +18,8 @@ export interface CreditCostConfig {
   enrichmentBaseCredits: number;
   /** EXTRA credits charged on top of the base cost when a skip-trace runs. */
   skipTraceCredits: number;
+  /** Credits for one tier-1 text-Jake property lookup (JAK-115). */
+  textLookupCredits: number;
 }
 
 /**
@@ -34,6 +36,8 @@ export interface EnrichmentCostPlan {
 export type CreditLedgerReason =
   | "enrichment"
   | "skip_trace"
+  // JAK-115: a tier-1 text-Jake property lookup, billed to the texting customer.
+  | "text_lookup"
   | "manual_grant"
   | "adjustment"
   // JAK-111: a compensating entry that reverses an enrichment charge when the
@@ -51,6 +55,7 @@ export interface CreditChargeLine {
 export const DEFAULT_CREDIT_COSTS: CreditCostConfig = {
   enrichmentBaseCredits: 1,
   skipTraceCredits: 2,
+  textLookupCredits: 1,
 };
 
 /**
@@ -77,4 +82,20 @@ export function enrichmentCreditCost(
   plan: EnrichmentCostPlan
 ): number {
   return enrichmentChargeLines(costs, plan).reduce((sum, line) => sum + line.amount, 0);
+}
+
+/**
+ * The itemized charge for one tier-1 text-Jake lookup (JAK-115): a single
+ * `text_lookup` line. Dropped when priced at 0 so a free config never writes an
+ * empty ledger row.
+ */
+export function textLookupChargeLines(costs: CreditCostConfig): CreditChargeLine[] {
+  return [{ reason: "text_lookup" as CreditLedgerReason, amount: costs.textLookupCredits }].filter(
+    (line) => line.amount > 0
+  );
+}
+
+/** Total credits one text-Jake lookup costs. */
+export function textLookupCreditCost(costs: CreditCostConfig): number {
+  return textLookupChargeLines(costs).reduce((sum, line) => sum + line.amount, 0);
 }

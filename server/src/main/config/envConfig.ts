@@ -43,6 +43,16 @@ export class EnvConfig {
     public readonly ghlApiKey: string;
     public readonly ghlBaseUrl: string;
 
+    // 📟 Text-Jake MASTER GATEWAY (JAK-115). The single Zequi-owned "Jake" GHL
+    // sub-account that fronts tier-1 / trial texting: inbound arrives here and
+    // Jake replies out through it on this ONE master key. App-level Doppler
+    // secrets — NEVER stored in the DB and NEVER per-tenant. Optional at boot
+    // (empty when unset); the gateway client fails loudly only if actually used
+    // without them configured.
+    public readonly jakeGatewayGhlApiKey: string;
+    public readonly jakeGatewayLocationId: string;
+    public readonly jakeGatewayBaseUrl: string;
+
     // 🧠 GoHighLevel Marketplace app (OAuth + webhooks) — Doppler-provided.
     // Wired now so all GHL secrets live in one place; consumed by later tickets
     // (OAuth install JAK-150, webhook verify JAK-106, credential store JAK-102).
@@ -56,6 +66,9 @@ export class EnvConfig {
     // just tunable pricing constants with safe defaults).
     public readonly creditCostEnrichment: number;
     public readonly creditCostSkipTrace: number;
+    // Credits per tier-1 text-Jake property lookup (JAK-115). Same config-driven,
+    // never-free, safe-default treatment as the enrichment costs above.
+    public readonly creditCostTextLookup: number;
 
     // 🔐 Admin dashboard (JAK-113). The first-admin bootstrap credentials come
     // from Doppler — NEVER hardcoded in code or a migration. On boot, if both are
@@ -98,6 +111,13 @@ export class EnvConfig {
         this.ghlApiKey = process.env.GHL_API_KEY!;
         this.ghlBaseUrl = process.env.GHL_BASE_URL!;
 
+        // 📟 Text-Jake master gateway (JAK-115). App-level, Doppler-only. Optional
+        // at boot so environments without a gateway configured still start; the
+        // JakeGatewayClient throws if a gateway send/note is attempted unset.
+        this.jakeGatewayGhlApiKey = process.env.JAKE_GATEWAY_GHL_API_KEY ?? "";
+        this.jakeGatewayLocationId = process.env.JAKE_GATEWAY_LOCATION_ID ?? "";
+        this.jakeGatewayBaseUrl = process.env.JAKE_GATEWAY_BASE_URL ?? "";
+
         // 🧠 GoHighLevel Marketplace app secrets (Doppler)
         this.ghlClientId = process.env.GHL_CLIENT_ID ?? "";
         this.ghlClientSecret = process.env.GHL_CLIENT_SECRET ?? "";
@@ -110,6 +130,7 @@ export class EnvConfig {
         // back to the default so a bad env var can never make work "free".
         this.creditCostEnrichment = positiveIntFromEnv(process.env.CREDIT_COST_ENRICHMENT, 1);
         this.creditCostSkipTrace = positiveIntFromEnv(process.env.CREDIT_COST_SKIP_TRACE, 2);
+        this.creditCostTextLookup = positiveIntFromEnv(process.env.CREDIT_COST_TEXT_LOOKUP, 1);
 
         // 🔐 Admin dashboard bootstrap (JAK-113). Optional — unset on environments
         // where the admin already exists. Never defaulted to a real credential.

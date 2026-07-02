@@ -16,6 +16,7 @@ describe("GhlConnectionService", () => {
     base_url: "https://services.leadconnectorhq.com",
     phone_numbers: ["+15551234567"],
     status: "active",
+    text_mode: "gateway",
     created_at: new Date("2026-07-01T00:00:00Z"),
     updated_at: new Date("2026-07-01T00:00:00Z"),
     ...over,

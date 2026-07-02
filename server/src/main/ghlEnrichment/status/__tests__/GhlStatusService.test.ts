@@ -16,6 +16,7 @@ const connectionRow = (over: Partial<GhlConnectionRow> = {}): GhlConnectionRow =
   base_url: "https://services.leadconnectorhq.com",
   phone_numbers: ["+15551230001", "+15551230002"],
   status: "active",
+  text_mode: "gateway",
   created_at: new Date("2026-06-01T00:00:00Z"),
   updated_at: new Date("2026-06-15T00:00:00Z"),
   ...over,

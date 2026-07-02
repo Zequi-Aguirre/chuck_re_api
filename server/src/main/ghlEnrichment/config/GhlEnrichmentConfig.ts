@@ -48,6 +48,21 @@ export class GhlEnrichmentConfig {
   }
 
   /**
+   * Text-Jake MASTER GATEWAY credentials (JAK-115) — the single Zequi-owned Jake
+   * sub-account used for tier-1 / trial texting (text_mode='gateway'). These are
+   * app-level Doppler secrets, NEVER stored in the DB and NEVER per-tenant. Empty
+   * strings when unset; {@link import("../gateway/JakeGatewayClient").JakeGatewayClient}
+   * refuses to send if used unconfigured.
+   */
+  get gateway(): { apiKey: string; locationId: string; baseUrl: string } {
+    return {
+      apiKey: this.env.jakeGatewayGhlApiKey,
+      locationId: this.env.jakeGatewayLocationId,
+      baseUrl: this.env.jakeGatewayBaseUrl,
+    };
+  }
+
+  /**
    * Per-operation credit costs (JAK-109). Config-driven so the enrichment
    * economics can be tuned per environment without a code change. Not secrets —
    * tunable pricing constants with safe defaults resolved in {@link EnvConfig}.
@@ -56,6 +71,7 @@ export class GhlEnrichmentConfig {
     return {
       enrichmentBaseCredits: this.env.creditCostEnrichment,
       skipTraceCredits: this.env.creditCostSkipTrace,
+      textLookupCredits: this.env.creditCostTextLookup,
     };
   }
 

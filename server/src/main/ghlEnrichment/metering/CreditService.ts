@@ -5,6 +5,8 @@ import {
   EnrichmentCostPlan,
   enrichmentChargeLines,
   enrichmentCreditCost,
+  textLookupChargeLines,
+  textLookupCreditCost,
 } from "./CreditCosts";
 import { ChargeResult, CreditLedgerRow, CreditLedgerStore } from "./CreditLedgerStore";
 
@@ -95,6 +97,39 @@ export class CreditService {
       contactId: input.contactId,
       reason: input.reason ?? "refund",
     });
+  }
+
+  // ── Tier-1 text-Jake (JAK-115) ────────────────────────────────────────────
+  // Text-Jake bills the texting CUSTOMER (resolved by sender phone), not a GHL
+  // location. The credit ledger keys on a generic account id, so we pass the
+  // customer's stable credit-account id as that key. Distinct from enrichment:
+  // there's no per-contact idempotency here — each inbound text is its own,
+  // separately-billed lookup — so charges are NOT deduped by a reference id.
+
+  /** Credits one text-Jake property lookup costs. */
+  costOfTextLookup(): number {
+    return textLookupCreditCost(this.config.creditCosts);
+  }
+
+  /** True if a customer's credit account can currently afford a text lookup. */
+  async hasCreditsForTextLookup(accountId: string): Promise<boolean> {
+    const cost = this.costOfTextLookup();
+    if (cost <= 0) return true;
+    return (await this.ledger.getBalance(accountId)) >= cost;
+  }
+
+  /**
+   * Charge a customer's credit account for one delivered text-Jake lookup,
+   * atomically. Returns the store's {@link ChargeResult} — `ok:false` if the
+   * balance can't cover it (never a partial charge). No contact id is passed, so
+   * repeat texts each bill independently (no enrichment-style dedup).
+   */
+  async chargeForTextLookup(input: { accountId: string }): Promise<ChargeResult> {
+    const lines = textLookupChargeLines(this.config.creditCosts);
+    if (lines.length === 0) {
+      return { ok: true, balanceAfter: await this.ledger.getBalance(input.accountId), entries: [] };
+    }
+    return this.ledger.charge({ locationId: input.accountId, contactId: null, lines });
   }
 
   /**

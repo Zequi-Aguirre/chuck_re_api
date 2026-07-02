@@ -7,6 +7,9 @@ import { CredentialCipher } from "../connections/CredentialCipher";
 import { GhlConnectionStore } from "../connections/GhlConnectionStore";
 import { GhlConnectionService } from "../connections/GhlConnectionService";
 import { GhlApiClient } from "../api/GhlApiClient";
+import { JakeGatewayClient } from "../gateway/JakeGatewayClient";
+import { TextJakeCustomerStore } from "../customers/TextJakeCustomerStore";
+import { TextJakeCustomerService } from "../customers/TextJakeCustomerService";
 import { GhlCustomFieldStore } from "../lifecycle/GhlCustomFieldStore";
 import { GhlInstallLifecycleService } from "../lifecycle/GhlInstallLifecycleService";
 import { LeadEnrichmentQueueService } from "../../services/LeadEnrichmentQueueService";
@@ -80,6 +83,22 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   // single-tenant MVP GhlApiDao for the per-location path.
   if (!c.isRegistered(GhlApiClient)) {
     c.registerSingleton(GhlApiClient);
+  }
+
+  // JAK-115 — text-Jake master gateway + tier-1 billing identity. The gateway
+  // client fronts text_mode='gateway' (Zequi's shared Jake sub-account on the
+  // app-level master key from Doppler — never a per-tenant key). The customer
+  // store/service resolve the texting customer by sender phone and expose their
+  // JAK-109 credit account. own_number mode reuses the JAK-104 client + JAK-102
+  // store already registered above. Shares the one Postgres pool.
+  if (!c.isRegistered(JakeGatewayClient)) {
+    c.registerSingleton(JakeGatewayClient);
+  }
+  if (!c.isRegistered(TextJakeCustomerStore)) {
+    c.registerSingleton(TextJakeCustomerStore);
+  }
+  if (!c.isRegistered(TextJakeCustomerService)) {
+    c.registerSingleton(TextJakeCustomerService);
   }
 
   // JAK-105 — install/uninstall lifecycle. On install: auto-provision the
