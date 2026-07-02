@@ -32,6 +32,13 @@ export class EnvConfig {
     public readonly realEstateApiKey: string;
     public readonly realEstateBaseUrl: string;
 
+    // 🤖 OpenAI — writes the text-Jake "property report" SMS (JAK-130). The key is
+    // an app-level Doppler secret (NEVER hardcoded); the model is configurable and
+    // defaults to a cheap, strong-instruction-following model. Optional at boot —
+    // empty key just means the writer always uses its deterministic fallback.
+    public readonly openAiApiKey: string;
+    public readonly openAiModel: string;
+
     // 🗄️ Postgres (per-location connection/credential store — JAK-102 onward).
     // HOUSE PATTERN (JAK-117): discrete connection vars mirroring Automator +
     // Northstar (DB_HOST/DB_PORT/DB_USER/DB_PASS/DB_DB) instead of a single
@@ -97,6 +104,11 @@ export class EnvConfig {
         // 🏡 RealEstate API
         this.realEstateApiKey = process.env.RE_API_KEY!;
         this.realEstateBaseUrl = process.env.RE_BASE_URL!;
+
+        // 🤖 OpenAI (JAK-130). Key from Doppler (OPENAI_API_KEY) — never hardcoded.
+        // Model overridable via OPENAI_MODEL; default 'gpt-4o-mini'.
+        this.openAiApiKey = process.env.OPENAI_API_KEY ?? "";
+        this.openAiModel = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
         // 🗄️ Postgres discrete connection vars (Doppler). HOUSE PATTERN shared
         // with Automator + Northstar — same DB_* var names. Optional at boot —

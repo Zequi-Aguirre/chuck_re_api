@@ -8,6 +8,8 @@ import { GhlConnection } from "../../ghlEnrichment/connections/GhlConnectionType
 import { TextJakeCustomerService } from "../../ghlEnrichment/customers/TextJakeCustomerService";
 import { TextJakeCustomer } from "../../ghlEnrichment/customers/TextJakeCustomerTypes";
 import { CreditService } from "../../ghlEnrichment/metering/CreditService";
+import { PropertyReportWriter } from "../PropertyReportWriter";
+import { PropertyReportData } from "../../types/PropertyReport";
 
 /**
  * JakeAssistantService is mode-aware (JAK-115). These tests pin the two text
@@ -26,6 +28,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
   let connections: MockProxy<GhlConnectionService>;
   let customers: MockProxy<TextJakeCustomerService>;
   let credits: MockProxy<CreditService>;
+  let reportWriter: MockProxy<PropertyReportWriter>;
   let service: JakeAssistantService;
 
   const connection = (over: Partial<GhlConnection> = {}): GhlConnection => ({
@@ -58,6 +61,14 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     connections = mock<GhlConnectionService>();
     customers = mock<TextJakeCustomerService>();
     credits = mock<CreditService>();
+    reportWriter = mock<PropertyReportWriter>();
+
+    // The writer is exercised in its own suite; here it just echoes enough of the
+    // assembled data back so the flow assertions (message contains the address)
+    // hold, and so we can inspect the VERIFIED data the service handed it.
+    reportWriter.write.mockImplementation(
+      async (data: PropertyReportData) => `Jake Property Report\n${data.addressLine1 ?? "property"}`
+    );
 
     customers.resolveByPhone.mockImplementation(async (phone) => customerFor(phone));
     credits.hasCreditsForTextLookup.mockResolvedValue(true);
@@ -74,7 +85,8 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       gateway,
       connections,
       customers,
-      credits
+      credits,
+      reportWriter
     );
   });
 
@@ -235,6 +247,106 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
 
       const chargedAccounts = credits.chargeForTextLookup.mock.calls.map(([c]) => c.accountId);
       expect(chargedAccounts).toEqual(["acct_+15550001111", "acct_+15550002222"]);
+    });
+  });
+
+  describe("property report data (JAK-130 assembly + derivations)", () => {
+    // Capture the VERIFIED data the service hands the writer.
+    const dataHandedToWriter = () => reportWriter.write.mock.calls[0]![0];
+
+    it("maps the real fields and DERIVES absentee / occupancy / free-&-clear / equity", async () => {
+      realEstate.searchPropertyByAddress.mockResolvedValue({
+        address: "742 Evergreen Terrace, Springfield, IL 62704",
+        city: "Springfield",
+        state: "IL",
+        zip: "62704",
+        propertyType: "Single Family",
+        bedrooms: 4,
+        bathrooms: 2,
+        squareFeet: 2100,
+        lotSquareFeet: 43560, // exactly one acre
+        yearBuilt: 1998,
+        estimatedValue: 325000,
+        owner1FullName: "Homer Simpson",
+        owner2FullName: "Marge Simpson",
+        lastSaleAmount: 210000,
+        lastSaleDate: "2019-05-15",
+        yearsOwned: 7, // explicit → deterministic (no dependence on the clock)
+        openMortgageBalance: 0, // no open mortgage → Free & Clear, 100% equity
+        ownerType: null,
+        mailAddress: { state: "CA", city: "Los Angeles" }, // differs from IL/Springfield
+        floodZoneDescription: "AE",
+        mlsActive: false,
+      } as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "742 Evergreen Terrace, Springfield, IL 62704",
+      });
+
+      const data = dataHandedToWriter();
+      expect(data).toMatchObject({
+        addressLine1: "742 Evergreen Terrace",
+        addressLine2: "Springfield, IL 62704",
+        propertyType: "Single Family",
+        bedrooms: 4,
+        bathrooms: 2,
+        squareFeet: 2100,
+        lotAcres: 1,
+        yearBuilt: 1998,
+        estimatedMarketValue: 325000,
+        owner1: "Homer Simpson",
+        owner2: "Marge Simpson",
+        equityPercent: 100,
+        freeAndClear: true,
+        equityLevel: "High Equity",
+        occupancy: "Investor-Owned", // mailing state differs from the property
+        absenteeStatus: "Out-of-State Absentee Owner",
+        yearsOwned: 7,
+        lastSoldDate: "05/15/2019", // normalized to MM/DD/YYYY
+        salePrice: 210000,
+        femaFloodZone: "AE",
+        mlsListed: false,
+      });
+    });
+
+    it("OMITS fields the API didn't return — no null/undefined/blank leaks", async () => {
+      realEstate.searchPropertyByAddress.mockResolvedValue({
+        address: "9 Sparse Ln, Town, CA 90000",
+        bedrooms: 2,
+        owner1FullName: "Jane Doe",
+        // no owner2, no value, no sale, no flood, no mls, no equity signals
+      } as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "9 Sparse Ln, Town, CA 90000",
+      });
+
+      const data = dataHandedToWriter();
+      // Present fields only.
+      expect(data.addressLine1).toBe("9 Sparse Ln");
+      expect(data.owner1).toBe("Jane Doe");
+      expect(data.bedrooms).toBe(2);
+      // Absent fields must not appear at all (not as null/undefined).
+      for (const key of [
+        "owner2",
+        "estimatedMarketValue",
+        "salePrice",
+        "lastSoldDate",
+        "femaFloodZone",
+        "mlsListed",
+        "equityPercent",
+        "equityLevel",
+        "occupancy",
+        "absenteeStatus",
+      ]) {
+        expect(data).not.toHaveProperty(key);
+      }
+      // Nothing anywhere is null/undefined.
+      expect(Object.values(data).every((v) => v !== null && v !== undefined)).toBe(true);
     });
   });
 

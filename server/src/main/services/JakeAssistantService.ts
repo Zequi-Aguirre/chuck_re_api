@@ -9,6 +9,13 @@ import { TextJakeCustomerService } from "../ghlEnrichment/customers/TextJakeCust
 import { normalizeInboundAddress } from "../util/address.ts";
 import { JakeInboundMessage, JakeInboundResult, JakeTextMode } from "../types/Jake.ts";
 import { RealEstateApiPropertySearchResult } from "../types/RealEstateApi.ts";
+import { PropertyReportWriter } from "./PropertyReportWriter.ts";
+import {
+    AbsenteeStatus,
+    EquityLevel,
+    OccupancyStatus,
+    PropertyReportData,
+} from "../types/PropertyReport.ts";
 
 /**
  * A resolved transport for one inbound text: which mode handled it and the two
@@ -38,7 +45,8 @@ export class JakeAssistantService {
         private readonly gateway: JakeGatewayClient,
         private readonly connections: GhlConnectionService,
         private readonly customers: TextJakeCustomerService,
-        private readonly credits: CreditService
+        private readonly credits: CreditService,
+        private readonly reportWriter: PropertyReportWriter
     ) {}
 
     /**
@@ -114,7 +122,7 @@ export class JakeAssistantService {
             return { ok: false, address, reply, mode: route.mode, charged: 0 };
         }
 
-        const reply = this.buildReply(address, property);
+        const reply = await this.buildReply(address, property);
         await route.send(input.contactId, reply);
 
         // 6. Charge only when a match was delivered — mirrors the enrichment
@@ -220,73 +228,225 @@ export class JakeAssistantService {
     }
 
     /**
-     * Build a concise SMS reply from a PropertySearch summary record.
-     * Every field is optional, so lines are included only when data is present.
+     * Build the customer's reply (JAK-130). No match → a deterministic, emoji-free
+     * "try again" line (never the LLM). Otherwise: assemble the VERIFIED property
+     * data (only fields the API returned + our derived ones) and hand it to the
+     * {@link PropertyReportWriter}, which has the LLM write a "Jake Property Report"
+     * SMS — falling back to a deterministic plain-text report if OpenAI is down.
      */
-    private buildReply(
+    private async buildReply(
         address: string,
         property: RealEstateApiPropertySearchResult | null
-    ): string {
+    ): Promise<string> {
         if (!property) {
             return `I couldn't find property info for "${address}". Double-check the address and try again.`;
         }
-
-        const lines: string[] = [];
-        lines.push(`🏠 ${this.formatAddressLine(property, address)}`);
-
-        const facts: string[] = [];
-        if (property.bedrooms != null) facts.push(`${property.bedrooms} bd`);
-        if (property.bathrooms != null) facts.push(`${property.bathrooms} ba`);
-        const sqft = property.squareFeet;
-        if (sqft != null) facts.push(`${this.formatNumber(sqft)} sqft`);
-        if (property.yearBuilt != null) facts.push(`built ${property.yearBuilt}`);
-        if (facts.length) lines.push(facts.join(" • "));
-
-        if (property.estimatedValue != null) {
-            lines.push(`Est. value: ${this.formatMoney(property.estimatedValue)}`);
-        }
-
-        if (property.lastSaleAmount != null || property.lastSaleDate) {
-            const amt = property.lastSaleAmount != null ? this.formatMoney(property.lastSaleAmount) : null;
-            const date = property.lastSaleDate ?? null;
-            const parts = [amt, date ? `on ${date}` : null].filter(Boolean).join(" ");
-            if (parts) lines.push(`Last sold: ${parts}`);
-        }
-
-        const owner = this.ownerName(property);
-        if (owner) lines.push(`Owner: ${owner}`);
-
-        if (property.mlsActive === true || property.mlsStatus) {
-            lines.push(`MLS: ${property.mlsStatus ?? "Active"}`);
-        }
-
-        return lines.join("\n");
+        return this.reportWriter.write(this.assembleReportData(property, address));
     }
 
-    private formatAddressLine(property: RealEstateApiPropertySearchResult, fallback: string): string {
-        const addr = property.address;
-        if (typeof addr === "string" && addr.trim()) return addr.trim();
-        if (addr && typeof addr === "object") {
-            const line = [addr.house, addr.street, addr.streetType].filter(Boolean).join(" ").trim();
-            const tail = [addr.city, addr.state, addr.zip].filter(Boolean).join(" ").trim();
-            const full = [line, tail].filter(Boolean).join(", ");
-            if (full) return full;
-        }
-        const flatTail = [property.city, property.state, property.zip].filter(Boolean).join(" ").trim();
-        return flatTail || fallback;
+    /**
+     * Map a raw PropertySearch summary into the clean, verified {@link PropertyReportData}
+     * the writer consumes. Only present values are set (missing → left undefined,
+     * never null/blank), and the derived fields (lot acres, equity level, occupancy,
+     * absentee status, years owned, free-&-clear) are computed here from the raw
+     * data per JAK-130's derivation rules.
+     */
+    private assembleReportData(
+        property: RealEstateApiPropertySearchResult,
+        address: string
+    ): PropertyReportData {
+        const data: PropertyReportData = {};
+
+        const { street, tail } = this.addressParts(property);
+        if (street) data.addressLine1 = street;
+        if (tail) data.addressLine2 = tail;
+        if (!street && !tail && address.trim()) data.addressLine1 = address.trim();
+
+        const propertyType = this.text(property.propertyType);
+        if (propertyType) data.propertyType = propertyType;
+        if (property.bedrooms != null) data.bedrooms = property.bedrooms;
+        if (property.bathrooms != null) data.bathrooms = property.bathrooms;
+        if (property.squareFeet != null) data.squareFeet = property.squareFeet;
+        const lot = property.lotSquareFeet;
+        if (lot != null && lot > 0) data.lotAcres = Number((lot / 43560).toFixed(2));
+        if (property.yearBuilt != null) data.yearBuilt = property.yearBuilt;
+
+        if (property.estimatedValue != null) data.estimatedMarketValue = property.estimatedValue;
+
+        const owner1 = this.owner1Name(property);
+        if (owner1) data.owner1 = owner1;
+        const owner2 = this.owner2Name(property);
+        if (owner2) data.owner2 = owner2;
+        const equityPercent = this.equityPercent(property);
+        if (equityPercent != null) data.equityPercent = equityPercent;
+        if (this.isFreeClear(property)) data.freeAndClear = true;
+        const equityLevel = this.equityLevel(property);
+        if (equityLevel) data.equityLevel = equityLevel;
+        const occupancy = this.occupancy(property);
+        if (occupancy) data.occupancy = occupancy;
+        const absentee = this.absentee(property);
+        if (absentee) data.absenteeStatus = absentee;
+        const yearsOwned = this.yearsOwned(property);
+        if (yearsOwned != null) data.yearsOwned = yearsOwned;
+
+        if (property.lastSaleDate) data.lastSoldDate = this.formatDate(property.lastSaleDate);
+        if (property.lastSaleAmount != null) data.salePrice = property.lastSaleAmount;
+
+        const flood = this.text(property.floodZoneDescription);
+        if (flood) data.femaFloodZone = flood;
+        if (typeof property.mlsActive === "boolean") data.mlsListed = property.mlsActive;
+
+        return data;
     }
 
-    private ownerName(property: RealEstateApiPropertySearchResult): string | null {
-        if (property.owner1FullName) return property.owner1FullName;
+    private addressParts(property: RealEstateApiPropertySearchResult): { street: string; tail: string } {
+        const a = property.address;
+        const loc = this.propertyLocation(property);
+        let street = "";
+        let tail = this.cityStateZip(loc.city, loc.state, loc.zip);
+
+        if (typeof a === "string") {
+            const s = a.trim();
+            const idx = s.indexOf(",");
+            if (idx >= 0) {
+                street = s.slice(0, idx).trim();
+                if (!tail) tail = s.slice(idx + 1).trim().replace(/\s+/g, " ");
+            } else {
+                street = s;
+            }
+        } else if (a && typeof a === "object") {
+            street = [a.house, a.street, a.streetType].filter(Boolean).join(" ").trim();
+        }
+
+        return { street, tail };
+    }
+
+    /** Resolve city/state/zip from flat fields, falling back to the address object. */
+    private propertyLocation(
+        property: RealEstateApiPropertySearchResult
+    ): { city?: string; state?: string; zip?: string } {
+        const obj = property.address && typeof property.address === "object" ? property.address : null;
+        const pick = (flat?: string | null, nested?: string | null) =>
+            (flat ?? nested ?? "").toString().trim() || undefined;
+        return {
+            city: pick(property.city, obj?.city),
+            state: pick(property.state, obj?.state),
+            zip: pick(property.zip, obj?.zip),
+        };
+    }
+
+    private cityStateZip(city?: string, state?: string, zip?: string): string {
+        const left = (city ?? "").trim();
+        const right = [state, zip].map((x) => (x ?? "").trim()).filter(Boolean).join(" ");
+        return [left, right].filter(Boolean).join(", ");
+    }
+
+    private owner1Name(property: RealEstateApiPropertySearchResult): string | null {
+        if (property.owner1FullName?.trim()) return property.owner1FullName.trim();
         const composed = [property.owner1FirstName, property.owner1LastName].filter(Boolean).join(" ").trim();
         return composed || null;
     }
 
-    private formatNumber(n: number): string {
-        return n.toLocaleString("en-US");
+    private owner2Name(property: RealEstateApiPropertySearchResult): string | null {
+        if (property.owner2FullName?.trim()) return property.owner2FullName.trim();
+        const composed = [property.owner2FirstName, property.owner2LastName].filter(Boolean).join(" ").trim();
+        return composed || null;
     }
 
-    private formatMoney(n: number): string {
-        return `$${Math.round(n).toLocaleString("en-US")}`;
+    private equityPercent(property: RealEstateApiPropertySearchResult): number | null {
+        if (typeof property.equityPercent === "number") return Math.round(property.equityPercent);
+        if (this.isFreeClear(property)) return 100; // free & clear implies full equity
+        return null;
+    }
+
+    /** Free & Clear = no open mortgage (prefer the flag, else a zero balance). */
+    private isFreeClear(property: RealEstateApiPropertySearchResult): boolean {
+        if (typeof property.freeClear === "boolean") return property.freeClear;
+        if (typeof property.openMortgageBalance === "number") return property.openMortgageBalance === 0;
+        return false;
+    }
+
+    private equityLevel(property: RealEstateApiPropertySearchResult): EquityLevel | null {
+        if (typeof property.highEquity === "boolean") return property.highEquity ? "High Equity" : "Low Equity";
+        const pct = this.equityPercent(property);
+        if (pct == null) return null;
+        return pct >= 50 ? "High Equity" : "Low Equity";
+    }
+
+    /**
+     * Owner-Occupied vs Investor-Owned — prefer the provider flag, else derive
+     * from whether the owner's tax-mailing address matches the property.
+     */
+    private occupancy(property: RealEstateApiPropertySearchResult): OccupancyStatus | null {
+        if (typeof property.ownerOccupied === "boolean") {
+            return property.ownerOccupied ? "Owner-Occupied" : "Investor-Owned";
+        }
+        const match = this.mailingMatchesProperty(property);
+        if (match == null) return null;
+        return match ? "Owner-Occupied" : "Investor-Owned";
+    }
+
+    /**
+     * Absentee status derived from owner mailing vs property location: a different
+     * state ⇒ Out-of-State Absentee Owner, a different city ⇒ Absentee Owner.
+     * Falls back to provider flags when no mailing address is available.
+     */
+    private absentee(property: RealEstateApiPropertySearchResult): AbsenteeStatus | null {
+        const mail = property.mailAddress;
+        const loc = this.propertyLocation(property);
+        const norm = (s?: string | null) => (s ?? "").toString().trim().toUpperCase();
+
+        if (mail && (mail.state || mail.city)) {
+            const mState = norm(mail.state);
+            const mCity = norm(mail.city);
+            if (loc.state && mState && mState !== norm(loc.state)) return "Out-of-State Absentee Owner";
+            if (loc.city && mCity && mCity !== norm(loc.city)) return "Absentee Owner";
+            return null;
+        }
+
+        if (property.outOfStateAbsenteeOwner === true) return "Out-of-State Absentee Owner";
+        if (property.absenteeOwner === true || property.inStateAbsenteeOwner === true) return "Absentee Owner";
+        return null;
+    }
+
+    private mailingMatchesProperty(property: RealEstateApiPropertySearchResult): boolean | null {
+        const mail = property.mailAddress;
+        if (!mail || (!mail.state && !mail.city)) return null;
+        const loc = this.propertyLocation(property);
+        if (!loc.state && !loc.city) return null;
+        const norm = (s?: string | null) => (s ?? "").toString().trim().toUpperCase();
+        const sameState = mail.state && loc.state ? norm(mail.state) === norm(loc.state) : true;
+        const sameCity = mail.city && loc.city ? norm(mail.city) === norm(loc.city) : true;
+        return sameState && sameCity;
+    }
+
+    /** Prefer the provider's yearsOwned, else current year minus the last-sale year. */
+    private yearsOwned(property: RealEstateApiPropertySearchResult): number | null {
+        if (typeof property.yearsOwned === "number" && property.yearsOwned >= 0) {
+            return property.yearsOwned;
+        }
+        const year = this.saleYear(property.lastSaleDate);
+        if (year == null) return null;
+        const diff = new Date().getFullYear() - year;
+        return diff >= 0 ? diff : null;
+    }
+
+    /** Normalize an ISO (YYYY-MM-DD…) sale date to MM/DD/YYYY; pass others through. */
+    private formatDate(raw: string): string {
+        const s = raw.trim();
+        const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        return iso ? `${iso[2]}/${iso[3]}/${iso[1]}` : s;
+    }
+
+    private saleYear(raw?: string | null): number | null {
+        if (!raw) return null;
+        const m = String(raw).match(/(\d{4})/);
+        if (!m) return null;
+        const y = Number(m[1]);
+        return Number.isFinite(y) ? y : null;
+    }
+
+    private text(v: unknown): string | null {
+        return typeof v === "string" && v.trim() ? v.trim() : null;
     }
 }
