@@ -142,6 +142,35 @@ export type RealEstateApiPropertySearchResult = {
     owner1FirstName?: string | null;
     owner1LastName?: string | null;
     owner1FullName?: string | null;
+
+    // Second owner + owner classification (present on PropertySearch summaries).
+    owner2FirstName?: string | null;
+    owner2LastName?: string | null;
+    owner2FullName?: string | null;
+    ownerType?: string | null;
+    ownerOccupied?: boolean | null;
+
+    // Absentee flags the provider derives; we prefer deriving from mailAddress vs
+    // the property, but fall back to these when the mailing address is absent.
+    absenteeOwner?: boolean | null;
+    inStateAbsenteeOwner?: boolean | null;
+    outOfStateAbsenteeOwner?: boolean | null;
+
+    // Equity / mortgage signals used for the Ownership section.
+    equityPercent?: number | null;
+    estimatedEquity?: number | null;
+    highEquity?: boolean | null;
+    freeClear?: boolean | null;
+    openMortgageBalance?: number | null;
+    yearsOwned?: number | null;
+
+    // FEMA flood signals; only the zone descriptor is renderable.
+    floodZone?: boolean | null;
+    floodZoneDescription?: string | null;
+
+    // Owner tax-mailing address — the seam for deriving Absentee / Owner-Occupied.
+    mailAddress?: RealEstateApiMailingAddress | null;
+
     mlsActive?: boolean | null;
     mlsStatus?: string | null;
     [key: string]: unknown;
