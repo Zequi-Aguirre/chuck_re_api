@@ -82,7 +82,7 @@ export function AdminsPage() {
         </Box>
       ) : (
         <TableContainer component={Paper}>
-          <Table>
+          <Table sx={{ minWidth: 720 }}>
             <TableHead>
               <TableRow>
                 <TableCell>Email</TableCell>
@@ -119,7 +119,7 @@ export function AdminsPage() {
                       />
                     </TableCell>
                     <TableCell>{new Date(admin.createdAt).toLocaleDateString()}</TableCell>
-                    <TableCell align="right">
+                    <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
                       <Stack direction="row" spacing={1} justifyContent="flex-end">
                         <Button
                           size="small"

@@ -197,7 +197,8 @@ export function ConnectionDetailPage() {
         {credits.recent.length === 0 ? (
           <Empty>No credit entries yet.</Empty>
         ) : (
-          <Table size="small">
+          <Box sx={{ overflowX: "auto" }}>
+          <Table size="small" sx={{ minWidth: 480 }}>
             <TableHead>
               <TableRow>
                 <TableCell>When</TableCell>
@@ -219,6 +220,7 @@ export function ConnectionDetailPage() {
               ))}
             </TableBody>
           </Table>
+          </Box>
         )}
       </SectionPaper>
 
@@ -327,7 +329,8 @@ function Empty({ children }: { children: React.ReactNode }) {
 
 function EventTable({ events }: { events: LocationStatusDetail["enrichment"]["recent"] }) {
   return (
-    <Table size="small">
+    <Box sx={{ overflowX: "auto" }}>
+    <Table size="small" sx={{ minWidth: 560 }}>
       <TableHead>
         <TableRow>
           <TableCell>Contact</TableCell>
@@ -351,5 +354,6 @@ function EventTable({ events }: { events: LocationStatusDetail["enrichment"]["re
         ))}
       </TableBody>
     </Table>
+    </Box>
   );
 }
