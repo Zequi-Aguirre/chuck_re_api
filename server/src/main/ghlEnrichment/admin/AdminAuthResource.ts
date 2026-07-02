@@ -52,7 +52,7 @@ export class AdminAuthResource {
 
       const token = this.auth.issueToken(user);
       res.cookie(ADMIN_COOKIE, token, this.cookieOptions());
-      return res.status(200).json({ user: { id: user.id, email: user.email } });
+      return res.status(200).json({ user: { id: user.id, email: user.email, role: user.role } });
     } catch (err) {
       return next(err);
     }
@@ -65,7 +65,9 @@ export class AdminAuthResource {
 
   private me(req: Request, res: Response): Response {
     return res.status(200).json({
-      user: { id: req.admin?.sub, email: req.admin?.email },
+      // role (JAK-125) tells the SPA whether to show the superadmin-only Admins
+      // tab. The value comes from the verified session, not client input.
+      user: { id: req.admin?.sub, email: req.admin?.email, role: req.admin?.role },
     });
   }
 

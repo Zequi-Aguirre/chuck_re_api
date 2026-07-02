@@ -59,9 +59,14 @@ export interface LocationStatusDetail {
   failures: EnrichmentEventView[];
 }
 
+/** Admin privilege level (JAK-125). Mirrors the server's AdminRole. */
+export type AdminRole = "admin" | "superadmin";
+
 export interface AdminUser {
   id: string;
   email: string;
+  /** Privilege level (JAK-125) — gates the superadmin-only Admins tab. */
+  role: AdminRole;
 }
 
 /** An admin as the management table sees it (JAK-124) — never a password hash. */
@@ -69,5 +74,6 @@ export interface AdminUserView {
   id: string;
   email: string;
   isActive: boolean;
+  role: AdminRole;
   createdAt: string;
 }

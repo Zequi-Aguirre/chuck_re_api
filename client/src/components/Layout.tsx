@@ -27,9 +27,13 @@ export function Layout() {
             <Button size="small" component={RouterLink} to="/" color="inherit">
               Sub-accounts
             </Button>
-            <Button size="small" component={RouterLink} to="/admins" color="inherit">
-              Admins
-            </Button>
+            {/* Admin management is superadmin-only (JAK-125) — a regular admin
+                never sees the tab (and the route + API 403 back it up). */}
+            {user?.role === "superadmin" && (
+              <Button size="small" component={RouterLink} to="/admins" color="inherit">
+                Admins
+              </Button>
+            )}
           </Box>
           <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
             <Typography variant="body2" color="text.secondary">

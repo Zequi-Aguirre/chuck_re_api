@@ -7,6 +7,14 @@
  * and the safe, credential-free shapes the admin API returns to the SPA.
  */
 
+/**
+ * Admin privilege level (JAK-125).
+ *  - `admin`      — full sub-account management (connections/status), the default.
+ *  - `superadmin` — everything an admin can do, PLUS managing other admins
+ *                   (add/list/activate/deactivate/reset-password).
+ */
+export type AdminRole = "admin" | "superadmin";
+
 /** Raw persistence row for the `admin_users` table. */
 export interface AdminUserRow {
   id: string;
@@ -15,6 +23,8 @@ export interface AdminUserRow {
   password_hash: string;
   /** Disabled admins keep their row but can't log in (JAK-124). */
   is_active: boolean;
+  /** Privilege level (JAK-125). Defaults to 'admin' at the DB level. */
+  role: AdminRole;
   created_at: Date;
   updated_at: Date;
 }
@@ -26,6 +36,7 @@ export interface AdminUserRow {
 export interface AdminUser {
   id: string;
   email: string;
+  role: AdminRole;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -40,6 +51,8 @@ export interface AdminUserView {
   id: string;
   email: string;
   isActive: boolean;
+  /** Privilege level (JAK-125) — lets the SPA show role + gate the UI. */
+  role: AdminRole;
   createdAt: Date;
 }
 
@@ -48,6 +61,13 @@ export interface AdminTokenPayload {
   /** Admin user id (JWT `sub`). */
   sub: string;
   email: string;
+  /**
+   * Privilege level (JAK-125). Carried in the session so the backend guard and
+   * the SPA both know it without a DB round-trip. Old tokens minted before
+   * JAK-125 lack this; {@link AdminAuthService.verifyToken} defaults them to
+   * the least-privileged 'admin'.
+   */
+  role: AdminRole;
 }
 
 /**

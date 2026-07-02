@@ -160,8 +160,12 @@ export class JakeServer {
         }
         try {
             const result = await container.resolve(AdminAuthService).seedFirstAdmin();
-            if (result === "created") console.log("🔐 First admin user created from ADMIN_SEED_* env.");
-            else if (result === "exists") console.log("🔐 Admin user already present — no seed needed.");
+            if (result === "created")
+                console.log("🔐 First admin (superadmin) created from ADMIN_SEED_* env.");
+            else if (result === "promoted")
+                console.log("🔐 Seeded admin promoted to superadmin (JAK-125).");
+            else if (result === "exists")
+                console.log("🔐 Superadmin already present — no seed needed.");
         } catch (err) {
             console.error("❌ Admin bootstrap failed:", err);
         }

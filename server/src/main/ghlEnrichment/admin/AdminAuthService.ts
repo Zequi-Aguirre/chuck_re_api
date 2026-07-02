@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 import { injectable } from "tsyringe";
 import { EnvConfig } from "../../config/envConfig";
 import { AdminUserStore } from "./AdminUserStore";
-import { AdminTokenPayload, AdminUser, AdminUserRow, AdminUserView } from "./AdminTypes";
+import { AdminRole, AdminTokenPayload, AdminUser, AdminUserRow, AdminUserView } from "./AdminTypes";
 
 /** bcrypt work factor. 12 is a sane 2020s default for an interactive login. */
 const BCRYPT_ROUNDS = 12;
@@ -62,7 +62,7 @@ export class AdminAuthService {
     if (!secret) {
       throw new Error("JWT_SECRET is not configured — cannot issue admin session.");
     }
-    const payload: AdminTokenPayload = { sub: user.id, email: user.email };
+    const payload: AdminTokenPayload = { sub: user.id, email: user.email, role: user.role };
     return jwt.sign(payload, secret, {
       expiresIn: `${this.env.adminSessionTtlHours}h`,
     });
@@ -80,29 +80,46 @@ export class AdminAuthService {
     try {
       const decoded = jwt.verify(token, secret);
       if (typeof decoded === "string" || !decoded.sub) return null;
-      return { sub: String(decoded.sub), email: String(decoded.email ?? "") };
+      // Old tokens minted before JAK-125 have no role — treat them as the
+      // least-privileged 'admin' so a stale session can never be superadmin.
+      const role: AdminRole = decoded.role === "superadmin" ? "superadmin" : "admin";
+      return { sub: String(decoded.sub), email: String(decoded.email ?? ""), role };
     } catch {
       return null;
     }
   }
 
   /**
-   * Bootstrap the first admin from Doppler-provided env at boot. Idempotent and
-   * safe to call every start: it no-ops unless BOTH seed vars are set AND no
-   * admin with that email exists yet. Never overwrites an existing password —
-   * rotate that through the app, not by re-seeding. Returns a short status for
-   * the boot log (no credential is ever logged).
+   * Bootstrap the seeded admin from Doppler-provided env at boot, and GUARANTEE
+   * it is a superadmin (JAK-125). Idempotent and safe to call every start:
+   *  - no-ops ("skipped") unless BOTH seed vars are set;
+   *  - creates the account as a `superadmin` if it doesn't exist yet ("created");
+   *  - PROMOTES an existing seeded account to `superadmin` if it's still a plain
+   *    admin ("promoted") — so Zequi's already-seeded staging account becomes a
+   *    superadmin on the next deploy with NO manual DB surgery;
+   *  - leaves it alone ("exists") if it's already a superadmin.
+   *
+   * It NEVER overwrites an existing password — rotate that through the app
+   * (superadmin reset), not by re-seeding. Returns a short status for the boot
+   * log; no credential is ever logged.
    */
-  async seedFirstAdmin(): Promise<"created" | "exists" | "skipped"> {
+  async seedFirstAdmin(): Promise<"created" | "promoted" | "exists" | "skipped"> {
     const email = this.env.adminSeedEmail.trim().toLowerCase();
     const password = this.env.adminSeedPassword;
     if (!email || !password) return "skipped";
 
     const existing = await this.users.findByEmail(email);
-    if (existing) return "exists";
+    if (existing) {
+      // Promote idempotently — don't touch the password, only the role.
+      if (existing.role !== "superadmin") {
+        await this.users.setRoleByEmail(email, "superadmin");
+        return "promoted";
+      }
+      return "exists";
+    }
 
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-    await this.users.insert(email, passwordHash);
+    await this.users.insert(email, passwordHash, "superadmin");
     return "created";
   }
 
@@ -124,18 +141,37 @@ export class AdminAuthService {
   /**
    * Create a new admin from a chosen email + password. Hashes the password with
    * the SAME bcrypt cost as the seed path ({@link BCRYPT_ROUNDS}); the plaintext
-   * is discarded immediately and never logged. Returns the safe view (no hash).
-   * Duplicate email is enforced by the store's unique constraint as a backstop.
+   * is discarded immediately and never logged. Role defaults to 'admin'; only a
+   * superadmin reaches this path (enforced at the resource layer) and may pass
+   * 'superadmin'. Returns the safe view (no hash). Duplicate email is enforced
+   * by the store's unique constraint as a backstop.
    */
-  async createAdmin(email: string, password: string): Promise<AdminUserView> {
+  async createAdmin(
+    email: string,
+    password: string,
+    role: AdminRole = "admin"
+  ): Promise<AdminUserView> {
     const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
-    const row = await this.users.insert(email, passwordHash);
+    const row = await this.users.insert(email, passwordHash, role);
     return toAdminView(row);
   }
 
   /** Enable/disable an admin. Returns the safe view, or null if id is unknown. */
   async setAdminActive(id: string, isActive: boolean): Promise<AdminUserView | null> {
     const row = await this.users.setActive(id, isActive);
+    return row ? toAdminView(row) : null;
+  }
+
+  /**
+   * Reset an admin's password to a superadmin-chosen value (JAK-125). Hashes it
+   * with the SAME bcrypt cost as create/seed, then REPLACES the stored hash; the
+   * plaintext is discarded immediately and never logged. There is no email,
+   * reset link, or token — the superadmin hands the new password over directly.
+   * Returns the safe view, or null if the id is unknown.
+   */
+  async resetAdminPassword(id: string, password: string): Promise<AdminUserView | null> {
+    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    const row = await this.users.setPassword(id, passwordHash);
     return row ? toAdminView(row) : null;
   }
 }
@@ -145,6 +181,7 @@ function toAdminUser(row: AdminUserRow): AdminUser {
   return {
     id: row.id,
     email: row.email,
+    role: row.role,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -156,6 +193,7 @@ function toAdminView(row: AdminUserRow): AdminUserView {
     id: row.id,
     email: row.email,
     isActive: row.is_active,
+    role: row.role,
     createdAt: row.created_at,
   };
 }

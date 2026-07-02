@@ -10,6 +10,7 @@ import { ADMIN_COOKIE } from "../requireAdminAuth";
 const ADMIN = {
   id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
   email: "admin@example.com",
+  role: "superadmin" as const,
   createdAt: new Date(),
   updatedAt: new Date(),
 };
@@ -39,6 +40,8 @@ describe("AdminAuthResource", () => {
 
       expect(res.status).toBe(200);
       expect(res.body.user.email).toBe("admin@example.com");
+      // Login echoes the role so the SPA can gate the superadmin UI (JAK-125).
+      expect(res.body.user.role).toBe("superadmin");
       const cookie = res.headers["set-cookie"][0];
       expect(cookie).toContain(`${ADMIN_COOKIE}=unit-test-token`);
       expect(cookie).toContain("HttpOnly");
@@ -70,13 +73,14 @@ describe("AdminAuthResource", () => {
       expect(res.status).toBe(401);
     });
 
-    it("returns the admin identity with a valid bearer token", async () => {
-      auth.verifyToken.mockReturnValue({ sub: ADMIN.id, email: ADMIN.email });
+    it("returns the admin identity (with role) for a valid bearer token", async () => {
+      auth.verifyToken.mockReturnValue({ sub: ADMIN.id, email: ADMIN.email, role: "superadmin" });
       const res = await request(app)
         .get("/api/admin/auth/me")
         .set("Authorization", "Bearer good.token");
       expect(res.status).toBe(200);
       expect(res.body.user.email).toBe("admin@example.com");
+      expect(res.body.user.role).toBe("superadmin");
     });
   });
 });

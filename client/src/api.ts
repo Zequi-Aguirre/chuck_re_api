@@ -1,4 +1,5 @@
 import {
+  AdminRole,
   AdminUser,
   AdminUserView,
   LedgerEntryView,
@@ -118,15 +119,21 @@ export const api = {
     const body = await request<{ admins: AdminUserView[] }>("/admins");
     return body.admins;
   },
-  async createAdmin(email: string, password: string): Promise<AdminUserView> {
+  async createAdmin(email: string, password: string, role: AdminRole): Promise<AdminUserView> {
     const body = await request<{ admin: AdminUserView }>("/admins", {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, role }),
     });
     return body.admin;
   },
   async setAdminActive(id: string, isActive: boolean): Promise<void> {
     const action = isActive ? "activate" : "deactivate";
     await request(`/admins/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+  },
+  async resetAdminPassword(id: string, password: string): Promise<void> {
+    await request(`/admins/${encodeURIComponent(id)}/password`, {
+      method: "POST",
+      body: JSON.stringify({ password }),
+    });
   },
 };

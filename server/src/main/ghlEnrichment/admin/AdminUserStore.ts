@@ -1,6 +1,6 @@
 import { injectable } from "tsyringe";
 import { PostgresDatabase } from "../../data/PostgresDatabase";
-import { AdminUserRow } from "./AdminTypes";
+import { AdminRole, AdminUserRow } from "./AdminTypes";
 
 /**
  * Data-access layer for admin dashboard users (JAK-113).
@@ -41,13 +41,20 @@ export class AdminUserStore {
     return result.rows;
   }
 
-  /** Insert a new admin with an already-hashed password. */
-  async insert(email: string, passwordHash: string): Promise<AdminUserRow> {
+  /**
+   * Insert a new admin with an already-hashed password. Role defaults to the
+   * least-privileged 'admin' (JAK-125); a superadmin may pass 'superadmin'.
+   */
+  async insert(
+    email: string,
+    passwordHash: string,
+    role: AdminRole = "admin"
+  ): Promise<AdminUserRow> {
     const result = await this.db.query<AdminUserRow>(
-      `INSERT INTO admin_users (email, password_hash)
-       VALUES ($1, $2)
+      `INSERT INTO admin_users (email, password_hash, role)
+       VALUES ($1, $2, $3)
        RETURNING *`,
-      [email.trim().toLowerCase(), passwordHash]
+      [email.trim().toLowerCase(), passwordHash, role]
     );
     return result.rows[0];
   }
@@ -63,6 +70,38 @@ export class AdminUserStore {
        WHERE id = $1
        RETURNING *`,
       [id, isActive]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  /**
+   * Replace an admin's bcrypt hash (superadmin password reset, JAK-125). Bumps
+   * `updated_at`. Returns the updated row, or null if the id is unknown. The
+   * caller passes an already-hashed value — no plaintext ever reaches the store.
+   */
+  async setPassword(id: string, passwordHash: string): Promise<AdminUserRow | null> {
+    const result = await this.db.query<AdminUserRow>(
+      `UPDATE admin_users
+       SET password_hash = $2, updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [id, passwordHash]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  /**
+   * Set an admin's role by email (JAK-125 seed promotion). Bumps `updated_at`.
+   * Returns the updated row, or null if no admin has that email. Used at boot to
+   * guarantee the seeded account is a superadmin, idempotently.
+   */
+  async setRoleByEmail(email: string, role: AdminRole): Promise<AdminUserRow | null> {
+    const result = await this.db.query<AdminUserRow>(
+      `UPDATE admin_users
+       SET role = $2, updated_at = now()
+       WHERE email = $1
+       RETURNING *`,
+      [email.trim().toLowerCase(), role]
     );
     return result.rows[0] ?? null;
   }

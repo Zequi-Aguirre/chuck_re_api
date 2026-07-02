@@ -3,7 +3,8 @@ import { inject, injectable } from "tsyringe";
 import { GhlStatusService } from "../status/GhlStatusService";
 import { AdminAuthService } from "./AdminAuthService";
 import { AdminConnectionService } from "./AdminConnectionService";
-import { requireAdminAuth } from "./requireAdminAuth";
+import { requireAdminAuth, requireSuperadmin } from "./requireAdminAuth";
+import { AdminRole } from "./AdminTypes";
 
 /**
  * The admin dashboard's data API (JAK-113) — CRUD over connected sub-accounts,
@@ -20,9 +21,14 @@ import { requireAdminAuth } from "./requireAdminAuth";
  *   POST   /connections/:locationId/credits  — manual credit grant/adjustment.
  *
  *   GET    /admins                — list admins (JAK-124), never any password hash.
- *   POST   /admins                — create an admin from { email, password }.
+ *   POST   /admins                — create an admin from { email, password, role? }.
  *   POST   /admins/:id/activate   — re-enable a disabled admin.
  *   POST   /admins/:id/deactivate — disable an admin (never your own account).
+ *   POST   /admins/:id/password   — superadmin resets an admin's password (JAK-125).
+ *
+ * SUPERADMIN GATE (JAK-125): every /admins route is additionally behind
+ * {@link requireSuperadmin} — a regular admin gets 403. The connection/status
+ * routes are NOT gated, so a regular admin keeps full sub-account management.
  *
  * It REUSES the existing services — the read side is entirely JAK-112's
  * {@link GhlStatusService} (already credential-free), and the write side is the
@@ -56,11 +62,16 @@ export class AdminResource {
     this.router.delete("/connections/:locationId", this.remove.bind(this));
     this.router.post("/connections/:locationId/credits", this.grantCredits.bind(this));
 
-    // Admin management (JAK-124): a logged-in admin manages the other admins.
-    this.router.get("/admins", this.listAdmins.bind(this));
-    this.router.post("/admins", this.createAdmin.bind(this));
-    this.router.post("/admins/:id/activate", this.activateAdmin.bind(this));
-    this.router.post("/admins/:id/deactivate", this.deactivateAdmin.bind(this));
+    // Admin management (JAK-124, restricted in JAK-125): ONLY a superadmin may
+    // manage other admins. requireSuperadmin runs after the router-level
+    // requireAdminAuth above, so req.admin is already populated. A regular admin
+    // hitting any of these gets 403; connections/status above stay open to them.
+    const superadmin = requireSuperadmin();
+    this.router.get("/admins", superadmin, this.listAdmins.bind(this));
+    this.router.post("/admins", superadmin, this.createAdmin.bind(this));
+    this.router.post("/admins/:id/activate", superadmin, this.activateAdmin.bind(this));
+    this.router.post("/admins/:id/deactivate", superadmin, this.deactivateAdmin.bind(this));
+    this.router.post("/admins/:id/password", superadmin, this.resetAdminPassword.bind(this));
   }
 
   // --- Admin management (JAK-124) ------------------------------------------
@@ -90,11 +101,17 @@ export class AdminResource {
           .status(400)
           .json({ error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters` });
       }
+      // Optional role (JAK-125). A superadmin — the only caller past the guard —
+      // may create either role; anything else is a 400. Default is 'admin'.
+      const role = req.body?.role;
+      if (role !== undefined && role !== "admin" && role !== "superadmin") {
+        return res.status(400).json({ error: "role must be 'admin' or 'superadmin'" });
+      }
       if (await this.auth.emailExists(email)) {
         return res.status(409).json({ error: "An admin with that email already exists" });
       }
 
-      const admin = await this.auth.createAdmin(email, password);
+      const admin = await this.auth.createAdmin(email, password, (role as AdminRole) ?? "admin");
       return res.status(201).json({ admin });
     } catch (err) {
       // Unique-violation backstop for a race between the pre-check and insert.
@@ -124,6 +141,27 @@ export class AdminResource {
         return res.status(400).json({ error: "You can't deactivate your own account" });
       }
       const admin = await this.auth.setAdminActive(id, false);
+      if (!admin) return res.status(404).json({ error: "unknown admin" });
+      return res.status(200).json({ admin });
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  private async resetAdminPassword(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const id = str(req.params.id);
+      // Password is intentionally NOT trimmed or logged — read once, hashed by
+      // AdminAuthService, then discarded. No email/reset-link/token: a superadmin
+      // types the new password and hands it over (same philosophy as create).
+      const password = typeof req.body?.password === "string" ? req.body.password : "";
+      if (password.length < MIN_PASSWORD_LENGTH) {
+        return res
+          .status(400)
+          .json({ error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters` });
+      }
+
+      const admin = await this.auth.resetAdminPassword(id, password);
       if (!admin) return res.status(404).json({ error: "unknown admin" });
       return res.status(200).json({ admin });
     } catch (err) {
