@@ -21,8 +21,6 @@ import { EnvConfig } from "../config/envConfig";
  * and its skip-echo through this object:
  *  - {@link import("../ghlEnrichment/api/GhlApiClient").GhlApiClient} (canonical
  *    multi-tenant client, JAK-104) — gated at its request chokepoint by verb.
- *  - {@link import("../data/GhlApiDao").GhlApiDao} (parked MVP client) — gated at
- *    its outbound chokepoint (writes/tags/SMS).
  *  - {@link import("../data/RealEstateApiDao").RealEstateApiDao} — gated at its
  *    paid-lookup chokepoint (no PropertySearch/PropertyDetail spend off prod).
  */

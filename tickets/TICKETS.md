@@ -11,9 +11,10 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-115** (P0) Master GHL gateway key + mode-aware text-Jake (gateway vs own_number) — depends: JAK-102, JAK-109, JAK-114
 - [ ] **JAK-118** (P2) Remove dead scaffold-clone env vars (VITE_ASKZACK_CLIENT_URL/SERVER_URL, VITE_ASKZOE_SERVER_URL, LOCAL_NGROK_URL)
 
-## Open (2)
+## Open (3)
 - [ ] **JAK-103** (P0) Token refresh service — depends: JAK-102
 - [ ] **JAK-117** (P1) Align DB config to house pattern (discrete DB_* vars, mirror Automator/Northstar)
+- [ ] **JAK-119** (P1) Retire legacy single-tenant GHL_API_KEY + GHL_BASE_URL path (chuck_re_api MVP leftovers)
 
 ## Deferred / blocked (5)
 - [ ] **JAK-150** (P3) [LATER] GHL Marketplace listing + approval requirements

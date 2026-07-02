@@ -3,9 +3,6 @@ import { injectable, inject } from "tsyringe";
 import { EnvConfig } from "../config/envConfig.ts";
 import { RedisContainer } from "../config/RedisContainer.ts";
 import { EnrichmentJobPayload } from "../types/LeadEnrichment.ts";
-import { LeadEnrichmentService } from "./LeadEnrichmentService.ts";
-import { GhlApiDao } from "../data/GhlApiDao.ts";
-import { RealEstateApiDao } from "../data/RealEstateApiDao.ts";
 import { GhlEnrichmentWorker } from "../ghlEnrichment/worker/GhlEnrichmentWorker.ts";
 
 @injectable()
@@ -22,8 +19,6 @@ export class LeadEnrichmentQueueService {
     constructor(
         private readonly env: EnvConfig,
         @inject(RedisContainer) private readonly redis: RedisContainer,
-        private readonly ghlDao: GhlApiDao,
-        private readonly realEstateDao: RealEstateApiDao,
         @inject(GhlEnrichmentWorker) private readonly enrichmentWorker: GhlEnrichmentWorker
     ) {
         console.log(`✅ Connected to Upstash Redis REST: ${env.upstashRedisRestUrl}`);
@@ -61,23 +56,14 @@ export class LeadEnrichmentQueueService {
                 async (job) => {
                     console.log(`🧠 Processing job: ${job.id}`);
 
-                    // JAK-107: multi-tenant jobs (the JAK-106 webhook path carries a
-                    // location_id) go to the enrichment worker — per-location creds,
-                    // JAK-108 field mapping, write-back + note, idempotency. Legacy
-                    // single-tenant MVP jobs (no location_id) keep the parked service.
-                    if (job.data.location_id) {
-                        // Thread the BullMQ attempt number through so the worker
-                        // records it on the event row (inspection / requeue context).
-                        await this.enrichmentWorker.process(job.data, {
-                            attempt: job.attemptsMade + 1,
-                        });
-                    } else {
-                        const enrichmentService = new LeadEnrichmentService(
-                            this.ghlDao,
-                            this.realEstateDao
-                        );
-                        await enrichmentService.processLead(job.data);
-                    }
+                    // JAK-107: every job carries a location_id (the JAK-106 webhook
+                    // path always sets it) and runs the multi-tenant enrichment
+                    // worker — per-location creds, JAK-108 field mapping, write-back +
+                    // note, idempotency. Thread the BullMQ attempt number through so
+                    // the worker records it on the event row (inspection / requeue).
+                    await this.enrichmentWorker.process(job.data, {
+                        attempt: job.attemptsMade + 1,
+                    });
                     console.log(`✅ Job completed: ${job.id}`);
                 },
                 {

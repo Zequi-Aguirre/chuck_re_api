@@ -14,7 +14,6 @@ import { Authenticator } from "./middleware/authenticator.ts";
 
 // Resources
 import { MailerResource } from "./resources/MailerResource.ts";
-import { GhlWebhookResource } from "./resources/GhlWebhookResource.ts";
 import { JakeSmsResource } from "./resources/JakeSmsResource.ts";
 import {
     GhlEnrichmentWebhookResource,
@@ -82,11 +81,6 @@ export class JakeServer {
         this.app.use("/api/ghl/status", container.resolve(GhlStatusResource).router);
 
         // 🧠 API Routes
-        if (redisConfigured) {
-            this.app.use("/api/ghl", container.resolve(GhlWebhookResource).router);
-        } else {
-            console.log("ℹ️ Redis not configured — skipping /api/ghl lead-enrichment webhook.");
-        }
         this.app.use("/api/mailer", container.resolve(MailerResource).router);
         this.app.use("/api/sms", container.resolve(JakeSmsResource).router);
 

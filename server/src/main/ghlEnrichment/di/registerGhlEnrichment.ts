@@ -1,7 +1,6 @@
 import { DependencyContainer } from "tsyringe";
 import { GhlEnrichmentConfig } from "../config/GhlEnrichmentConfig";
 import { ExternalActionGuard } from "../../safety/ExternalActionGuard";
-import { GhlApiDao } from "../../data/GhlApiDao";
 import { PostgresDatabase } from "../../data/PostgresDatabase";
 import { CredentialCipher } from "../connections/CredentialCipher";
 import { GhlConnectionStore } from "../connections/GhlConnectionStore";
@@ -35,8 +34,8 @@ import { AdminResource } from "../admin/AdminResource";
  * tickets one function to hang new registrations on (OAuth service, webhook
  * verifier, field mapping…).
  *
- * It EXTENDS the existing MVP scaffolding (GhlApiDao, the parked Redis
- * enrichment worker, /api/ghl) — it does not duplicate it.
+ * It EXTENDS the existing MVP scaffolding (the parked Redis enrichment queue)
+ * — it does not duplicate it.
  *
  * Registrations are lazy singletons: nothing here connects to Postgres or reads
  * the encryption key at boot — the connection store initializes its pool on the
@@ -48,17 +47,11 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   }
 
   // JAK-110 — the single dev-safety boundary. One env-gated guard that every
-  // outbound transport (GhlApiClient writes, GhlApiDao writes/SMS, RealEstate
-  // paid lookups) consults, so real/costly/customer-visible actions are
-  // structurally impossible off prod/staging and can't be re-toggled per-call.
+  // outbound transport (GhlApiClient writes, RealEstate paid lookups) consults,
+  // so real/costly/customer-visible actions are structurally impossible off
+  // prod/staging and can't be re-toggled per-call.
   if (!c.isRegistered(ExternalActionGuard)) {
     c.registerSingleton(ExternalActionGuard);
-  }
-
-  // GhlApiDao already ships from the MVP; keep a single shared instance so the
-  // enrichment module and the existing SMS/webhook paths reuse one client.
-  if (!c.isRegistered(GhlApiDao)) {
-    c.registerSingleton(GhlApiDao);
   }
 
   // JAK-102 — encrypted per-location connection/credential store. The single
@@ -79,8 +72,8 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
 
   // JAK-104 — multi-tenant GHL API v2 client. Pulls per-location credentials
   // from the JAK-102 connection store (decrypted key + base_url), NOT from a
-  // single Doppler key. Handles retries + rate-limit backoff. Supersedes the
-  // single-tenant MVP GhlApiDao for the per-location path.
+  // single Doppler key. Handles retries + rate-limit backoff. This is the
+  // canonical per-location transport.
   if (!c.isRegistered(GhlApiClient)) {
     c.registerSingleton(GhlApiClient);
   }
