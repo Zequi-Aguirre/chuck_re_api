@@ -21,6 +21,42 @@ Staging URL used throughout: **https://chuck-re-api.onrender.com** (admin at
 
 ---
 
+## 0. Render Service Settings — set these three fields first
+
+The **make-or-break** config. On the Render **web service** → Settings, set these
+three fields exactly. Every value is a real `package.json` script (`build-be`,
+`build-admin`, `db-migrate`) — verified against current `develop`.
+
+| Field | Value (copy verbatim) |
+|---|---|
+| **Build Command** | `npm install && npm run build-be && npm run build-admin` |
+| **Pre-Deploy Command** | `npm run db-migrate` |
+| **Start Command** | `node dist/server.js` |
+
+> ⚠️ **Do not drop `build-admin` from the Build Command.** `build-be` alone
+> compiles the API but never builds the admin SPA, so `client/dist` is absent and
+> **`/admin` returns `Cannot GET /admin`** — the JSON API still works, but there's
+> no dashboard. (This is the exact prod failure JAK-123 exists to prevent.)
+
+- **Build Command** — runs `build-be` (`tsc` + bundle → `dist/server.js`) **and**
+  `build-admin` (`vite build client` → `client/dist`, served at `/admin`). Both,
+  in that order.
+- **Pre-Deploy Command** — `npm run db-migrate` (`cd postgres && ./migrate.sh`)
+  applies the postgrator migrations before the new build goes live. Render injects
+  the discrete `DB_*` vars from the Doppler sync and `migrate.sh` reads them from
+  the environment; it runs in-cluster so the internal `DB_HOST` resolves (no
+  `.ohio-postgres.render.com` suffix). Idempotent — safe on every deploy.
+- **Start Command** — bare `node dist/server.js` (cwd = repo root, so `/admin`
+  finds `client/dist`). **Not `npm start`** — that script hardcodes
+  `doppler run -c dev` (the dev config); on Render the env is injected directly.
+  Leave `PORT` unset — Render injects it and the server binds
+  `process.env.PORT || 8080`.
+
+The rest of this runbook (Postgres, env vars, first-admin seed, GHL wiring, smoke
+test) fills in the values these three fields depend on.
+
+---
+
 ## 1. Provision Postgres on Render
 
 1. Render Dashboard → **New +** → **PostgreSQL**.
@@ -334,9 +370,15 @@ Confirm: a reply SMS lands on the sender's phone and a short status note
 
 ## Render specifics
 
-- **Build command:** `npm ci && npm run build-be && npm run build-admin`
+The three make-or-break fields (Build / Pre-Deploy / Start) are in
+**[§0 Render Service Settings](#0-render-service-settings--set-these-three-fields-first)** —
+set them there. The notes below are the supporting detail.
+
+- **Build command:** `npm install && npm run build-be && npm run build-admin` —
+  both `build-be` **and** `build-admin`; drop `build-admin` and `/admin` returns
+  `Cannot GET /admin` (see §0).
 - **Start command:** `node dist/server.js` (cwd = repo root, so `/admin` finds
-  `client/dist`).
+  `client/dist`). Not `npm start` — that hardcodes the Doppler dev config.
 - **Port:** the server binds `process.env.PORT || 8080`; Render injects `PORT`,
   so leave it unset.
 - **Migrations (pre-deploy):** set the Render **Pre-Deploy Command** to
