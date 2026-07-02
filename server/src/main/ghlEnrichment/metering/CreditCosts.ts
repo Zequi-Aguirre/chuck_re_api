@@ -35,7 +35,10 @@ export type CreditLedgerReason =
   | "enrichment"
   | "skip_trace"
   | "manual_grant"
-  | "adjustment";
+  | "adjustment"
+  // JAK-111: a compensating entry that reverses an enrichment charge when the
+  // enrichment ultimately failed — we never bill for a failed enrichment.
+  | "refund";
 
 /** One priced operation within a charge — becomes one `credit_ledger` row. */
 export interface CreditChargeLine {

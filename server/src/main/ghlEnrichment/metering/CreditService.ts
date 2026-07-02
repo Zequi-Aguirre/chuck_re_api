@@ -79,6 +79,25 @@ export class CreditService {
   }
 
   /**
+   * Reverse the charge for a contact whose enrichment ultimately failed
+   * (JAK-111 credit safety). Delegates to the ledger's compensating-entry path,
+   * which is atomic AND idempotent: if the contact was never charged (or already
+   * refunded) it's a no-op returning null, so the worker's dead-letter hook can
+   * call it unconditionally. Never bill for a failed enrichment.
+   */
+  async refundEnrichment(input: {
+    locationId: string;
+    contactId: string;
+    reason?: CreditLedgerReason;
+  }): Promise<CreditLedgerRow | null> {
+    return this.ledger.refund({
+      locationId: input.locationId,
+      contactId: input.contactId,
+      reason: input.reason ?? "refund",
+    });
+  }
+
+  /**
    * Grant credits to a location (beta: manual top-up; also refunds/adjustments).
    * Atomic; returns the created ledger entry. Billing automation is deferred.
    */
