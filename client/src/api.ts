@@ -1,5 +1,6 @@
 import {
   AdminUser,
+  AdminUserView,
   LedgerEntryView,
   LocationStatusDetail,
   LocationStatusSummary,
@@ -110,5 +111,22 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ amount, reason }),
     });
+  },
+
+  // --- admins (JAK-124) ---
+  async listAdmins(): Promise<AdminUserView[]> {
+    const body = await request<{ admins: AdminUserView[] }>("/admins");
+    return body.admins;
+  },
+  async createAdmin(email: string, password: string): Promise<AdminUserView> {
+    const body = await request<{ admin: AdminUserView }>("/admins", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    });
+    return body.admin;
+  },
+  async setAdminActive(id: string, isActive: boolean): Promise<void> {
+    const action = isActive ? "activate" : "deactivate";
+    await request(`/admins/${encodeURIComponent(id)}/${action}`, { method: "POST" });
   },
 };

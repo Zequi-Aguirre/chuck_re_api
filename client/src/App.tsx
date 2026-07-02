@@ -6,6 +6,7 @@ import { Layout } from "./components/Layout";
 import { LoginPage } from "./pages/LoginPage";
 import { ConnectionsPage } from "./pages/ConnectionsPage";
 import { ConnectionDetailPage } from "./pages/ConnectionDetailPage";
+import { AdminsPage } from "./pages/AdminsPage";
 import { ReactNode } from "react";
 
 /** Gate that redirects to /login until a session is confirmed. */
@@ -42,6 +43,7 @@ export function App() {
       >
         <Route path="/" element={<ConnectionsPage />} />
         <Route path="/connections/:locationId" element={<ConnectionDetailPage />} />
+        <Route path="/admins" element={<AdminsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

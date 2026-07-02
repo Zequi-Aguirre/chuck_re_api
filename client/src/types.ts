@@ -63,3 +63,11 @@ export interface AdminUser {
   id: string;
   email: string;
 }
+
+/** An admin as the management table sees it (JAK-124) — never a password hash. */
+export interface AdminUserView {
+  id: string;
+  email: string;
+  isActive: boolean;
+  createdAt: string;
+}

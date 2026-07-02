@@ -4,7 +4,7 @@ import jwt from "jsonwebtoken";
 import { injectable } from "tsyringe";
 import { EnvConfig } from "../../config/envConfig";
 import { AdminUserStore } from "./AdminUserStore";
-import { AdminTokenPayload, AdminUser, AdminUserRow } from "./AdminTypes";
+import { AdminTokenPayload, AdminUser, AdminUserRow, AdminUserView } from "./AdminTypes";
 
 /** bcrypt work factor. 12 is a sane 2020s default for an interactive login. */
 const BCRYPT_ROUNDS = 12;
@@ -50,7 +50,10 @@ export class AdminAuthService {
       return null;
     }
     const ok = await bcrypt.compare(password, row.password_hash);
-    return ok ? toAdminUser(row) : null;
+    // A disabled admin (JAK-124) still pays the bcrypt cost above, then fails
+    // like a wrong password — no separate "account disabled" signal to probe.
+    if (!ok || !row.is_active) return null;
+    return toAdminUser(row);
   }
 
   /** Mint a signed session JWT for an authenticated admin. */
@@ -102,6 +105,39 @@ export class AdminAuthService {
     await this.users.insert(email, passwordHash);
     return "created";
   }
+
+  // --- Admin management (JAK-124) ------------------------------------------
+  // A logged-in admin manages the other admins from the dashboard. All password
+  // handling stays here so bcrypt (and its cost) live in exactly one place.
+
+  /** Every admin as a safe, hash-free view (newest first). */
+  async listAdmins(): Promise<AdminUserView[]> {
+    const rows = await this.users.listAll();
+    return rows.map(toAdminView);
+  }
+
+  /** True if an admin already exists with this email (case-insensitive). */
+  async emailExists(email: string): Promise<boolean> {
+    return (await this.users.findByEmail(email)) !== null;
+  }
+
+  /**
+   * Create a new admin from a chosen email + password. Hashes the password with
+   * the SAME bcrypt cost as the seed path ({@link BCRYPT_ROUNDS}); the plaintext
+   * is discarded immediately and never logged. Returns the safe view (no hash).
+   * Duplicate email is enforced by the store's unique constraint as a backstop.
+   */
+  async createAdmin(email: string, password: string): Promise<AdminUserView> {
+    const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+    const row = await this.users.insert(email, passwordHash);
+    return toAdminView(row);
+  }
+
+  /** Enable/disable an admin. Returns the safe view, or null if id is unknown. */
+  async setAdminActive(id: string, isActive: boolean): Promise<AdminUserView | null> {
+    const row = await this.users.setActive(id, isActive);
+    return row ? toAdminView(row) : null;
+  }
 }
 
 /** Map a raw row to the safe identity — drops `password_hash`. */
@@ -111,5 +147,15 @@ function toAdminUser(row: AdminUserRow): AdminUser {
     email: row.email,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+/** Map a raw row to the safe management view — drops `password_hash`. */
+function toAdminView(row: AdminUserRow): AdminUserView {
+  return {
+    id: row.id,
+    email: row.email,
+    isActive: row.is_active,
+    createdAt: row.created_at,
   };
 }

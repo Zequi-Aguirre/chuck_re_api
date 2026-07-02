@@ -15,10 +15,11 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-122** (P1) Align Jake migrations to house pattern (postgrator-cli + postgres/migrate.sh, retire Supabase tooling) — depends: JAK-117
 - [ ] **JAK-123** (P1) DEPLOY.md: add explicit 'Render Service Settings' block (build-admin gotcha) — depends: JAK-121
 
-## Open (3)
+## Open (4)
 - [ ] **JAK-103** (P0) Token refresh service — depends: JAK-102
 - [ ] **JAK-117** (P1) Align DB config to house pattern (discrete DB_* vars, mirror Automator/Northstar)
 - [ ] **JAK-119** (P1) Retire legacy single-tenant GHL_API_KEY + GHL_BASE_URL path (chuck_re_api MVP leftovers)
+- [ ] **JAK-124** (P1) Admin management: logged-in admin can create another admin — depends: JAK-113
 
 ## Deferred / blocked (5)
 - [ ] **JAK-150** (P3) [LATER] GHL Marketplace listing + approval requirements
