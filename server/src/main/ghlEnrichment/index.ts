@@ -31,3 +31,28 @@ export type {
   GhlNote,
   CreateCustomFieldInput,
 } from "./api/GhlApiTypes";
+
+// JAK-105 — install/uninstall lifecycle: auto-provision canonical Jake custom
+// fields + welcome note on install; mark inactive on uninstall.
+export {
+  GhlInstallLifecycleService,
+  WELCOME_NOTE_BODY,
+} from "./lifecycle/GhlInstallLifecycleService";
+export type {
+  InstallResult,
+  ProvisionedField,
+  ProvisionOutcome,
+} from "./lifecycle/GhlInstallLifecycleService";
+export { GhlCustomFieldStore } from "./lifecycle/GhlCustomFieldStore";
+export type {
+  GhlCustomFieldRow,
+  InsertGhlCustomFieldRow,
+} from "./lifecycle/GhlCustomFieldStore";
+export {
+  JAKE_CUSTOM_FIELDS,
+  normalizeFieldKey,
+} from "./lifecycle/JakeCustomFields";
+export type {
+  JakeCustomFieldDef,
+  JakeFieldDataType,
+} from "./lifecycle/JakeCustomFields";

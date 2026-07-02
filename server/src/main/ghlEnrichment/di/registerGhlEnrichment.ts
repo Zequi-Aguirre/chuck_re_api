@@ -6,6 +6,8 @@ import { CredentialCipher } from "../connections/CredentialCipher";
 import { GhlConnectionStore } from "../connections/GhlConnectionStore";
 import { GhlConnectionService } from "../connections/GhlConnectionService";
 import { GhlApiClient } from "../api/GhlApiClient";
+import { GhlCustomFieldStore } from "../lifecycle/GhlCustomFieldStore";
+import { GhlInstallLifecycleService } from "../lifecycle/GhlInstallLifecycleService";
 
 /**
  * DI registration for the GHL enrichment module.
@@ -55,5 +57,17 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   // single-tenant MVP GhlApiDao for the per-location path.
   if (!c.isRegistered(GhlApiClient)) {
     c.registerSingleton(GhlApiClient);
+  }
+
+  // JAK-105 — install/uninstall lifecycle. On install: auto-provision the
+  // canonical Jake custom fields via the JAK-104 client and record their
+  // per-location ids in ghl_custom_fields; drop a welcome note. On uninstall:
+  // mark the connection inactive (the client already refuses inactive ones).
+  // Builds on JAK-102 + JAK-104 — no duplicated credential/HTTP handling.
+  if (!c.isRegistered(GhlCustomFieldStore)) {
+    c.registerSingleton(GhlCustomFieldStore);
+  }
+  if (!c.isRegistered(GhlInstallLifecycleService)) {
+    c.registerSingleton(GhlInstallLifecycleService);
   }
 };
