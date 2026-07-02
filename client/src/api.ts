@@ -5,6 +5,7 @@ import {
   LedgerEntryView,
   LocationStatusDetail,
   LocationStatusSummary,
+  ReportPromptView,
   TextCustomerView,
 } from "./types";
 
@@ -129,6 +130,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ phone, amount, reason }),
     });
+  },
+
+  // --- AI prompt (JAK-131) ---
+  async getReportPrompt(): Promise<ReportPromptView> {
+    return request<ReportPromptView>("/report-prompt");
+  },
+  async updateReportPrompt(prompt: string): Promise<ReportPromptView> {
+    return request<ReportPromptView>("/report-prompt", {
+      method: "PUT",
+      body: JSON.stringify({ prompt }),
+    });
+  },
+  async resetReportPrompt(): Promise<ReportPromptView> {
+    return request<ReportPromptView>("/report-prompt/reset", { method: "POST" });
   },
 
   // --- admins (JAK-124) ---
