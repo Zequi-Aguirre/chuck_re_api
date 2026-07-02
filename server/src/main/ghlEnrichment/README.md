@@ -76,6 +76,54 @@ acknowledged and dropped for the MVP. The enrichment worker body — loading the
 contact, running the Jake engine, write-back, per-contact idempotency/metering —
 is **JAK-107**, not part of JAK-106.
 
+## What JAK-107 added (enrichment worker — the pipeline keystone)
+
+The queue consumer that ties the whole spine together. It picks up the job the
+JAK-106 webhook enqueues and, for that one contact, runs end-to-end:
+
+1. **Idempotency first** — check `ghl_enrichment_events`; if the contact is
+   already `enriched`, do nothing. Safe under GHL webhook retries / re-delivery
+   even though the queue also dedupes at enqueue.
+2. **Load the connection** (JAK-102) — skip (record `skipped`) if the location is
+   unknown or inactive (uninstalled).
+3. **Fetch the contact** via the JAK-104 `GhlApiClient.getContact` (per-location
+   auth) — skip if it's gone (404).
+4. **Run Jake's existing enrichment engine** — the parked MVP `RealEstateApiDao`
+   property/skip-trace logic, REUSED not rebuilt — to produce an
+   `EnrichmentResult`. The address is the one the webhook carried, else built
+   from the contact GHL returned.
+5. **Map** the result with the JAK-108 field mapper against the location's
+   provisioned `ghl_custom_fields` id map.
+6. **Write back** via `updateContactCustomFields` + drop a "Jake Enrichment"
+   summary note via `createNote`. Both pass through the client's SPEC §8
+   write-safety gate (dev echoes/skips; staging/prod write) — the worker never
+   re-derives the stage.
+7. **Record** the outcome (`enriched` / `skipped` / `failed`) for idempotency +
+   metering.
+
+- `worker/GhlEnrichmentWorker.ts` — the injectable orchestrator (`process(job)`).
+- `worker/GhlEnrichmentEventStore.ts` — per-contact events store (idempotency +
+  the metering log JAK-109 reads); UPSERTs one row per `(location, contact)`.
+- `worker/EnrichmentNote.ts` — pure "Jake Enrichment" note rendering.
+- Migration: `supabase/migrations/*_create_ghl_enrichment_events.sql`.
+- `services/LeadEnrichmentQueueService` routes jobs: multi-tenant (a
+  `location_id` is present, the JAK-106 path) → `GhlEnrichmentWorker`; legacy
+  single-tenant MVP jobs → the parked `LeadEnrichmentService`.
+
+Failure handling is deliberately **minimal** (JAK-111 hardens it): transient GHL
+failures (429/5xx/network) re-throw so BullMQ retries with backoff and the job
+eventually lands in the failed set (a minimal dead-letter, `removeOnFail:false`);
+permanent failures throw `UnrecoverableError` to skip straight to failed; expected
+non-error outcomes are recorded as `skipped` and the job completes. Logs are
+structured and secret-free — the decrypted Bearer token is never logged.
+
+With JAK-107 the core enrichment spine is end-to-end
+(JAK-104 → 105 → 106 → 108 → 107): install provisions fields, a new contact fires
+the webhook, the job enqueues, and the worker enriches + writes back. What
+remains off this spine: **JAK-109** usage metering (the events store already
+feeds it), **JAK-111** failure-handling hardening, **JAK-113** admin dashboard,
+and **JAK-114** multi-tenant text-Jake routing.
+
 Env / secrets are Doppler-provided via `EnvConfig`:
 `GHL_CLIENT_ID`, `GHL_CLIENT_SECRET`, `GHL_WEBHOOK_SECRET`,
 `GHL_CREDENTIAL_ENC_KEY` (app-level encryption key only — a tenant's own GHL API

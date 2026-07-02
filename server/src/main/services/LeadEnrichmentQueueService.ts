@@ -6,6 +6,7 @@ import { EnrichmentJobPayload } from "../types/LeadEnrichment.ts";
 import { LeadEnrichmentService } from "./LeadEnrichmentService.ts";
 import { GhlApiDao } from "../data/GhlApiDao.ts";
 import { RealEstateApiDao } from "../data/RealEstateApiDao.ts";
+import { GhlEnrichmentWorker } from "../ghlEnrichment/worker/GhlEnrichmentWorker.ts";
 
 @injectable()
 export class LeadEnrichmentQueueService {
@@ -15,15 +16,21 @@ export class LeadEnrichmentQueueService {
         private readonly env: EnvConfig,
         @inject(RedisContainer) private readonly redis: RedisContainer,
         private readonly ghlDao: GhlApiDao,
-        private readonly realEstateDao: RealEstateApiDao
+        private readonly realEstateDao: RealEstateApiDao,
+        @inject(GhlEnrichmentWorker) private readonly enrichmentWorker: GhlEnrichmentWorker
     ) {
         console.log(`✅ Connected to Upstash Redis REST: ${env.upstashRedisRestUrl}`);
 
         this.queue = new Queue<EnrichmentJobPayload>(env.enrichQueueName, {
             connection: this.redis.redis as any,
             defaultJobOptions: {
+                // JAK-107: allow a couple of retries with backoff for transient GHL
+                // failures; keep failed jobs (removeOnFail:false) as a minimal
+                // dead-letter for JAK-111 to harden. Permanent failures throw
+                // UnrecoverableError in the worker and skip straight to failed.
                 removeOnComplete: true,
-                attempts: 1,
+                removeOnFail: false,
+                attempts: 3,
                 backoff: { type: "exponential", delay: 2000 },
             },
         });
@@ -42,12 +49,19 @@ export class LeadEnrichmentQueueService {
                 async (job) => {
                     console.log(`🧠 Processing job: ${job.id}`);
 
-                    const enrichmentService = new LeadEnrichmentService(
-                        this.ghlDao,
-                        this.realEstateDao
-                    );
-
-                    await enrichmentService.processLead(job.data);
+                    // JAK-107: multi-tenant jobs (the JAK-106 webhook path carries a
+                    // location_id) go to the enrichment worker — per-location creds,
+                    // JAK-108 field mapping, write-back + note, idempotency. Legacy
+                    // single-tenant MVP jobs (no location_id) keep the parked service.
+                    if (job.data.location_id) {
+                        await this.enrichmentWorker.process(job.data);
+                    } else {
+                        const enrichmentService = new LeadEnrichmentService(
+                            this.ghlDao,
+                            this.realEstateDao
+                        );
+                        await enrichmentService.processLead(job.data);
+                    }
                     console.log(`✅ Job completed: ${job.id}`);
                 },
                 {

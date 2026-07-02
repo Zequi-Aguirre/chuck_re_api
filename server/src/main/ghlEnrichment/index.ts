@@ -76,3 +76,16 @@ export {
   buildLocationFieldIdMap,
 } from "./fieldMapping/EnrichmentFieldMapper";
 export type { LocationFieldIdMap } from "./fieldMapping/EnrichmentFieldMapper";
+
+// JAK-107 — enrichment worker: consumes an enqueued job and runs the full spine
+// (connection → contact → Jake engine → JAK-108 mapping → write-back + note),
+// idempotent + metered via the events store. The keystone of the pipeline.
+export { GhlEnrichmentWorker } from "./worker/GhlEnrichmentWorker";
+export type { EnrichmentOutcome } from "./worker/GhlEnrichmentWorker";
+export { GhlEnrichmentEventStore } from "./worker/GhlEnrichmentEventStore";
+export type {
+  GhlEnrichmentEventRow,
+  RecordEnrichmentEventInput,
+  EnrichmentEventStatus,
+} from "./worker/GhlEnrichmentEventStore";
+export { buildEnrichmentNote, ENRICHMENT_NOTE_HEADING } from "./worker/EnrichmentNote";
