@@ -3,7 +3,7 @@
 The single, up-to-date runbook to bring up **staging on Render**. Every command,
 env var, script, and migration below is real and reconciled against current
 `develop`: the npm scripts are in `package.json`, the env vars in
-`server/src/main/config/envConfig.ts`, the migrations in `supabase/migrations/`.
+`server/src/main/config/envConfig.ts`, the migrations in `postgres/migrations/`.
 Do it in order.
 
 Staging is a **server-only** deploy: one Express service serves both the JSON API
@@ -114,21 +114,28 @@ Not needed for staging bring-up — wire later when GHL Marketplace OAuth lands.
 
 ## 3. Run migrations
 
-Migrations live in `supabase/migrations/` and apply in timestamp order. They
-create `ghl_connections`, `ghl_custom_fields`, `ghl_enrichment_events`,
-`credit_ledger`, `admin_users`, `text_jake_customers`, harden the enrichment
-failure state, and add the `text_mode` column. Point the Supabase CLI at the
-Render DB, composing the URL from the discrete `DB_*` vars:
+Migrations live in `postgres/migrations/` and apply in version order via
+`postgrator-cli` — the house pattern shared with Automator/Northstar.
+`postgres/migrate.sh` ensures the `uuid-ossp` extension then runs
+`postgrator-cli migrate` over the discrete `DB_*` vars (never a composed URL
+secret). They create `ghl_connections`, `ghl_custom_fields`,
+`ghl_enrichment_events`, `credit_ledger`, `admin_users`, `text_jake_customers`,
+harden the enrichment failure state, and add the `text_mode` column. Postgrator
+records applied versions in a `schemaversion` table, so re-running is a no-op —
+the script is idempotent and safe to run on every deploy.
 
 ```bash
 # Run from your laptop → use the EXTERNAL host (${DB_HOST}.ohio-postgres.render.com).
-npx supabase db push \
-  --db-url "postgresql://$DB_USER:$DB_PASS@$DB_HOST.ohio-postgres.render.com:$DB_PORT/$DB_DB"
+# migrate.sh reads DB_HOST/DB_PORT/DB_DB/DB_USER/DB_PASS from the environment.
+DB_HOST="$DB_HOST.ohio-postgres.render.com" npm run dev-db-migrate
 ```
 
-> `npm run dev-db-migrate` is the same `supabase db push` wrapped in
-> `doppler run -p jake -c dev` for **local** dev. For staging, target the Render
-> DB directly with `--db-url` as above.
+> `npm run dev-db-migrate` wraps `cd postgres && ./migrate.sh` in
+> `doppler run -p jake -c dev` so the `DB_*` vars resolve for **local**/laptop
+> runs. `npm run db-migrate` is the bare `cd postgres && ./migrate.sh` used by
+> Render's Pre-Deploy Command, where `DB_*` are already injected into the
+> environment (see "Render specifics"). New migrations: `npm run
+> create-migration <name>` scaffolds a `<version>.do._<name>.sql` file.
 
 ---
 
@@ -333,10 +340,15 @@ Confirm: a reply SMS lands on the sender's phone and a short status note
 - **Port:** the server binds `process.env.PORT || 8080`; Render injects `PORT`,
   so leave it unset.
 - **Migrations (pre-deploy):** set the Render **Pre-Deploy Command** to
-  `npx supabase db push --db-url "postgresql://$DB_USER:$DB_PASS@$DB_HOST:$DB_PORT/$DB_DB"`
-  so schema changes apply before each build goes live. (This runs in-cluster, so
-  the internal `DB_HOST` resolves — no `.ohio-postgres.render.com` suffix. Or run
-  it once as a manual one-off.)
+  `npm run db-migrate`
+  (equivalently `cd postgres && ./migrate.sh`) so schema changes apply before
+  each build goes live. Render injects the discrete `DB_*` vars into the
+  environment from the Doppler sync, and `migrate.sh` reads them straight from
+  `process.env` — no composed URL secret, nothing hardcoded. This runs
+  in-cluster, so the internal `DB_HOST` resolves — no
+  `.ohio-postgres.render.com` suffix. `postgrator-cli` tracks applied versions
+  in a `schemaversion` table, so the command is idempotent and safe to re-run on
+  every deploy. (Or run it once as a manual one-off.)
 - **Redis (optional):** the enrichment webhook + BullMQ worker only mount when
   `UPSTASH_REDIS_TCP_URL` is set. Leave the Upstash trio unset for a
   text-Jake-only bring-up — the server boots fine and logs that it skipped the
