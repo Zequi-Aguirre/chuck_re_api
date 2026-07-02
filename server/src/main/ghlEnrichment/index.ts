@@ -89,3 +89,23 @@ export type {
   EnrichmentEventStatus,
 } from "./worker/GhlEnrichmentEventStore";
 export { buildEnrichmentNote, ENRICHMENT_NOTE_HEADING } from "./worker/EnrichmentNote";
+
+// JAK-109 — credit metering: prepaid credit system. Config-driven per-operation
+// costs, an append-only ledger + a maintained balance kept consistent with it,
+// atomic charge (never overdraw, never half-charge), and a manual grant path for
+// beta (Stripe top-ups deferred). The worker gates paid work on it.
+export { CreditService } from "./metering/CreditService";
+export type { CreditAccountSummary } from "./metering/CreditService";
+export { CreditLedgerStore } from "./metering/CreditLedgerStore";
+export type { CreditLedgerRow, ChargeResult } from "./metering/CreditLedgerStore";
+export {
+  DEFAULT_CREDIT_COSTS,
+  enrichmentChargeLines,
+  enrichmentCreditCost,
+} from "./metering/CreditCosts";
+export type {
+  CreditCostConfig,
+  EnrichmentCostPlan,
+  CreditLedgerReason,
+  CreditChargeLine,
+} from "./metering/CreditCosts";
