@@ -7,7 +7,7 @@
 
 Epic: `ghl-enrichment`
 
-## In progress (10)
+## In progress (11)
 - [ ] **JAK-115** (P0) Master GHL gateway key + mode-aware text-Jake (gateway vs own_number) — depends: JAK-102, JAK-109, JAK-114
 - [ ] **JAK-118** (P2) Remove dead scaffold-clone env vars (VITE_ASKZACK_CLIENT_URL/SERVER_URL, VITE_ASKZOE_SERVER_URL, LOCAL_NGROK_URL)
 - [ ] **JAK-120** (P1) Comprehensive DEPLOY.md refresh: single up-to-date staging setup doc — depends: JAK-116, JAK-117, JAK-118, JAK-119
@@ -18,6 +18,7 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-126** (P1) Responsive admin dashboard with left sidebar nav (MUI Drawer) — depends: JAK-113, JAK-125
 - [ ] **JAK-127** (P1) Add inbound debug logging to SMS webhook (prove GHL {{message.body}} resolution)
 - [ ] **JAK-128** (P0) Fix inbound SMS: message arrives as object {type,body}, address never parses — depends: JAK-127
+- [ ] **JAK-129** (P0) Admin can grant credits to a text-Jake customer by phone — depends: JAK-115, JAK-109, JAK-113
 
 ## Open (4)
 - [ ] **JAK-103** (P0) Token refresh service — depends: JAK-102

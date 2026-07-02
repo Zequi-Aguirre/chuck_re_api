@@ -59,6 +59,21 @@ export interface LocationStatusDetail {
   failures: EnrichmentEventView[];
 }
 
+/**
+ * A tier-1 text-Jake customer as the admin table sees it (JAK-129) — a texter
+ * keyed by sender phone with their current credit balance. Mirrors the server's
+ * AdminTextCustomerView. The `id` is also the credit-account key their balance
+ * is drawn from.
+ */
+export interface TextCustomerView {
+  id: string;
+  phone: string;
+  ghlContactId: string | null;
+  creditBalance: number;
+  createdAt: string;
+  lastSeenAt: string;
+}
+
 /** Admin privilege level (JAK-125). Mirrors the server's AdminRole. */
 export type AdminRole = "admin" | "superadmin";
 

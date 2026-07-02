@@ -53,4 +53,19 @@ export class TextJakeCustomerStore {
     );
     return result.rows[0] ?? null;
   }
+
+  /**
+   * Every live text-Jake customer, newest first — the admin overview (JAK-129).
+   * Excludes soft-deleted rows. The admin service joins these against a single
+   * balance scan ({@link CreditLedgerStore.listBalances}) rather than a
+   * per-customer balance query, mirroring the JAK-112 location overview.
+   */
+  async listAll(): Promise<TextJakeCustomerRow[]> {
+    const result = await this.db.query<TextJakeCustomerRow>(
+      `SELECT * FROM text_jake_customers
+       WHERE deleted_at IS NULL
+       ORDER BY created_at DESC, id DESC`
+    );
+    return result.rows;
+  }
 }

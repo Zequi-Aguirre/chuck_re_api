@@ -4,8 +4,9 @@ import { mock, MockProxy } from "jest-mock-extended";
 import { GhlStatusService } from "../../status/GhlStatusService";
 import { AdminAuthService } from "../AdminAuthService";
 import { AdminConnectionService, API_KEY_MASK } from "../AdminConnectionService";
+import { AdminTextCustomerService } from "../AdminTextCustomerService";
 import { AdminResource } from "../AdminResource";
-import { AdminConnectionView } from "../AdminTypes";
+import { AdminConnectionView, AdminTextCustomerView } from "../AdminTypes";
 
 // Obviously-fake, low-entropy placeholder used by the reset-password tests.
 // Held in a constant (not inlined next to a `password:` key) so a secret
@@ -27,12 +28,14 @@ const view = (over: Partial<AdminConnectionView> = {}): AdminConnectionView => (
 describe("AdminResource", () => {
   let auth: MockProxy<AdminAuthService>;
   let connections: MockProxy<AdminConnectionService>;
+  let textCustomers: MockProxy<AdminTextCustomerService>;
   let status: MockProxy<GhlStatusService>;
   let app: Express;
 
   beforeEach(() => {
     auth = mock<AdminAuthService>();
     connections = mock<AdminConnectionService>();
+    textCustomers = mock<AdminTextCustomerService>();
     status = mock<GhlStatusService>();
     // Default: authenticated AS A SUPERADMIN so the admin-management tests reach
     // their handlers. Individual tests override to a plain admin / no session.
@@ -40,7 +43,7 @@ describe("AdminResource", () => {
 
     app = express();
     app.use(express.json());
-    app.use("/api/admin", new AdminResource(auth, connections, status).router);
+    app.use("/api/admin", new AdminResource(auth, connections, textCustomers, status).router);
   });
 
   const asAdmin = (req: request.Test) => req.set("Authorization", "Bearer valid.token");
@@ -164,6 +167,79 @@ describe("AdminResource", () => {
       );
       expect(res.status).toBe(200);
       expect(res.body.balance).toBe(100);
+    });
+  });
+
+  // --- Text-Jake customers (JAK-129) ----------------------------------------
+
+  const textCustomerView = (over: Partial<AdminTextCustomerView> = {}): AdminTextCustomerView => ({
+    id: "cust-1",
+    phone: "+17865274077",
+    ghlContactId: null,
+    creditBalance: 0,
+    createdAt: new Date("2026-07-01T00:00:00Z"),
+    lastSeenAt: new Date("2026-07-02T00:00:00Z"),
+    ...over,
+  });
+
+  describe("GET /text-customers", () => {
+    it("is behind the auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app).get("/api/admin/text-customers");
+      expect(res.status).toBe(401);
+      expect(textCustomers.list).not.toHaveBeenCalled();
+    });
+
+    it("returns texters with their credit balances", async () => {
+      textCustomers.list.mockResolvedValue([textCustomerView({ creditBalance: 8 })]);
+      const res = await asAdmin(request(app).get("/api/admin/text-customers"));
+      expect(res.status).toBe(200);
+      expect(res.body.customers).toHaveLength(1);
+      expect(res.body.customers[0].creditBalance).toBe(8);
+    });
+  });
+
+  describe("POST /text-customers/credits", () => {
+    it("400s a missing phone", async () => {
+      const res = await asAdmin(
+        request(app).post("/api/admin/text-customers/credits").send({ amount: 5 })
+      );
+      expect(res.status).toBe(400);
+      expect(textCustomers.grantCredits).not.toHaveBeenCalled();
+    });
+
+    it("rejects a non-integer or zero amount", async () => {
+      for (const amount of [0, 1.5, "abc"]) {
+        const res = await asAdmin(
+          request(app).post("/api/admin/text-customers/credits").send({ phone: "+17865274077", amount })
+        );
+        expect(res.status).toBe(400);
+      }
+      expect(textCustomers.grantCredits).not.toHaveBeenCalled();
+    });
+
+    it("grants credits to a texter by phone and returns the new balance", async () => {
+      textCustomers.grantCredits.mockResolvedValue({
+        customer: textCustomerView({ creditBalance: 5 }),
+        entry: {
+          id: "led-1",
+          location_id: "cust-1",
+          amount: 5,
+          balance_after: 5,
+          reason: "manual_grant",
+          contact_id: null,
+          created_at: new Date(),
+          modified_at: new Date(),
+          deleted_at: null,
+        },
+        balance: 5,
+      });
+      const res = await asAdmin(
+        request(app).post("/api/admin/text-customers/credits").send({ phone: "+17865274077", amount: 5 })
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.balance).toBe(5);
+      expect(textCustomers.grantCredits).toHaveBeenCalledWith("+17865274077", 5, "manual_grant");
     });
   });
 

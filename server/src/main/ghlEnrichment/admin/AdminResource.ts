@@ -3,6 +3,7 @@ import { inject, injectable } from "tsyringe";
 import { GhlStatusService } from "../status/GhlStatusService";
 import { AdminAuthService } from "./AdminAuthService";
 import { AdminConnectionService } from "./AdminConnectionService";
+import { AdminTextCustomerService } from "./AdminTextCustomerService";
 import { requireAdminAuth, requireSuperadmin } from "./requireAdminAuth";
 import { AdminRole } from "./AdminTypes";
 
@@ -19,6 +20,9 @@ import { AdminRole } from "./AdminTypes";
  *   POST   /connections/:locationId/deactivate — inactive path (JAK-104/110).
  *   DELETE /connections/:locationId          — remove the connection.
  *   POST   /connections/:locationId/credits  — manual credit grant/adjustment.
+ *
+ *   GET    /text-customers                    — tier-1 texters + credit balances (JAK-129).
+ *   POST   /text-customers/credits            — grant credits to a texter BY PHONE (JAK-129).
  *
  *   GET    /admins                — list admins (JAK-124), never any password hash.
  *   POST   /admins                — create an admin from { email, password, role? }.
@@ -43,6 +47,7 @@ export class AdminResource {
   constructor(
     @inject(AdminAuthService) private readonly auth: AdminAuthService,
     @inject(AdminConnectionService) private readonly connections: AdminConnectionService,
+    @inject(AdminTextCustomerService) private readonly textCustomers: AdminTextCustomerService,
     @inject(GhlStatusService) private readonly status: GhlStatusService
   ) {
     this.router = Router();
@@ -61,6 +66,12 @@ export class AdminResource {
     this.router.post("/connections/:locationId/deactivate", this.deactivate.bind(this));
     this.router.delete("/connections/:locationId", this.remove.bind(this));
     this.router.post("/connections/:locationId/credits", this.grantCredits.bind(this));
+
+    // Tier-1 text-Jake customers (JAK-129): list texters + their credit balances,
+    // and grant credits to one BY PHONE — a different account key than a
+    // connection's locationId, so a gateway texter can finally be topped up.
+    this.router.get("/text-customers", this.listTextCustomers.bind(this));
+    this.router.post("/text-customers/credits", this.grantTextCustomerCredits.bind(this));
 
     // Admin management (JAK-124, restricted in JAK-125): ONLY a superadmin may
     // manage other admins. requireSuperadmin runs after the router-level
@@ -279,6 +290,46 @@ export class AdminResource {
       const entry = await this.connections.grantCredits(locationId, amount, reason);
       if (!entry) return res.status(404).json({ error: "unknown location" });
       return res.status(200).json({ balance: entry.balance_after, entry });
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  // --- Tier-1 text-Jake customers (JAK-129) --------------------------------
+
+  private async listTextCustomers(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const customers = await this.textCustomers.list();
+      return res.status(200).json({ customers });
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /**
+   * Grant credits to a tier-1 texter BY PHONE (JAK-129). Same validation as the
+   * connection grant — a non-zero integer, negative allowed for an adjustment —
+   * but the account key is the CUSTOMER's credit-account id (resolved from the
+   * phone), never a connection locationId. The customer is created on first
+   * grant, so a number that hasn't texted in yet can still be credited.
+   */
+  private async grantTextCustomerCredits(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const phone = str(req.body?.phone);
+      const amount = Number(req.body?.amount);
+      if (!phone) {
+        return res.status(400).json({ error: "phone is required" });
+      }
+      if (!Number.isInteger(amount) || amount === 0) {
+        return res.status(400).json({ error: "amount must be a non-zero integer" });
+      }
+      const reason = req.body?.reason === "adjustment" ? "adjustment" : "manual_grant";
+      const result = await this.textCustomers.grantCredits(phone, amount, reason);
+      return res.status(200).json({
+        balance: result.balance,
+        customer: result.customer,
+        entry: result.entry,
+      });
     } catch (err) {
       return next(err);
     }

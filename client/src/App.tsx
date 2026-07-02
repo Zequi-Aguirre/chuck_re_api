@@ -6,6 +6,7 @@ import { Layout } from "./components/Layout";
 import { LoginPage } from "./pages/LoginPage";
 import { ConnectionsPage } from "./pages/ConnectionsPage";
 import { ConnectionDetailPage } from "./pages/ConnectionDetailPage";
+import { TextCustomersPage } from "./pages/TextCustomersPage";
 import { AdminsPage } from "./pages/AdminsPage";
 import { ReactNode } from "react";
 
@@ -55,6 +56,7 @@ export function App() {
       >
         <Route path="/" element={<ConnectionsPage />} />
         <Route path="/connections/:locationId" element={<ConnectionDetailPage />} />
+        <Route path="/text-customers" element={<TextCustomersPage />} />
         <Route
           path="/admins"
           element={

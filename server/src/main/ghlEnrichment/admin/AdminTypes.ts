@@ -90,3 +90,25 @@ export interface AdminConnectionView {
   createdAt: Date;
   updatedAt: Date;
 }
+
+/**
+ * The admin view of a tier-1 text-Jake customer (JAK-129) — a texter keyed by
+ * sender phone, with their current prepaid credit balance. Distinct from a
+ * {@link AdminConnectionView}: a text customer bills against their OWN credit
+ * account (its key is the customer id), NOT a GHL connection's locationId, so
+ * this is the surface admins use to top up a gateway texter who ran out of
+ * credits and has no sub-account of their own.
+ */
+export interface AdminTextCustomerView {
+  /** Customer id — this IS the credit-account key their balance is drawn from. */
+  id: string;
+  /** Sender phone (E.164) — the stable key for this customer. */
+  phone: string;
+  /** Contact id in the sub-account handling their texts; null until known. */
+  ghlContactId: string | null;
+  /** Current spendable credit balance for this customer (0 if none yet). */
+  creditBalance: number;
+  createdAt: Date;
+  /** Last time we saw activity from this customer (row `modified_at`). */
+  lastSeenAt: Date;
+}
