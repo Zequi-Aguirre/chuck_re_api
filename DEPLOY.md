@@ -50,6 +50,8 @@ Render). Each is read in `server/src/main/config/envConfig.ts`.
 |---|---|
 | `ENV_STAGE=staging` | Flips on real external actions (see the callout above). **Mandatory for staging** or every GHL write/SMS is skipped. |
 | `MASTER_API_KEY` | Internal header secret guarding `POST /api/sms/inbound` and `GET /api/ghl/status/*`. Any long random string; used in the smoke test (step 7). |
+| `RE_API_KEY` | RealEstate API key. text-Jake's property lookup (`RealEstateApiDao` → `POST /v2/PropertySearch`) sends it as the `x-api-key` header. Unset in staging → the lookup errors to null and the smoke-test reply/note never happens. |
+| `RE_BASE_URL` | RealEstate API base URL (e.g. `https://api.realestateapi.com`). The base for the same property-lookup client. |
 
 Generate the secrets:
 
