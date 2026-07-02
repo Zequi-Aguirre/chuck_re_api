@@ -1,0 +1,95 @@
+import { injectable } from "tsyringe";
+import { CredentialCipher } from "./CredentialCipher";
+import { GhlConnectionRow, GhlConnectionStore } from "./GhlConnectionStore";
+import {
+  CreateGhlConnectionInput,
+  GhlConnection,
+  UpdateGhlConnectionInput,
+} from "./GhlConnectionTypes";
+
+/**
+ * The SINGLE source of GHL credentials for the whole app (JAK-102).
+ *
+ * Wraps {@link GhlConnectionStore} (persistence) and {@link CredentialCipher}
+ * (encrypt-at-rest) so callers work in plaintext {@link GhlConnection} values
+ * while API keys are only ever stored encrypted. This service abstracts "how we
+ * auth to a sub-account": today it's a pasted API key (beta), later an OAuth
+ * token — callers (enrichment webhook, text-Jake JAK-114) don't care which.
+ *
+ * It REPLACES the single Doppler `GHL_API_KEY` + `GHL_BASE_URL`: those creds now
+ * live per-location in the DB; Doppler keeps only the app-level encryption key.
+ */
+@injectable()
+export class GhlConnectionService {
+  constructor(
+    private readonly store: GhlConnectionStore,
+    private readonly cipher: CredentialCipher
+  ) {}
+
+  /** Create a connection, encrypting the API key before it touches the DB. */
+  async createConnection(input: CreateGhlConnectionInput): Promise<GhlConnection> {
+    const row = await this.store.insert({
+      location_id: input.locationId,
+      api_key_encrypted: this.cipher.encrypt(input.apiKey),
+      base_url: input.baseUrl,
+      phone_numbers: input.phoneNumbers ?? [],
+      status: input.status ?? "active",
+    });
+    return this.toConnection(row);
+  }
+
+  /** Resolve a connection by GHL location id (enrichment webhook path). */
+  async getByLocationId(locationId: string): Promise<GhlConnection | null> {
+    const row = await this.store.findByLocationId(locationId);
+    return row ? this.toConnection(row) : null;
+  }
+
+  /** Resolve a connection by an associated phone number (text-Jake routing). */
+  async getByPhoneNumber(phoneNumber: string): Promise<GhlConnection | null> {
+    const row = await this.store.findByPhoneNumber(phoneNumber);
+    return row ? this.toConnection(row) : null;
+  }
+
+  /** List every connection (decrypted). For admin/CRUD use (JAK-113). */
+  async listConnections(): Promise<GhlConnection[]> {
+    const rows = await this.store.listAll();
+    return rows.map((row) => this.toConnection(row));
+  }
+
+  /**
+   * Update a connection by location id. A provided `apiKey` is re-encrypted;
+   * omit it to keep the stored key. Returns null if the location is unknown.
+   */
+  async updateConnection(
+    locationId: string,
+    patch: UpdateGhlConnectionInput
+  ): Promise<GhlConnection | null> {
+    const row = await this.store.update(locationId, {
+      api_key_encrypted:
+        patch.apiKey !== undefined ? this.cipher.encrypt(patch.apiKey) : undefined,
+      base_url: patch.baseUrl,
+      phone_numbers: patch.phoneNumbers,
+      status: patch.status,
+    });
+    return row ? this.toConnection(row) : null;
+  }
+
+  /** Delete a connection by location id. Returns true if one was removed. */
+  async deleteConnection(locationId: string): Promise<boolean> {
+    return this.store.delete(locationId);
+  }
+
+  /** Map a persistence row to a decrypted domain object. */
+  private toConnection(row: GhlConnectionRow): GhlConnection {
+    return {
+      id: row.id,
+      locationId: row.location_id,
+      apiKey: this.cipher.decrypt(row.api_key_encrypted),
+      baseUrl: row.base_url,
+      phoneNumbers: row.phone_numbers ?? [],
+      status: row.status,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+    };
+  }
+}

@@ -10,6 +10,7 @@
   "scripts": {
     "local-dev-be": "doppler run -p jake -c dev -- nodemon --exec ts-node-esm server/src/main/server.ts",
     "build-be": "tsc --p server/tsconfig.json && node server/bundler.mjs",
+    "test": "jest",
     "start": "doppler run -p jake -c dev -- node dist/server.js",
     "local-built-ngrok": "pkill -f ngrok || true && ngrok http 8080 --url https://askzack-local.ngrok.app",
     "dev-db-migrate": "doppler run -p jake -c dev -- npx supabase db push",
