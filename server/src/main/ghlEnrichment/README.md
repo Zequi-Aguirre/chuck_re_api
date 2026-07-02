@@ -162,8 +162,9 @@ status/admin views, **JAK-155** tier caps + Stripe billing.
 Env / secrets are Doppler-provided via `EnvConfig`:
 `GHL_CLIENT_ID`, `GHL_CLIENT_SECRET`, `GHL_WEBHOOK_SECRET`,
 `GHL_CREDENTIAL_ENC_KEY` (app-level encryption key only — a tenant's own GHL API
-key is stored **encrypted in the DB**, never in Doppler), and `DATABASE_URL`
-(the Postgres connection string for the connection store).
+key is stored **encrypted in the DB**, never in Doppler), and the discrete
+Postgres vars `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASS` / `DB_DB` (HOUSE
+PATTERN, shared with Automator + Northstar) backing the connection store.
 
 Environment stage is resolved through the single canonical helper on
 `EnvConfig`: `isProduction` / `isStaging` / `isDev` (Automator pattern). The

@@ -160,8 +160,8 @@ export class JakeServer {
 
     /** Bootstrap the first admin from env; tolerate a queue-less/DB-less boot. */
     private async seedAdmin(): Promise<void> {
-        if (!this.config.databaseUrl?.trim()) {
-            console.log("ℹ️ DATABASE_URL not set — skipping admin bootstrap.");
+        if (!this.config.dbHost?.trim()) {
+            console.log("ℹ️ Postgres (DB_HOST) not set — skipping admin bootstrap.");
             return;
         }
         try {
