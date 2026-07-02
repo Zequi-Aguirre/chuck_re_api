@@ -7,10 +7,9 @@
 
 Epic: `ghl-enrichment`
 
-## Open (9)
+## Open (8)
 - [ ] **JAK-103** (P0) Token refresh service — depends: JAK-102
 - [ ] **JAK-107** (P0) Enrichment worker: queue -> Jake engine -> write-back + idempotency — depends: JAK-104, JAK-105, JAK-106, JAK-108
-- [ ] **JAK-108** (P0) Field mapping module (canonical Jake->GHL field set + output mapping) — depends: JAK-101
 - [ ] **JAK-109** (P1) Usage metering (per-location enrichment log) — depends: JAK-107
 - [ ] **JAK-110** (P0) Dev/staging safety: mock GHL, no real writes off prod — depends: JAK-104
 - [ ] **JAK-111** (P1) Failure handling: retries, dead-letter, error surfacing — depends: JAK-107
@@ -25,10 +24,11 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-153** (P3) [LATER] Privacy Policy + Terms pages for Jake
 - [ ] **JAK-154** (P3) [LATER] CRM upsell bundle (GHL SaaS resale + AskZoe concierge)
 
-## Done (6)
+## Done (7)
 - [x] **JAK-100** (P0) Project ticket store (SQLite in-repo)
 - [x] **JAK-101** (P0) GHL app scaffolding + Doppler config + env helper — depends: JAK-100
 - [x] **JAK-102** (P0) Encrypted connection/credential store — depends: JAK-101
 - [x] **JAK-104** (P0) GHL API client (axios, per-location auth, retries, rate-limit) — depends: JAK-103
 - [x] **JAK-105** (P0) Install lifecycle: auto-provision custom fields + welcome note; uninstall — depends: JAK-104
 - [x] **JAK-106** (P0) Webhook receiver (ContactCreate/Update) + signature verify + enqueue — depends: JAK-101
+- [x] **JAK-108** (P0) Field mapping module (canonical Jake->GHL field set + output mapping) — depends: JAK-101
