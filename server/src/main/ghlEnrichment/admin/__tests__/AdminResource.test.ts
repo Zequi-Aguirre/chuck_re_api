@@ -157,4 +157,105 @@ describe("AdminResource", () => {
       expect(res.body.balance).toBe(100);
     });
   });
+
+  // --- Admin management (JAK-124) -------------------------------------------
+
+  const adminView = (over: Partial<{ id: string; email: string; isActive: boolean }> = {}) => ({
+    id: "admin-id",
+    email: "admin@example.com",
+    isActive: true,
+    createdAt: new Date("2026-07-01T00:00:00Z"),
+    ...over,
+  });
+
+  describe("GET /admins", () => {
+    it("is behind the auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app).get("/api/admin/admins");
+      expect(res.status).toBe(401);
+      expect(auth.listAdmins).not.toHaveBeenCalled();
+    });
+
+    it("returns admin views and never leaks a password hash", async () => {
+      auth.listAdmins.mockResolvedValue([adminView(), adminView({ id: "two", email: "b@x.co" })]);
+      const res = await asAdmin(request(app).get("/api/admin/admins"));
+      expect(res.status).toBe(200);
+      expect(res.body.admins).toHaveLength(2);
+      expect(JSON.stringify(res.body)).not.toContain("password_hash");
+    });
+  });
+
+  describe("POST /admins", () => {
+    it("400s an invalid email", async () => {
+      const res = await asAdmin(
+        request(app).post("/api/admin/admins").send({ email: "not-an-email", password: "unit-test-long-pw" })
+      );
+      expect(res.status).toBe(400);
+      expect(auth.createAdmin).not.toHaveBeenCalled();
+    });
+
+    it("400s a too-short password", async () => {
+      const res = await asAdmin(
+        request(app).post("/api/admin/admins").send({ email: "new@example.com", password: "short" })
+      );
+      expect(res.status).toBe(400);
+      expect(auth.createAdmin).not.toHaveBeenCalled();
+    });
+
+    it("409s a duplicate email", async () => {
+      auth.emailExists.mockResolvedValue(true);
+      const res = await asAdmin(
+        request(app).post("/api/admin/admins").send({ email: "dupe@example.com", password: "unit-test-long-pw" })
+      );
+      expect(res.status).toBe(409);
+      expect(auth.createAdmin).not.toHaveBeenCalled();
+    });
+
+    it("creates an admin and returns the hash-free view", async () => {
+      auth.emailExists.mockResolvedValue(false);
+      auth.createAdmin.mockResolvedValue(adminView({ id: "new-id", email: "new@example.com" }));
+      const res = await asAdmin(
+        request(app).post("/api/admin/admins").send({ email: "New@Example.com", password: "unit-test-pw-123" })
+      );
+      expect(res.status).toBe(201);
+      expect(res.body.admin.email).toBe("new@example.com");
+      // Email is normalized to lowercase before hashing/insert.
+      expect(auth.createAdmin).toHaveBeenCalledWith("new@example.com", "unit-test-pw-123");
+      // Neither the plaintext password nor any hash is echoed back.
+      expect(JSON.stringify(res.body)).not.toContain("unit-test-pw-123");
+      expect(JSON.stringify(res.body)).not.toContain("password_hash");
+    });
+  });
+
+  describe("POST /admins/:id/deactivate", () => {
+    it("refuses to deactivate your own logged-in account (lockout guard)", async () => {
+      // The session in these tests is sub: "admin-id".
+      const res = await asAdmin(request(app).post("/api/admin/admins/admin-id/deactivate"));
+      expect(res.status).toBe(400);
+      expect(auth.setAdminActive).not.toHaveBeenCalled();
+    });
+
+    it("deactivates another admin", async () => {
+      auth.setAdminActive.mockResolvedValue(adminView({ id: "other", isActive: false }));
+      const res = await asAdmin(request(app).post("/api/admin/admins/other/deactivate"));
+      expect(res.status).toBe(200);
+      expect(res.body.admin.isActive).toBe(false);
+      expect(auth.setAdminActive).toHaveBeenCalledWith("other", false);
+    });
+
+    it("404s an unknown admin", async () => {
+      auth.setAdminActive.mockResolvedValue(null);
+      const res = await asAdmin(request(app).post("/api/admin/admins/nope/deactivate"));
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe("POST /admins/:id/activate", () => {
+    it("re-enables an admin", async () => {
+      auth.setAdminActive.mockResolvedValue(adminView({ id: "other", isActive: true }));
+      const res = await asAdmin(request(app).post("/api/admin/admins/other/activate"));
+      expect(res.status).toBe(200);
+      expect(auth.setAdminActive).toHaveBeenCalledWith("other", true);
+    });
+  });
 });

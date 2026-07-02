@@ -19,6 +19,11 @@ import { requireAdminAuth } from "./requireAdminAuth";
  *   DELETE /connections/:locationId          — remove the connection.
  *   POST   /connections/:locationId/credits  — manual credit grant/adjustment.
  *
+ *   GET    /admins                — list admins (JAK-124), never any password hash.
+ *   POST   /admins                — create an admin from { email, password }.
+ *   POST   /admins/:id/activate   — re-enable a disabled admin.
+ *   POST   /admins/:id/deactivate — disable an admin (never your own account).
+ *
  * It REUSES the existing services — the read side is entirely JAK-112's
  * {@link GhlStatusService} (already credential-free), and the write side is the
  * thin {@link AdminConnectionService} adapter over JAK-102/104/109/110. No
@@ -50,6 +55,80 @@ export class AdminResource {
     this.router.post("/connections/:locationId/deactivate", this.deactivate.bind(this));
     this.router.delete("/connections/:locationId", this.remove.bind(this));
     this.router.post("/connections/:locationId/credits", this.grantCredits.bind(this));
+
+    // Admin management (JAK-124): a logged-in admin manages the other admins.
+    this.router.get("/admins", this.listAdmins.bind(this));
+    this.router.post("/admins", this.createAdmin.bind(this));
+    this.router.post("/admins/:id/activate", this.activateAdmin.bind(this));
+    this.router.post("/admins/:id/deactivate", this.deactivateAdmin.bind(this));
+  }
+
+  // --- Admin management (JAK-124) ------------------------------------------
+
+  private async listAdmins(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      // toAdminView drops password_hash — the list NEVER carries a hash.
+      const admins = await this.auth.listAdmins();
+      return res.status(200).json({ admins });
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  private async createAdmin(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const email = str(req.body?.email).toLowerCase();
+      // Password is intentionally NOT trimmed or logged — it's read once, hashed
+      // by AdminAuthService, then discarded.
+      const password = typeof req.body?.password === "string" ? req.body.password : "";
+
+      if (!EMAIL_RE.test(email)) {
+        return res.status(400).json({ error: "A valid email is required" });
+      }
+      if (password.length < MIN_PASSWORD_LENGTH) {
+        return res
+          .status(400)
+          .json({ error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters` });
+      }
+      if (await this.auth.emailExists(email)) {
+        return res.status(409).json({ error: "An admin with that email already exists" });
+      }
+
+      const admin = await this.auth.createAdmin(email, password);
+      return res.status(201).json({ admin });
+    } catch (err) {
+      // Unique-violation backstop for a race between the pre-check and insert.
+      if (err && typeof err === "object" && (err as { code?: string }).code === "23505") {
+        return res.status(409).json({ error: "An admin with that email already exists" });
+      }
+      return next(err);
+    }
+  }
+
+  private async activateAdmin(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const admin = await this.auth.setAdminActive(str(req.params.id), true);
+      if (!admin) return res.status(404).json({ error: "unknown admin" });
+      return res.status(200).json({ admin });
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  private async deactivateAdmin(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const id = str(req.params.id);
+      // Lockout guard: an admin can never disable their own logged-in account —
+      // that could lock the last operator out of the dashboard.
+      if (id === req.admin?.sub) {
+        return res.status(400).json({ error: "You can't deactivate your own account" });
+      }
+      const admin = await this.auth.setAdminActive(id, false);
+      if (!admin) return res.status(404).json({ error: "unknown admin" });
+      return res.status(200).json({ admin });
+    } catch (err) {
+      return next(err);
+    }
   }
 
   private async list(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
@@ -178,6 +257,12 @@ export class AdminResource {
     return next(err);
   }
 }
+
+/** Minimum length for an admin-chosen password (JAK-124). */
+const MIN_PASSWORD_LENGTH = 8;
+
+/** Pragmatic email shape check — a single `@` with non-empty, dot-bearing sides. */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** Coerce an unknown to a trimmed string ("" for non-strings). */
 function str(value: unknown): string {

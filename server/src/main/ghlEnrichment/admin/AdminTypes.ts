@@ -13,6 +13,8 @@ export interface AdminUserRow {
   email: string;
   /** bcrypt hash — never plaintext, never leaves the server. */
   password_hash: string;
+  /** Disabled admins keep their row but can't log in (JAK-124). */
+  is_active: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -26,6 +28,19 @@ export interface AdminUser {
   email: string;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * The SAFE view of an admin returned by the admin-management API (JAK-124).
+ *
+ * SECURITY: NEVER carries `password_hash`. It's the only shape the LIST endpoint
+ * serializes, so a bcrypt hash can't leak into a response.
+ */
+export interface AdminUserView {
+  id: string;
+  email: string;
+  isActive: boolean;
+  createdAt: Date;
 }
 
 /** JWT payload for an authenticated admin session. */

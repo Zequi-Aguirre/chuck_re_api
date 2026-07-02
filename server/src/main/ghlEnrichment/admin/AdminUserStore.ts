@@ -24,6 +24,23 @@ export class AdminUserStore {
     return result.rows[0] ?? null;
   }
 
+  /** Look up an admin by id. Null if none. */
+  async findById(id: string): Promise<AdminUserRow | null> {
+    const result = await this.db.query<AdminUserRow>(
+      `SELECT * FROM admin_users WHERE id = $1`,
+      [id]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  /** Every admin, newest first (admin-management list, JAK-124). */
+  async listAll(): Promise<AdminUserRow[]> {
+    const result = await this.db.query<AdminUserRow>(
+      `SELECT * FROM admin_users ORDER BY created_at DESC`
+    );
+    return result.rows;
+  }
+
   /** Insert a new admin with an already-hashed password. */
   async insert(email: string, passwordHash: string): Promise<AdminUserRow> {
     const result = await this.db.query<AdminUserRow>(
@@ -33,6 +50,21 @@ export class AdminUserStore {
       [email.trim().toLowerCase(), passwordHash]
     );
     return result.rows[0];
+  }
+
+  /**
+   * Enable or disable an admin (JAK-124). Bumps `updated_at`. Returns the
+   * updated row, or null if the id is unknown.
+   */
+  async setActive(id: string, isActive: boolean): Promise<AdminUserRow | null> {
+    const result = await this.db.query<AdminUserRow>(
+      `UPDATE admin_users
+       SET is_active = $2, updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [id, isActive]
+    );
+    return result.rows[0] ?? null;
   }
 
   /** How many admins exist (bootstrap decision). */

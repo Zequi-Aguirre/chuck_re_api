@@ -19,10 +19,18 @@ export function Layout() {
             variant="h6"
             component={RouterLink}
             to="/"
-            sx={{ flexGrow: 1, color: "text.primary", textDecoration: "none" }}
+            sx={{ color: "text.primary", textDecoration: "none" }}
           >
             Jake Admin
           </Typography>
+          <Box sx={{ display: "flex", alignItems: "center", gap: 1, ml: 3, flexGrow: 1 }}>
+            <Button size="small" component={RouterLink} to="/" color="inherit">
+              Sub-accounts
+            </Button>
+            <Button size="small" component={RouterLink} to="/admins" color="inherit">
+              Admins
+            </Button>
+          </Box>
           <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
             <Typography variant="body2" color="text.secondary">
               {user?.email}

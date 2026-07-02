@@ -12,6 +12,7 @@ const row = (over: Partial<AdminUserRow> = {}): AdminUserRow => ({
   id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
   email: "admin@example.com",
   password_hash: bcrypt.hashSync("correct horse battery", 4),
+  is_active: true,
   created_at: new Date("2026-07-01T00:00:00Z"),
   updated_at: new Date("2026-07-01T00:00:00Z"),
   ...over,
@@ -56,6 +57,57 @@ describe("AdminAuthService", () => {
       users.findByEmail.mockResolvedValue(null);
       const service = new AdminAuthService(users, env());
       expect(await service.verifyCredentials("nobody@example.com", "whatever")).toBeNull();
+    });
+
+    it("returns null for a disabled admin even with the correct password", async () => {
+      users.findByEmail.mockResolvedValue(row({ is_active: false }));
+      const service = new AdminAuthService(users, env());
+      expect(await service.verifyCredentials("admin@example.com", "correct horse battery")).toBeNull();
+    });
+  });
+
+  describe("admin management (JAK-124)", () => {
+    it("lists admins as safe views without any password hash", async () => {
+      users.listAll.mockResolvedValue([row(), row({ id: "bbbb", email: "two@example.com" })]);
+      const service = new AdminAuthService(users, env());
+
+      const admins = await service.listAdmins();
+
+      expect(admins).toHaveLength(2);
+      expect(admins[0]).toEqual({
+        id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        email: "admin@example.com",
+        isActive: true,
+        createdAt: new Date("2026-07-01T00:00:00Z"),
+      });
+      // No hash on any serialized view.
+      expect(JSON.stringify(admins)).not.toContain("password_hash");
+      expect(JSON.stringify(admins)).not.toContain(row().password_hash);
+    });
+
+    it("creates an admin, hashing the password (never the plaintext) and hiding the hash", async () => {
+      users.insert.mockImplementation(async (email, hash) =>
+        row({ email, password_hash: hash })
+      );
+      const service = new AdminAuthService(users, env());
+
+      const created = await service.createAdmin("New@Example.com", "unit-test-chosen-pw");
+
+      const [, hash] = users.insert.mock.calls[0];
+      expect(hash).not.toBe("unit-test-chosen-pw");
+      expect(bcrypt.compareSync("unit-test-chosen-pw", hash)).toBe(true);
+      // The returned view carries no hash.
+      expect((created as unknown as Record<string, unknown>).password_hash).toBeUndefined();
+      expect(created.isActive).toBe(true);
+    });
+
+    it("toggles active state and maps null (unknown id) through", async () => {
+      users.setActive.mockResolvedValueOnce(row({ is_active: false }));
+      const service = new AdminAuthService(users, env());
+      expect((await service.setAdminActive("id", false))?.isActive).toBe(false);
+
+      users.setActive.mockResolvedValueOnce(null);
+      expect(await service.setAdminActive("gone", true)).toBeNull();
     });
   });
 
