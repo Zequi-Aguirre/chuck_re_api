@@ -3,6 +3,7 @@ import { injectable } from "tsyringe";
 import { EnvConfig } from "../config/envConfig.ts";
 import { JakeAssistantService } from "../services/JakeAssistantService.ts";
 import { JakeInboundMessage } from "../types/Jake.ts";
+import { normalizeInboundAddress } from "../util/address.ts";
 
 /**
  * Inbound SMS webhook for text-Jake (JAK-115, mode-aware). A GHL automation POSTs
@@ -66,6 +67,21 @@ export class JakeSmsResource {
             // destination number the text was received on (the tenant's own number).
             const locationId: string | undefined = body.locationId ?? body.location_id;
             const toNumber: string | undefined = body.to ?? body.toNumber ?? body.to_number;
+
+            // Operational logging for inbound diagnosis (JAK-127). Runs only after
+            // the MASTER_API_KEY check has passed, so we never log unauthenticated
+            // spam. Surfaces exactly what GHL POSTs — the field KEYS present plus
+            // the resolved values we route on — so we can catch cases like an
+            // unresolved {{message.body}} token arriving empty. NEVER logs the
+            // master api key or any header secret: only request-body fields.
+            console.log("JAK inbound", {
+                bodyKeys: Object.keys(body),
+                from: senderPhone,
+                contactId,
+                message: message && String(message).trim() ? message : "(empty)",
+                locationId,
+                parsedAddress: normalizeInboundAddress(message),
+            });
 
             if (!contactId || !message || !String(message).trim()) {
                 return res
