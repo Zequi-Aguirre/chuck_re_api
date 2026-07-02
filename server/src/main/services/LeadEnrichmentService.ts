@@ -13,6 +13,14 @@ export class LeadEnrichmentService {
   public async processLead(jobData: EnrichmentJobPayload): Promise<void> {
     const { contact_id, full_address } = jobData;
 
+    // The multi-tenant webhook path (JAK-106) enqueues without an address — the
+    // reworked worker (JAK-107) loads it from GHL. Until that lands, this legacy
+    // single-tenant service requires the address up front and skips without one.
+    if (!full_address) {
+      console.warn(`⚠️ No address on job for contact ${contact_id} — skipping (JAK-107).`);
+      return;
+    }
+
     // Fetch contact details from GHL
     const contact = await this.ghlDao.getContact(contact_id);
     if (!contact) {

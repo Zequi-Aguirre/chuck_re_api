@@ -56,3 +56,14 @@ export type {
   JakeCustomFieldDef,
   JakeFieldDataType,
 } from "./lifecycle/JakeCustomFields";
+
+// JAK-106 — inbound ContactCreate webhook receiver: verify signature (shared
+// GHL_WEBHOOK_SECRET), resolve the location, enqueue an enrichment job. Never
+// enriches inline — that's JAK-107.
+export { GhlEnrichmentWebhookResource } from "./webhook/GhlEnrichmentWebhookResource";
+export { GhlWebhookVerifier } from "./webhook/GhlWebhookVerifier";
+export type { WebhookVerificationResult } from "./webhook/GhlWebhookVerifier";
+export type {
+  ParsedContactWebhook,
+  RawGhlWebhookBody,
+} from "./webhook/GhlWebhookTypes";

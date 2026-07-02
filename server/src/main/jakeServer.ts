@@ -14,6 +14,7 @@ import { Authenticator } from "./middleware/authenticator.ts";
 import { MailerResource } from "./resources/MailerResource.ts";
 import { GhlWebhookResource } from "./resources/GhlWebhookResource.ts";
 import { JakeSmsResource } from "./resources/JakeSmsResource.ts";
+import { GhlEnrichmentWebhookResource } from "./ghlEnrichment/index.ts";
 // Services
 import { LeadEnrichmentQueueService } from "./services/LeadEnrichmentQueueService.ts";
 
@@ -45,12 +46,26 @@ export class JakeServer {
 
         // 🌐 Middleware
         this.app.use(cors());
-        this.app.use(express.json());
 
         // The lead-enrichment pipeline (Redis queue + worker) is parked legacy
         // functionality — it is only wired up when Redis is actually configured,
         // so the MVP server boots cleanly on environments without Redis secrets.
         const redisConfigured = Boolean(this.config.upstashRedisTcpUrl?.trim());
+
+        // 🪝 JAK-106 — inbound GHL ContactCreate webhook. Mounted BEFORE the
+        // app-wide express.json() so its route-scoped parser can capture the RAW
+        // request body for signature verification (the global parser then no-ops
+        // for this path). Gated on Redis, since it enqueues onto the BullMQ queue.
+        if (redisConfigured) {
+            this.app.use(
+                "/webhooks/ghl",
+                container.resolve(GhlEnrichmentWebhookResource).router
+            );
+        } else {
+            console.log("ℹ️ Redis not configured — skipping /webhooks/ghl enrichment webhook.");
+        }
+
+        this.app.use(express.json());
 
         // 🧠 API Routes
         if (redisConfigured) {
