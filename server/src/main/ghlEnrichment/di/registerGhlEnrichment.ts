@@ -11,6 +11,8 @@ import { GhlInstallLifecycleService } from "../lifecycle/GhlInstallLifecycleServ
 import { LeadEnrichmentQueueService } from "../../services/LeadEnrichmentQueueService";
 import { GhlWebhookVerifier } from "../webhook/GhlWebhookVerifier";
 import { GhlEnrichmentWebhookResource } from "../webhook/GhlEnrichmentWebhookResource";
+import { GhlEnrichmentEventStore } from "../worker/GhlEnrichmentEventStore";
+import { GhlEnrichmentWorker } from "../worker/GhlEnrichmentWorker";
 
 /**
  * DI registration for the GHL enrichment module.
@@ -88,5 +90,17 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   }
   if (!c.isRegistered(GhlEnrichmentWebhookResource)) {
     c.registerSingleton(GhlEnrichmentWebhookResource);
+  }
+
+  // JAK-107 — enrichment worker: the keystone that consumes an enqueued job and
+  // runs the full spine (load connection → fetch contact → Jake engine →
+  // JAK-108 mapping → write-back + note), idempotent via the events store. The
+  // JAK-106 queue routes multi-tenant jobs to GhlEnrichmentWorker; both share
+  // the singletons above so there's one client / store / field-map instance.
+  if (!c.isRegistered(GhlEnrichmentEventStore)) {
+    c.registerSingleton(GhlEnrichmentEventStore);
+  }
+  if (!c.isRegistered(GhlEnrichmentWorker)) {
+    c.registerSingleton(GhlEnrichmentWorker);
   }
 };
