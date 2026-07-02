@@ -7,8 +7,7 @@
 
 Epic: `ghl-enrichment`
 
-## Open (13)
-- [ ] **JAK-102** (P0) Encrypted connection/credential store — depends: JAK-101
+## Open (12)
 - [ ] **JAK-103** (P0) Token refresh service — depends: JAK-102
 - [ ] **JAK-104** (P0) GHL API client (axios, per-location auth, retries, rate-limit) — depends: JAK-103
 - [ ] **JAK-105** (P0) Install lifecycle: auto-provision custom fields + welcome note; uninstall — depends: JAK-104
@@ -29,6 +28,7 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-153** (P3) [LATER] Privacy Policy + Terms pages for Jake
 - [ ] **JAK-154** (P3) [LATER] CRM upsell bundle (GHL SaaS resale + AskZoe concierge)
 
-## Done (2)
+## Done (3)
 - [x] **JAK-100** (P0) Project ticket store (SQLite in-repo)
 - [x] **JAK-101** (P0) GHL app scaffolding + Doppler config + env helper — depends: JAK-100
+- [x] **JAK-102** (P0) Encrypted connection/credential store — depends: JAK-101

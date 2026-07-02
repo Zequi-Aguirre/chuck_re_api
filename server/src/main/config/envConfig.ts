@@ -24,6 +24,9 @@ export class EnvConfig {
     public readonly realEstateApiKey: string;
     public readonly realEstateBaseUrl: string;
 
+    // 🗄️ Postgres (per-location connection/credential store — JAK-102 onward)
+    public readonly databaseUrl: string;
+
     // 🧠 GoHighLevel API
     public readonly ghlApiKey: string;
     public readonly ghlBaseUrl: string;
@@ -58,6 +61,11 @@ export class EnvConfig {
         // 🏡 RealEstate API
         this.realEstateApiKey = process.env.RE_API_KEY!;
         this.realEstateBaseUrl = process.env.RE_BASE_URL!;
+
+        // 🗄️ Postgres connection string (Doppler). Optional at boot — the
+        // connection store initializes its pool lazily, so environments without
+        // a DB provisioned yet (e.g. the current dev queue-less boot) start fine.
+        this.databaseUrl = process.env.DATABASE_URL ?? "";
 
         // 🧠 GoHighLevel API
         this.ghlApiKey = process.env.GHL_API_KEY!;
