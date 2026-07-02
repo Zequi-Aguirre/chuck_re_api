@@ -44,6 +44,38 @@ per-location into Postgres; Doppler keeps only the app-level encryption key.
 The admin CRUD UI (JAK-113) and text-Jake routing (JAK-114) build on this store;
 they are **not** part of JAK-102.
 
+## What JAK-106 added (inbound ContactCreate webhook receiver)
+
+One endpoint — `POST /webhooks/ghl` — that GHL calls when a new contact is
+created in an installed sub-account. It does the least possible synchronously and
+hands the real enrichment to the worker (JAK-107) via the queue:
+
+1. **Verify signature** — HMAC-SHA256 over the RAW request body keyed on
+   `GHL_WEBHOOK_SECRET` (Doppler), hex, optional `sha256=` prefix, constant-time
+   compare. This is the enrichment path's security boundary — it deliberately
+   does **NOT** use `MASTER_API_KEY` (that guards the text path). Fails closed in
+   prod when the secret is missing; off-prod it accepts unverified with a warning
+   for local testing (the receiver only enqueues, so SPEC §8 write-safety holds).
+2. **Validate** the payload (location id + contact id present).
+3. **Resolve the location** from the JAK-102 connection store; drop (200 ignored)
+   if the location is unknown or inactive (uninstalled), so GHL stops retrying.
+4. **Enqueue** an enrichment job on the reused MVP BullMQ queue
+   (`LeadEnrichmentQueueService`) — never inline. The job id is
+   `ghl:<location>:<contact>`, so retries / duplicate deliveries collapse onto one
+   job (idempotent).
+
+- `webhook/GhlWebhookVerifier.ts` — shared-secret HMAC signature verification.
+- `webhook/GhlWebhookTypes.ts` — raw body + parsed/routing types.
+- `webhook/GhlEnrichmentWebhookResource.ts` — the Express route (raw-body capture,
+  verify → validate → resolve → enqueue). Mounted in `JakeServer` BEFORE the
+  app-wide `express.json()` so its route-scoped parser sees the raw bytes; gated
+  on Redis like the parked pipeline.
+
+Only `ContactCreate` is acted on; `ContactUpdate` (and anything else) is
+acknowledged and dropped for the MVP. The enrichment worker body — loading the
+contact, running the Jake engine, write-back, per-contact idempotency/metering —
+is **JAK-107**, not part of JAK-106.
+
 Env / secrets are Doppler-provided via `EnvConfig`:
 `GHL_CLIENT_ID`, `GHL_CLIENT_SECRET`, `GHL_WEBHOOK_SECRET`,
 `GHL_CREDENTIAL_ENC_KEY` (app-level encryption key only — a tenant's own GHL API

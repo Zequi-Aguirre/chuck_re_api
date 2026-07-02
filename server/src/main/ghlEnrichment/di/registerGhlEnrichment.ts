@@ -8,6 +8,9 @@ import { GhlConnectionService } from "../connections/GhlConnectionService";
 import { GhlApiClient } from "../api/GhlApiClient";
 import { GhlCustomFieldStore } from "../lifecycle/GhlCustomFieldStore";
 import { GhlInstallLifecycleService } from "../lifecycle/GhlInstallLifecycleService";
+import { LeadEnrichmentQueueService } from "../../services/LeadEnrichmentQueueService";
+import { GhlWebhookVerifier } from "../webhook/GhlWebhookVerifier";
+import { GhlEnrichmentWebhookResource } from "../webhook/GhlEnrichmentWebhookResource";
 
 /**
  * DI registration for the GHL enrichment module.
@@ -69,5 +72,21 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   }
   if (!c.isRegistered(GhlInstallLifecycleService)) {
     c.registerSingleton(GhlInstallLifecycleService);
+  }
+
+  // JAK-106 — inbound ContactCreate webhook receiver. Verifies the shared
+  // GHL_WEBHOOK_SECRET signature (NOT the MASTER_API_KEY text path), resolves the
+  // location from the JAK-102 store, and enqueues an enrichment job on the parked
+  // MVP BullMQ queue — it never enriches inline (that's JAK-107). The queue
+  // service is registered as a shared singleton so the receiver and the
+  // worker-starter in JakeServer add to / consume the SAME queue instance.
+  if (!c.isRegistered(LeadEnrichmentQueueService)) {
+    c.registerSingleton(LeadEnrichmentQueueService);
+  }
+  if (!c.isRegistered(GhlWebhookVerifier)) {
+    c.registerSingleton(GhlWebhookVerifier);
+  }
+  if (!c.isRegistered(GhlEnrichmentWebhookResource)) {
+    c.registerSingleton(GhlEnrichmentWebhookResource);
   }
 };
