@@ -1,6 +1,6 @@
 import { injectable } from "tsyringe";
 import { PostgresDatabase } from "../../data/PostgresDatabase";
-import { GhlConnectionStatus } from "./GhlConnectionTypes";
+import { GhlConnectionStatus, GhlTextMode } from "./GhlConnectionTypes";
 
 /**
  * Raw persistence row for the `ghl_connections` table. `api_key_encrypted`
@@ -14,6 +14,7 @@ export interface GhlConnectionRow {
   base_url: string;
   phone_numbers: string[];
   status: GhlConnectionStatus;
+  text_mode: GhlTextMode;
   created_at: Date;
   updated_at: Date;
 }
@@ -24,6 +25,7 @@ export interface InsertGhlConnectionRow {
   base_url: string;
   phone_numbers: string[];
   status: GhlConnectionStatus;
+  text_mode: GhlTextMode;
 }
 
 export interface UpdateGhlConnectionRow {
@@ -31,6 +33,7 @@ export interface UpdateGhlConnectionRow {
   base_url?: string;
   phone_numbers?: string[];
   status?: GhlConnectionStatus;
+  text_mode?: GhlTextMode;
 }
 
 /**
@@ -48,8 +51,8 @@ export class GhlConnectionStore {
   async insert(row: InsertGhlConnectionRow): Promise<GhlConnectionRow> {
     const result = await this.db.query<GhlConnectionRow>(
       `INSERT INTO ghl_connections
-         (location_id, api_key_encrypted, base_url, phone_numbers, status)
-       VALUES ($1, $2, $3, $4, $5)
+         (location_id, api_key_encrypted, base_url, phone_numbers, status, text_mode)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
       [
         row.location_id,
@@ -57,6 +60,7 @@ export class GhlConnectionStore {
         row.base_url,
         row.phone_numbers,
         row.status,
+        row.text_mode,
       ]
     );
     return result.rows[0];
@@ -113,6 +117,10 @@ export class GhlConnectionStore {
     if (patch.status !== undefined) {
       sets.push(`status = $${i++}`);
       values.push(patch.status);
+    }
+    if (patch.text_mode !== undefined) {
+      sets.push(`text_mode = $${i++}`);
+      values.push(patch.text_mode);
     }
 
     // Nothing to change → return the current row unchanged.

@@ -3,8 +3,14 @@ import { GhlEnrichmentConfig } from "../../config/GhlEnrichmentConfig";
 import { CreditService } from "../CreditService";
 import { CreditLedgerRow, CreditLedgerStore } from "../CreditLedgerStore";
 
-const configWith = (enrichment: number, skipTrace: number): GhlEnrichmentConfig =>
-  ({ creditCosts: { enrichmentBaseCredits: enrichment, skipTraceCredits: skipTrace } } as GhlEnrichmentConfig);
+const configWith = (enrichment: number, skipTrace: number, textLookup = 1): GhlEnrichmentConfig =>
+  ({
+    creditCosts: {
+      enrichmentBaseCredits: enrichment,
+      skipTraceCredits: skipTrace,
+      textLookupCredits: textLookup,
+    },
+  } as GhlEnrichmentConfig);
 
 const ledgerRow = (over: Partial<CreditLedgerRow> = {}): CreditLedgerRow => ({
   id: "led-1",
@@ -90,6 +96,50 @@ describe("CreditService", () => {
         contactId: "ct_1",
         plan: { skipTrace: false },
       });
+
+      expect(result).toEqual({ ok: true, balanceAfter: 5, entries: [] });
+      expect(store.charge).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("text-Jake lookups (JAK-115)", () => {
+    it("prices a text lookup from config", () => {
+      expect(service.costOfTextLookup()).toBe(1);
+      expect(new CreditService(store, configWith(1, 2, 3)).costOfTextLookup()).toBe(3);
+    });
+
+    it("checks affordability against the customer's credit account", async () => {
+      store.getBalance.mockResolvedValue(1);
+      expect(await service.hasCreditsForTextLookup("acct_1")).toBe(true);
+      expect(store.getBalance).toHaveBeenCalledWith("acct_1");
+
+      store.getBalance.mockResolvedValue(0);
+      expect(await service.hasCreditsForTextLookup("acct_1")).toBe(false);
+    });
+
+    it("is free (no DB read) when the lookup is priced at 0", async () => {
+      const free = new CreditService(store, configWith(1, 2, 0));
+      expect(await free.hasCreditsForTextLookup("acct_1")).toBe(true);
+      expect(store.getBalance).not.toHaveBeenCalled();
+    });
+
+    it("charges a text_lookup line to the account with NO contact-id dedup (each text bills)", async () => {
+      store.charge.mockResolvedValue({ ok: true, balanceAfter: 4, entries: [] });
+
+      await service.chargeForTextLookup({ accountId: "acct_1" });
+
+      expect(store.charge).toHaveBeenCalledWith({
+        locationId: "acct_1",
+        contactId: null,
+        lines: [{ reason: "text_lookup", amount: 1 }],
+      });
+    });
+
+    it("is a free success when the lookup is priced at 0 — no charge issued", async () => {
+      const free = new CreditService(store, configWith(1, 2, 0));
+      store.getBalance.mockResolvedValue(5);
+
+      const result = await free.chargeForTextLookup({ accountId: "acct_1" });
 
       expect(result).toEqual({ ok: true, balanceAfter: 5, entries: [] });
       expect(store.charge).not.toHaveBeenCalled();

@@ -3,11 +3,14 @@ import {
   DEFAULT_CREDIT_COSTS,
   enrichmentChargeLines,
   enrichmentCreditCost,
+  textLookupChargeLines,
+  textLookupCreditCost,
 } from "../CreditCosts";
 
 const costs = (over: Partial<CreditCostConfig> = {}): CreditCostConfig => ({
   enrichmentBaseCredits: 1,
   skipTraceCredits: 2,
+  textLookupCredits: 1,
   ...over,
 });
 
@@ -47,7 +50,25 @@ describe("CreditCosts", () => {
     });
   });
 
-  it("ships sensible defaults (1 per record, +2 for skip-trace)", () => {
-    expect(DEFAULT_CREDIT_COSTS).toEqual({ enrichmentBaseCredits: 1, skipTraceCredits: 2 });
+  describe("textLookupChargeLines / textLookupCreditCost (JAK-115)", () => {
+    it("charges a single text_lookup line at the configured price", () => {
+      expect(textLookupChargeLines(costs({ textLookupCredits: 2 }))).toEqual([
+        { reason: "text_lookup", amount: 2 },
+      ]);
+      expect(textLookupCreditCost(costs({ textLookupCredits: 2 }))).toBe(2);
+    });
+
+    it("drops the line when priced at 0 (never an empty ledger row)", () => {
+      expect(textLookupChargeLines(costs({ textLookupCredits: 0 }))).toEqual([]);
+      expect(textLookupCreditCost(costs({ textLookupCredits: 0 }))).toBe(0);
+    });
+  });
+
+  it("ships sensible defaults (1 per record, +2 for skip-trace, 1 per text lookup)", () => {
+    expect(DEFAULT_CREDIT_COSTS).toEqual({
+      enrichmentBaseCredits: 1,
+      skipTraceCredits: 2,
+      textLookupCredits: 1,
+    });
   });
 });
