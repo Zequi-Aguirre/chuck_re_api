@@ -51,12 +51,40 @@ export class JakeSmsResource {
         return next();
     }
 
+    /**
+     * Resolve a message-text field GHL may deliver either as a plain string OR as
+     * a message OBJECT (`{ type, body }`) — its real inbound payload shape (JAK-128).
+     * Returns the string `.body` in the object case, the value as-is when it's
+     * already a string, or undefined otherwise. Without this, an object field was
+     * coerced via `String(obj)` → "[object Object]", so the address never parsed.
+     */
+    private static asText(m: unknown): string | undefined {
+        if (typeof m === "string") return m;
+        if (m && typeof m === "object") {
+            const inner = (m as { body?: unknown }).body;
+            return typeof inner === "string" ? inner : undefined;
+        }
+        return undefined;
+    }
+
+    /** Return a value only when it's a non-empty string; otherwise undefined. */
+    private static asId(v: unknown): string | undefined {
+        return typeof v === "string" && v.trim() ? v : undefined;
+    }
+
     private async handleInbound(req: Request, res: Response): Promise<Response> {
         try {
             const body = req.body ?? {};
 
             const contactId: string | undefined = body.contactId ?? body.contact_id ?? body.userId;
-            const message: string | undefined = body.message ?? body.body ?? body.text;
+
+            // GHL's real inbound payload delivers the message as an OBJECT
+            // (`{ type, body }`), not a string. Unwrap it (and the alternate `body`
+            // field) to the underlying text before anything tries to parse it.
+            const message: string | undefined =
+                JakeSmsResource.asText(body.message) ??
+                JakeSmsResource.asText(body.body) ??
+                JakeSmsResource.asText(body.text);
 
             // The SENDER's number — the person who texted in. This is the billing
             // identity in BOTH modes. GHL webhooks vary, so accept the common shapes.
@@ -65,7 +93,18 @@ export class JakeSmsResource {
 
             // Routing keys for own_number resolution: the sub-account id and the
             // destination number the text was received on (the tenant's own number).
-            const locationId: string | undefined = body.locationId ?? body.location_id;
+            // GHL may send the location as a top-level id, a nested `location`
+            // object (`{ id }`), a bare `location` string, or under `customData`.
+            // OPTIONAL — a missing id is fine; the shared gateway mode works without
+            // it, so we must never let an absent locationId break the flow.
+            const location = body.location;
+            const locationId: string | undefined =
+                JakeSmsResource.asId(body.locationId) ??
+                JakeSmsResource.asId(body.location_id) ??
+                (location && typeof location === "object"
+                    ? JakeSmsResource.asId((location as { id?: unknown }).id)
+                    : JakeSmsResource.asId(location)) ??
+                JakeSmsResource.asId(body.customData?.locationId);
             const toNumber: string | undefined = body.to ?? body.toNumber ?? body.to_number;
 
             // Operational logging for inbound diagnosis (JAK-127). Runs only after
