@@ -277,4 +277,22 @@ describe("CreditLedgerStore", () => {
       expect(params).toEqual(["loc_1", 5]);
     });
   });
+
+  describe("listBalances", () => {
+    it("reads every maintained balance in one scan and coerces to numbers", async () => {
+      db.query.mockResolvedValue({
+        rows: [
+          { location_id: "loc_1", balance: 42 },
+          { location_id: "loc_2", balance: 0 },
+        ],
+      } as never);
+      const balances = await store.listBalances();
+      const [sql] = db.query.mock.calls[0];
+      expect(sql).toContain("FROM credit_balances");
+      expect(balances).toEqual([
+        { location_id: "loc_1", balance: 42 },
+        { location_id: "loc_2", balance: 0 },
+      ]);
+    });
+  });
 });

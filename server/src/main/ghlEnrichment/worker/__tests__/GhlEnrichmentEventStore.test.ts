@@ -78,4 +78,42 @@ describe("GhlEnrichmentEventStore", () => {
       expect(params).toEqual(["loc_1", ["failed", "dead_letter"], 25]);
     });
   });
+
+  describe("countByStatus", () => {
+    it("groups one location's events by status and coerces the count to a number", async () => {
+      db.query.mockResolvedValue({
+        rows: [
+          { status: "enriched", count: "3" },
+          { status: "failed", count: "1" },
+        ],
+      } as never);
+      const counts = await store.countByStatus("loc_1");
+      const [sql, params] = lastCall(db);
+      expect(sql).toContain("GROUP BY status");
+      expect(sql).toContain("WHERE location_id = $1");
+      expect(params).toEqual(["loc_1"]);
+      expect(counts).toEqual([
+        { status: "enriched", count: 3 },
+        { status: "failed", count: 1 },
+      ]);
+    });
+  });
+
+  describe("countByStatusForAllLocations", () => {
+    it("groups every location's events by (location, status) in one scan", async () => {
+      db.query.mockResolvedValue({
+        rows: [
+          { location_id: "loc_1", status: "enriched", count: "2" },
+          { location_id: "loc_2", status: "dead_letter", count: "5" },
+        ],
+      } as never);
+      const rows = await store.countByStatusForAllLocations();
+      const [sql] = lastCall(db);
+      expect(sql).toContain("GROUP BY location_id, status");
+      expect(rows).toEqual([
+        { location_id: "loc_1", status: "enriched", count: 2 },
+        { location_id: "loc_2", status: "dead_letter", count: 5 },
+      ]);
+    });
+  });
 });

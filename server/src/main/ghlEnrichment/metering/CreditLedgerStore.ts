@@ -19,6 +19,12 @@ export interface CreditLedgerRow {
   deleted_at: Date | null;
 }
 
+/** A location's maintained credit balance — the all-locations read (JAK-112). */
+export interface LocationBalance {
+  location_id: string;
+  balance: number;
+}
+
 /** Result of an atomic charge attempt. */
 export type ChargeResult =
   | { ok: true; balanceAfter: number; entries: CreditLedgerRow[] }
@@ -46,6 +52,22 @@ export class CreditLedgerStore {
       [locationId]
     );
     return result.rows[0]?.balance ?? 0;
+  }
+
+  /**
+   * Every location's maintained balance in one scan — the overview list
+   * (JAK-112) joins this against the installed locations so it never issues a
+   * balance query per location. Reads the maintained `credit_balances` table
+   * (not a ledger sum), so it stays a single cheap indexed scan.
+   */
+  async listBalances(): Promise<LocationBalance[]> {
+    const result = await this.db.query<{ location_id: string; balance: number }>(
+      `SELECT location_id, balance FROM credit_balances`
+    );
+    return result.rows.map((r) => ({
+      location_id: r.location_id,
+      balance: Number(r.balance),
+    }));
   }
 
   /** Most recent ledger entries for a location, newest first (excludes voided). */

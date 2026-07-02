@@ -36,6 +36,17 @@ export interface GhlEnrichmentEventRow {
   modified_at: Date;
 }
 
+/** One status → row-count tally for a single location (status view, JAK-112). */
+export interface EnrichmentStatusCount {
+  status: EnrichmentEventStatus;
+  count: number;
+}
+
+/** A status tally scoped to a location — the all-locations aggregate (JAK-112). */
+export interface LocationStatusCount extends EnrichmentStatusCount {
+  location_id: string;
+}
+
 /** What the worker records after processing a contact. */
 export interface RecordEnrichmentEventInput {
   location_id: string;
@@ -159,5 +170,45 @@ export class GhlEnrichmentEventStore {
       [locationId, statuses, limit]
     );
     return result.rows;
+  }
+
+  /**
+   * Tally a location's events by status in ONE grouped query — the outcome
+   * breakdown (enriched / skipped / credit_blocked / failed / dead_letter) the
+   * status view (JAK-112) shows per location. Only non-zero statuses come back;
+   * the caller fills the rest with 0. Served by the `(location_id, status, …)`
+   * index so it stays cheap as history grows.
+   */
+  async countByStatus(locationId: string): Promise<EnrichmentStatusCount[]> {
+    const result = await this.db.query<{ status: EnrichmentEventStatus; count: string }>(
+      `SELECT status, count(*)::int AS count
+       FROM ghl_enrichment_events
+       WHERE location_id = $1
+       GROUP BY status`,
+      [locationId]
+    );
+    return result.rows.map((r) => ({ status: r.status, count: Number(r.count) }));
+  }
+
+  /**
+   * The same status tally for EVERY location in one grouped scan — the overview
+   * list (JAK-112) folds this into per-location counts without an N+1 query per
+   * installed location.
+   */
+  async countByStatusForAllLocations(): Promise<LocationStatusCount[]> {
+    const result = await this.db.query<{
+      location_id: string;
+      status: EnrichmentEventStatus;
+      count: string;
+    }>(
+      `SELECT location_id, status, count(*)::int AS count
+       FROM ghl_enrichment_events
+       GROUP BY location_id, status`
+    );
+    return result.rows.map((r) => ({
+      location_id: r.location_id,
+      status: r.status,
+      count: Number(r.count),
+    }));
   }
 }
