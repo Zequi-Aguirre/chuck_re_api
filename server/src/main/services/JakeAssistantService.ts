@@ -1,6 +1,6 @@
 import { injectable } from "tsyringe";
 import { RealEstateApiDao } from "../data/RealEstateApiDao.ts";
-import { GhlApiDao } from "../data/GhlApiDao.ts";
+import { GhlApiClient } from "../ghlEnrichment/api/GhlApiClient.ts";
 import { normalizeInboundAddress } from "../util/address.ts";
 import { JakeInboundMessage, JakeInboundResult } from "../types/Jake.ts";
 import { RealEstateApiPropertySearchResult } from "../types/RealEstateApi.ts";
@@ -9,12 +9,16 @@ import { RealEstateApiPropertySearchResult } from "../types/RealEstateApi.ts";
 export class JakeAssistantService {
     constructor(
         private readonly realEstateDao: RealEstateApiDao,
-        private readonly ghlDao: GhlApiDao
+        private readonly ghlClient: GhlApiClient
     ) {}
 
     /**
      * Core path: inbound text → validate/format address → /v2/PropertySearch →
-     * build a reply → send it back via outbound SMS. No persistence, no credits.
+     * build a reply → send it back via outbound SMS. Multi-tenant (JAK-114): the
+     * reply is sent on `input.locationId`'s per-location credentials (resolved
+     * upstream from the JAK-102 connection store), so it always returns through
+     * the correct tenant's GHL and never another tenant's. No persistence, no
+     * credits.
      */
     public async handleInboundMessage(input: JakeInboundMessage): Promise<JakeInboundResult> {
         const address = normalizeInboundAddress(input.message);
@@ -29,7 +33,7 @@ export class JakeAssistantService {
             reply = this.buildReply(address, property);
         }
 
-        await this.ghlDao.sendSms({
+        await this.ghlClient.sendSms(input.locationId, {
             contactId: input.contactId,
             message: reply,
             fromNumber: input.fromNumber,

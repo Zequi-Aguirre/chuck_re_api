@@ -9,6 +9,7 @@ import {
   GhlCustomField,
   GhlCustomFieldValue,
   GhlNote,
+  GhlSmsSendResult,
 } from "./GhlApiTypes";
 
 /** Raised when no active connection exists for a location — callers stop processing. */
@@ -142,6 +143,35 @@ export class GhlApiClient {
       },
     });
     return data?.customField ?? null;
+  }
+
+  /**
+   * Send an outbound SMS reply to a contact on THIS location's credentials
+   * (JAK-114 / the JAK-002 send path) via the GHL Conversations API. The reply
+   * therefore always goes back through the tenant that owns `locationId` — never
+   * another tenant's GHL. `fromNumber` is optional; omitted → the location's
+   * default number. As a POST it's gated at the {@link request} chokepoint, so
+   * off prod/staging it's echoed + skipped (returns null) — dev never texts a
+   * real person.
+   */
+  async sendSms(
+    locationId: string,
+    params: { contactId: string; message: string; fromNumber?: string }
+  ): Promise<GhlSmsSendResult | null> {
+    const data: Record<string, unknown> = {
+      type: "SMS",
+      contactId: params.contactId,
+      message: params.message,
+    };
+    if (params.fromNumber) {
+      data.fromNumber = params.fromNumber;
+    }
+
+    return this.request<GhlSmsSendResult | null>(locationId, {
+      method: "POST",
+      url: "/conversations/messages",
+      data,
+    });
   }
 
   // ──────────────────────────── Internals ────────────────────────────
