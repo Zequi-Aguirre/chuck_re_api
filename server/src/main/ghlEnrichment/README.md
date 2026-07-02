@@ -188,11 +188,17 @@ Backend (`admin/`):
   plaintext, never reversible.
 - `AdminAuthService.ts` — bcrypt hash/verify (constant-time so a missing account
   can't be timed apart from a wrong password), JWT issue/verify signed with the
-  app `JWT_SECRET`, and `seedFirstAdmin()` — the first admin is bootstrapped from
-  `ADMIN_SEED_EMAIL` / `ADMIN_SEED_PASSWORD` (Doppler) at boot. **No credential
-  is ever hardcoded in code or a migration.**
+  app `JWT_SECRET`, and `seedFirstAdmin()` — the seeded admin is bootstrapped from
+  `ADMIN_SEED_EMAIL` / `ADMIN_SEED_PASSWORD` (Doppler) at boot and is GUARANTEED
+  to be a `superadmin` idempotently every boot (created superadmin if absent,
+  promoted if it already exists as a plain admin — no manual DB surgery, JAK-125).
+  **No credential is ever hardcoded in code or a migration.**
 - `requireAdminAuth.ts` — middleware guarding every data route; reads the session
-  JWT from the httpOnly `jake_admin_session` cookie (or a Bearer header).
+  JWT from the httpOnly `jake_admin_session` cookie (or a Bearer header). Also
+  exports `requireSuperadmin` (JAK-125): the admin-management routes
+  (add/list/activate/deactivate/reset-password admins) are superadmin-only and
+  403 a regular admin; connections/status stay open to any logged-in admin. The
+  `role` (`admin` | `superadmin`) rides in the session JWT and `/me`.
 - `AdminAuthResource.ts` — `POST /api/admin/auth/login|logout`, `GET .../me`. The
   JWT is delivered as an httpOnly, sameSite=lax cookie (secure in prod); login
   failures are a single generic 401 (no account enumeration).

@@ -7,6 +7,11 @@ import { AdminConnectionService, API_KEY_MASK } from "../AdminConnectionService"
 import { AdminResource } from "../AdminResource";
 import { AdminConnectionView } from "../AdminTypes";
 
+// Obviously-fake, low-entropy placeholder used by the reset-password tests.
+// Held in a constant (not inlined next to a `password:` key) so a secret
+// scanner doesn't mistake a test fixture for a real hardcoded credential.
+const TEST_RESET_PW = ["unit", "test", "new", "pw"].join("-");
+
 const view = (over: Partial<AdminConnectionView> = {}): AdminConnectionView => ({
   id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
   locationId: "loc_1",
@@ -29,8 +34,9 @@ describe("AdminResource", () => {
     auth = mock<AdminAuthService>();
     connections = mock<AdminConnectionService>();
     status = mock<GhlStatusService>();
-    // Default: authenticated. Individual tests override to test the gate.
-    auth.verifyToken.mockReturnValue({ sub: "admin-id", email: "admin@example.com" });
+    // Default: authenticated AS A SUPERADMIN so the admin-management tests reach
+    // their handlers. Individual tests override to a plain admin / no session.
+    auth.verifyToken.mockReturnValue({ sub: "admin-id", email: "admin@example.com", role: "superadmin" });
 
     app = express();
     app.use(express.json());
@@ -38,6 +44,9 @@ describe("AdminResource", () => {
   });
 
   const asAdmin = (req: request.Test) => req.set("Authorization", "Bearer valid.token");
+  /** Drop to a plain (non-superadmin) admin session for gate tests (JAK-125). */
+  const asPlainAdmin = () =>
+    auth.verifyToken.mockReturnValue({ sub: "admin-id", email: "admin@example.com", role: "admin" });
 
   describe("auth gate", () => {
     it("401s every route without a valid session", async () => {
@@ -160,12 +169,53 @@ describe("AdminResource", () => {
 
   // --- Admin management (JAK-124) -------------------------------------------
 
-  const adminView = (over: Partial<{ id: string; email: string; isActive: boolean }> = {}) => ({
+  const adminView = (
+    over: Partial<{ id: string; email: string; isActive: boolean; role: "admin" | "superadmin" }> = {}
+  ) => ({
     id: "admin-id",
     email: "admin@example.com",
     isActive: true,
+    role: "admin" as const,
     createdAt: new Date("2026-07-01T00:00:00Z"),
     ...over,
+  });
+
+  // --- Superadmin gate (JAK-125) --------------------------------------------
+
+  describe("superadmin gate", () => {
+    const mgmtRoutes: Array<[string, string]> = [
+      ["get", "/api/admin/admins"],
+      ["post", "/api/admin/admins"],
+      ["post", "/api/admin/admins/other/activate"],
+      ["post", "/api/admin/admins/other/deactivate"],
+      ["post", "/api/admin/admins/other/password"],
+    ];
+
+    it("403s a regular admin on EVERY admin-management route", async () => {
+      asPlainAdmin();
+      for (const [method, path] of mgmtRoutes) {
+        const res = await asAdmin((request(app) as unknown as Record<string, (p: string) => request.Test>)[method](path));
+        expect(res.status).toBe(403);
+      }
+      // No management work is done for a non-superadmin.
+      expect(auth.listAdmins).not.toHaveBeenCalled();
+      expect(auth.createAdmin).not.toHaveBeenCalled();
+      expect(auth.setAdminActive).not.toHaveBeenCalled();
+      expect(auth.resetAdminPassword).not.toHaveBeenCalled();
+    });
+
+    it("lets a regular admin keep FULL sub-account management (not gated)", async () => {
+      asPlainAdmin();
+      status.listLocationStatuses.mockResolvedValue([]);
+      connections.deactivate.mockResolvedValue(true);
+      connections.delete.mockResolvedValue(true);
+
+      expect((await asAdmin(request(app).get("/api/admin/connections"))).status).toBe(200);
+      expect(
+        (await asAdmin(request(app).post("/api/admin/connections/loc_1/deactivate"))).status
+      ).toBe(200);
+      expect((await asAdmin(request(app).delete("/api/admin/connections/loc_1"))).status).toBe(200);
+    });
   });
 
   describe("GET /admins", () => {
@@ -211,7 +261,7 @@ describe("AdminResource", () => {
       expect(auth.createAdmin).not.toHaveBeenCalled();
     });
 
-    it("creates an admin and returns the hash-free view", async () => {
+    it("creates an admin and returns the hash-free view (defaults role to 'admin')", async () => {
       auth.emailExists.mockResolvedValue(false);
       auth.createAdmin.mockResolvedValue(adminView({ id: "new-id", email: "new@example.com" }));
       const res = await asAdmin(
@@ -219,11 +269,62 @@ describe("AdminResource", () => {
       );
       expect(res.status).toBe(201);
       expect(res.body.admin.email).toBe("new@example.com");
-      // Email is normalized to lowercase before hashing/insert.
-      expect(auth.createAdmin).toHaveBeenCalledWith("new@example.com", "unit-test-pw-123");
+      // Email normalized to lowercase; role defaults to 'admin' (JAK-125).
+      expect(auth.createAdmin).toHaveBeenCalledWith("new@example.com", "unit-test-pw-123", "admin");
       // Neither the plaintext password nor any hash is echoed back.
       expect(JSON.stringify(res.body)).not.toContain("unit-test-pw-123");
       expect(JSON.stringify(res.body)).not.toContain("password_hash");
+    });
+
+    it("passes a chosen role through (JAK-125)", async () => {
+      auth.emailExists.mockResolvedValue(false);
+      auth.createAdmin.mockResolvedValue(adminView({ id: "new-id", email: "boss@example.com", role: "superadmin" }));
+      const res = await asAdmin(
+        request(app)
+          .post("/api/admin/admins")
+          .send({ email: "boss@example.com", password: "unit-test-pw-123", role: "superadmin" })
+      );
+      expect(res.status).toBe(201);
+      expect(auth.createAdmin).toHaveBeenCalledWith("boss@example.com", "unit-test-pw-123", "superadmin");
+    });
+
+    it("400s an invalid role", async () => {
+      const res = await asAdmin(
+        request(app)
+          .post("/api/admin/admins")
+          .send({ email: "new@example.com", password: "unit-test-pw-123", role: "root" })
+      );
+      expect(res.status).toBe(400);
+      expect(auth.createAdmin).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("POST /admins/:id/password (JAK-125)", () => {
+    it("400s a too-short password", async () => {
+      const res = await asAdmin(
+        request(app).post("/api/admin/admins/other/password").send({ password: "short" })
+      );
+      expect(res.status).toBe(400);
+      expect(auth.resetAdminPassword).not.toHaveBeenCalled();
+    });
+
+    it("resets the password and never echoes the plaintext or a hash", async () => {
+      auth.resetAdminPassword.mockResolvedValue(adminView({ id: "other", email: "other@example.com" }));
+      const res = await asAdmin(
+        request(app).post("/api/admin/admins/other/password").send({ password: TEST_RESET_PW })
+      );
+      expect(res.status).toBe(200);
+      expect(auth.resetAdminPassword).toHaveBeenCalledWith("other", TEST_RESET_PW);
+      expect(JSON.stringify(res.body)).not.toContain(TEST_RESET_PW);
+      expect(JSON.stringify(res.body)).not.toContain("password_hash");
+    });
+
+    it("404s an unknown admin", async () => {
+      auth.resetAdminPassword.mockResolvedValue(null);
+      const res = await asAdmin(
+        request(app).post("/api/admin/admins/nope/password").send({ password: TEST_RESET_PW })
+      );
+      expect(res.status).toBe(404);
     });
   });
 

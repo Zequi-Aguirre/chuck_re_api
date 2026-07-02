@@ -35,6 +35,23 @@ export function requireAdminAuth(auth: AdminAuthService) {
   };
 }
 
+/**
+ * Express middleware requiring the authenticated admin to be a SUPERADMIN
+ * (JAK-125). MUST be mounted AFTER {@link requireAdminAuth} so `req.admin` is
+ * populated — it reads the role off the verified session and 403s anyone who
+ * isn't a superadmin. Gates the admin-management surface (add/list/activate/
+ * deactivate/reset-password admins); a regular admin keeps full access to
+ * connections/status, which are NOT behind this guard.
+ */
+export function requireSuperadmin() {
+  return (req: Request, res: Response, next: NextFunction): Response | void => {
+    if (req.admin?.role !== "superadmin") {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+    return next();
+  };
+}
+
 /** Pull the session token from the cookie first, then a Bearer header. */
 function extractToken(req: Request): string | null {
   const cookieToken = (req.cookies?.[ADMIN_COOKIE] as string | undefined)?.trim();

@@ -4,10 +4,12 @@ import DialogTitle from "@mui/material/DialogTitle";
 import DialogContent from "@mui/material/DialogContent";
 import DialogActions from "@mui/material/DialogActions";
 import TextField from "@mui/material/TextField";
+import MenuItem from "@mui/material/MenuItem";
 import Button from "@mui/material/Button";
 import Alert from "@mui/material/Alert";
 import Stack from "@mui/material/Stack";
 import { api, ApiError } from "../api";
+import { AdminRole } from "../types";
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -27,6 +29,7 @@ interface Props {
 export function AddAdminDialog({ open, onClose, onCreated }: Props) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [role, setRole] = useState<AdminRole>("admin");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -45,7 +48,7 @@ export function AddAdminDialog({ open, onClose, onCreated }: Props) {
 
     setBusy(true);
     try {
-      const admin = await api.createAdmin(trimmedEmail, password);
+      const admin = await api.createAdmin(trimmedEmail, password, role);
       onCreated(admin.email);
       handleClose();
     } catch (err) {
@@ -58,6 +61,7 @@ export function AddAdminDialog({ open, onClose, onCreated }: Props) {
   function handleClose() {
     setEmail("");
     setPassword("");
+    setRole("admin");
     setError(null);
     onClose();
   }
@@ -85,6 +89,17 @@ export function AddAdminDialog({ open, onClose, onCreated }: Props) {
             onChange={(e) => setPassword(e.target.value)}
             helperText="You choose this password and share it with the new admin yourself. It's stored hashed and never shown again."
           />
+          <TextField
+            select
+            label="Role"
+            fullWidth
+            value={role}
+            onChange={(e) => setRole(e.target.value as AdminRole)}
+            helperText="Admins manage sub-accounts. Superadmins also manage other admins."
+          >
+            <MenuItem value="admin">Admin</MenuItem>
+            <MenuItem value="superadmin">Superadmin</MenuItem>
+          </TextField>
         </Stack>
       </DialogContent>
       <DialogActions>

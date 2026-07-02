@@ -13,10 +13,12 @@ import Chip from "@mui/material/Chip";
 import Alert from "@mui/material/Alert";
 import Snackbar from "@mui/material/Snackbar";
 import CircularProgress from "@mui/material/CircularProgress";
+import Stack from "@mui/material/Stack";
 import AddIcon from "@mui/icons-material/Add";
 import { api, ApiError } from "../api";
 import { AdminUserView } from "../types";
 import { AddAdminDialog } from "../components/AddAdminDialog";
+import { ResetPasswordDialog } from "../components/ResetPasswordDialog";
 import { useAuth } from "../auth";
 
 /** Admin management (JAK-124): list admins + create another one. */
@@ -25,6 +27,7 @@ export function AdminsPage() {
   const [rows, setRows] = useState<AdminUserView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [resetTarget, setResetTarget] = useState<AdminUserView | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -83,6 +86,7 @@ export function AdminsPage() {
             <TableHead>
               <TableRow>
                 <TableCell>Email</TableCell>
+                <TableCell>Role</TableCell>
                 <TableCell>Status</TableCell>
                 <TableCell>Created</TableCell>
                 <TableCell align="right">Actions</TableCell>
@@ -102,23 +106,40 @@ export function AdminsPage() {
                     <TableCell>
                       <Chip
                         size="small"
+                        label={admin.role === "superadmin" ? "Superadmin" : "Admin"}
+                        color={admin.role === "superadmin" ? "primary" : "default"}
+                        variant={admin.role === "superadmin" ? "filled" : "outlined"}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Chip
+                        size="small"
                         label={admin.isActive ? "Active" : "Disabled"}
                         color={admin.isActive ? "success" : "default"}
                       />
                     </TableCell>
                     <TableCell>{new Date(admin.createdAt).toLocaleDateString()}</TableCell>
                     <TableCell align="right">
-                      <Button
-                        size="small"
-                        color={admin.isActive ? "error" : "primary"}
-                        disabled={busyId === admin.id || (isSelf && admin.isActive)}
-                        title={
-                          isSelf && admin.isActive ? "You can't deactivate your own account" : undefined
-                        }
-                        onClick={() => toggleActive(admin)}
-                      >
-                        {admin.isActive ? "Deactivate" : "Activate"}
-                      </Button>
+                      <Stack direction="row" spacing={1} justifyContent="flex-end">
+                        <Button
+                          size="small"
+                          disabled={busyId === admin.id}
+                          onClick={() => setResetTarget(admin)}
+                        >
+                          Reset password
+                        </Button>
+                        <Button
+                          size="small"
+                          color={admin.isActive ? "error" : "primary"}
+                          disabled={busyId === admin.id || (isSelf && admin.isActive)}
+                          title={
+                            isSelf && admin.isActive ? "You can't deactivate your own account" : undefined
+                          }
+                          onClick={() => toggleActive(admin)}
+                        >
+                          {admin.isActive ? "Deactivate" : "Activate"}
+                        </Button>
+                      </Stack>
                     </TableCell>
                   </TableRow>
                 );
@@ -135,6 +156,15 @@ export function AdminsPage() {
           setToast(`Admin ${email} created. Share the password you chose with them directly.`);
           load();
         }}
+      />
+
+      <ResetPasswordDialog
+        open={resetTarget !== null}
+        admin={resetTarget}
+        onClose={() => setResetTarget(null)}
+        onReset={(email) =>
+          setToast(`Password for ${email} reset. Share the new password with them directly.`)
+        }
       />
 
       <Snackbar

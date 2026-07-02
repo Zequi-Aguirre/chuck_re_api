@@ -17,6 +17,18 @@ function RequireAuth({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * Superadmin-only gate (JAK-125). A regular admin who deep-links to /admins is
+ * bounced to the dashboard — the tab is also hidden, and the API 403s, so this
+ * is defense-in-depth rather than the only guard.
+ */
+function RequireSuperadmin({ children }: { children: ReactNode }) {
+  const { user, loading } = useAuth();
+  if (loading) return <FullScreenSpinner />;
+  if (user?.role !== "superadmin") return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 function FullScreenSpinner() {
   return (
     <Box sx={{ display: "flex", justifyContent: "center", alignItems: "center", height: "100vh" }}>
@@ -43,7 +55,14 @@ export function App() {
       >
         <Route path="/" element={<ConnectionsPage />} />
         <Route path="/connections/:locationId" element={<ConnectionDetailPage />} />
-        <Route path="/admins" element={<AdminsPage />} />
+        <Route
+          path="/admins"
+          element={
+            <RequireSuperadmin>
+              <AdminsPage />
+            </RequireSuperadmin>
+          }
+        />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
