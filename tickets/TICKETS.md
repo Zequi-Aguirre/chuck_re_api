@@ -7,9 +7,8 @@
 
 Epic: `ghl-enrichment`
 
-## Open (3)
+## Open (2)
 - [ ] **JAK-103** (P0) Token refresh service — depends: JAK-102
-- [ ] **JAK-113** (P0) Admin dashboard: email/password auth + sub-account connection CRUD — depends: JAK-101, JAK-102
 - [ ] **JAK-114** (P0) Multi-tenant text-Jake routing (migrate MVP off single Doppler key) — depends: JAK-102
 
 ## Deferred / blocked (5)
@@ -19,7 +18,7 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-153** (P3) [LATER] Privacy Policy + Terms pages for Jake
 - [ ] **JAK-154** (P3) [LATER] CRM upsell bundle (GHL SaaS resale + AskZoe concierge)
 
-## Done (12)
+## Done (13)
 - [x] **JAK-100** (P0) Project ticket store (SQLite in-repo)
 - [x] **JAK-101** (P0) GHL app scaffolding + Doppler config + env helper — depends: JAK-100
 - [x] **JAK-102** (P0) Encrypted connection/credential store — depends: JAK-101
@@ -32,3 +31,4 @@ Epic: `ghl-enrichment`
 - [x] **JAK-110** (P0) Dev/staging safety: mock GHL, no real writes off prod — depends: JAK-104
 - [x] **JAK-111** (P1) Failure handling: retries, dead-letter, error surfacing — depends: JAK-107
 - [x] **JAK-112** (P2) Minimal install/usage status view — depends: JAK-109
+- [x] **JAK-113** (P0) Admin dashboard: email/password auth + sub-account connection CRUD — depends: JAK-101, JAK-102

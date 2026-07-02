@@ -262,6 +262,60 @@ describe("GhlApiClient", () => {
     });
   });
 
+  describe("sendSms (text-Jake reply, JAK-114)", () => {
+    it("posts the SMS to the Conversations API on the location's client", async () => {
+      const c = conn({ locationId: "loc_a", baseUrl: "https://a.example.com" });
+      connections.getByLocationId.mockResolvedValue(c);
+      const client = new TestGhlApiClient(connections, prodGuard);
+      client.transport.request.mockResolvedValue(ok({ conversationId: "cv_1", messageId: "m_1" }));
+
+      const result = await client.sendSms("loc_a", {
+        contactId: "ct_1",
+        message: "hi there",
+        fromNumber: "+15551230000",
+      });
+
+      // Built from THIS location's decrypted creds — never a shared/default key.
+      expect(connections.getByLocationId).toHaveBeenCalledWith("loc_a");
+      expect(client.builtFor[0].apiKey).toBe(c.apiKey);
+      const call = client.transport.request.mock.calls[0][0];
+      expect(call.method).toBe("POST");
+      expect(call.url).toBe("/conversations/messages");
+      expect(call.data).toEqual({
+        type: "SMS",
+        contactId: "ct_1",
+        message: "hi there",
+        fromNumber: "+15551230000",
+      });
+      expect(result?.messageId).toBe("m_1");
+    });
+
+    it("omits fromNumber when not provided (GHL uses the location default)", async () => {
+      connections.getByLocationId.mockResolvedValue(conn());
+      const client = new TestGhlApiClient(connections, prodGuard);
+      client.transport.request.mockResolvedValue(ok({}));
+
+      await client.sendSms("loc_1", { contactId: "ct_1", message: "hi" });
+
+      expect(client.transport.request.mock.calls[0][0].data).toEqual({
+        type: "SMS",
+        contactId: "ct_1",
+        message: "hi",
+      });
+    });
+
+    it("echoes and SKIPS the send in dev (never texts a real person)", async () => {
+      connections.getByLocationId.mockResolvedValue(conn());
+      const client = new TestGhlApiClient(connections, devGuard);
+
+      const result = await client.sendSms("loc_1", { contactId: "ct_1", message: "hi" });
+
+      expect(result).toBeNull();
+      expect(client.transport.request).not.toHaveBeenCalled();
+      expect(connections.getByLocationId).not.toHaveBeenCalled();
+    });
+  });
+
   describe("retries + rate-limit backoff", () => {
     it("retries on 429 then succeeds, honouring Retry-After (seconds)", async () => {
       connections.getByLocationId.mockResolvedValue(conn());

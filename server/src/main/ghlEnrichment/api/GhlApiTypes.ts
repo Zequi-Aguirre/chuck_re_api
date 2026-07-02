@@ -51,6 +51,17 @@ export interface GhlNote {
 }
 
 /**
+ * Result of sending an outbound SMS via the Conversations API (JAK-114 /
+ * text-Jake). GHL returns ids we don't act on; kept open so callers can log
+ * without us modelling the whole payload.
+ */
+export interface GhlSmsSendResult {
+  conversationId?: string;
+  messageId?: string;
+  [key: string]: unknown;
+}
+
+/**
  * Input for provisioning a custom field on a location (JAK-105 uses this to
  * auto-create the canonical Jake fields on install).
  */
