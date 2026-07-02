@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { CredentialCipher } from "../CredentialCipher";
 import { GhlEnrichmentConfig } from "../../config/GhlEnrichmentConfig";
 
@@ -9,7 +10,9 @@ describe("CredentialCipher", () => {
   const cipher = cipherWithKey("test-encryption-key-please-rotate");
 
   it("round-trips plaintext through encrypt/decrypt", () => {
-    const secret = "pit-701d1fa6-87fc-4bf3-931c-605953ee5682";
+    // Shape-matches a GHL Private Integration Token (`pit-<uuid>`) but is
+    // generated at runtime, so nothing secret-looking is ever committed.
+    const secret = `pit-${randomUUID()}`;
     const encrypted = cipher.encrypt(secret);
     expect(cipher.decrypt(encrypted)).toBe(secret);
   });
