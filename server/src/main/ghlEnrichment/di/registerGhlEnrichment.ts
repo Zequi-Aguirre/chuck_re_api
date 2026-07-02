@@ -2,6 +2,8 @@ import { DependencyContainer } from "tsyringe";
 import { GhlEnrichmentConfig } from "../config/GhlEnrichmentConfig";
 import { ExternalActionGuard } from "../../safety/ExternalActionGuard";
 import { PostgresDatabase } from "../../data/PostgresDatabase";
+import { AppSettingsStore } from "../../data/AppSettingsStore";
+import { PropertyReportPromptService } from "../../services/PropertyReportPromptService";
 import { CredentialCipher } from "../connections/CredentialCipher";
 import { GhlConnectionStore } from "../connections/GhlConnectionStore";
 import { GhlConnectionService } from "../connections/GhlConnectionService";
@@ -185,6 +187,20 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   if (!c.isRegistered(AdminAuthResource)) {
     c.registerSingleton(AdminAuthResource);
   }
+
+  // JAK-131 — admin-editable AI prompt. The app_settings KV store backs the
+  // editable STYLE/FORMAT prompt for the JAK-130 property report; the prompt
+  // service owns the default + a short-TTL cache and is a SINGLETON so an admin
+  // edit busts the same cache the PropertyReportWriter reads. The HARD guardrails
+  // (no emojis / only-provided-values / GoTextJake.com footer) stay in the writer,
+  // not here. Shares the one Postgres pool.
+  if (!c.isRegistered(AppSettingsStore)) {
+    c.registerSingleton(AppSettingsStore);
+  }
+  if (!c.isRegistered(PropertyReportPromptService)) {
+    c.registerSingleton(PropertyReportPromptService);
+  }
+
   if (!c.isRegistered(AdminResource)) {
     c.registerSingleton(AdminResource);
   }

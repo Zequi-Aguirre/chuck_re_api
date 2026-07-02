@@ -7,6 +7,7 @@ import { AdminConnectionService, API_KEY_MASK } from "../AdminConnectionService"
 import { AdminTextCustomerService } from "../AdminTextCustomerService";
 import { AdminResource } from "../AdminResource";
 import { AdminConnectionView, AdminTextCustomerView } from "../AdminTypes";
+import { PropertyReportPromptService } from "../../../services/PropertyReportPromptService";
 
 // Obviously-fake, low-entropy placeholder used by the reset-password tests.
 // Held in a constant (not inlined next to a `password:` key) so a secret
@@ -30,6 +31,7 @@ describe("AdminResource", () => {
   let connections: MockProxy<AdminConnectionService>;
   let textCustomers: MockProxy<AdminTextCustomerService>;
   let status: MockProxy<GhlStatusService>;
+  let reportPrompt: MockProxy<PropertyReportPromptService>;
   let app: Express;
 
   beforeEach(() => {
@@ -37,13 +39,17 @@ describe("AdminResource", () => {
     connections = mock<AdminConnectionService>();
     textCustomers = mock<AdminTextCustomerService>();
     status = mock<GhlStatusService>();
+    reportPrompt = mock<PropertyReportPromptService>();
     // Default: authenticated AS A SUPERADMIN so the admin-management tests reach
     // their handlers. Individual tests override to a plain admin / no session.
     auth.verifyToken.mockReturnValue({ sub: "admin-id", email: "admin@example.com", role: "superadmin" });
 
     app = express();
     app.use(express.json());
-    app.use("/api/admin", new AdminResource(auth, connections, textCustomers, status).router);
+    app.use(
+      "/api/admin",
+      new AdminResource(auth, connections, textCustomers, status, reportPrompt).router
+    );
   });
 
   const asAdmin = (req: request.Test) => req.set("Authorization", "Bearer valid.token");
@@ -240,6 +246,72 @@ describe("AdminResource", () => {
       expect(res.status).toBe(200);
       expect(res.body.balance).toBe(5);
       expect(textCustomers.grantCredits).toHaveBeenCalledWith("+17865274077", 5, "manual_grant");
+    });
+  });
+
+  // --- AI prompt (JAK-131) --------------------------------------------------
+
+  describe("AI prompt (report-prompt)", () => {
+    const promptView = (over: Record<string, unknown> = {}) => ({
+      prompt: "STYLE PROMPT",
+      isDefault: false,
+      updatedAt: new Date("2026-07-02T00:00:00Z"),
+      updatedBy: "admin-id",
+      ...over,
+    });
+
+    it("is behind the auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app).get("/api/admin/report-prompt");
+      expect(res.status).toBe(401);
+      expect(reportPrompt.getView).not.toHaveBeenCalled();
+    });
+
+    it("is available to a REGULAR admin — NOT superadmin-gated (JAK-131)", async () => {
+      asPlainAdmin();
+      reportPrompt.getView.mockResolvedValue(promptView({ isDefault: true }) as never);
+      reportPrompt.setPrompt.mockResolvedValue(promptView({ prompt: "NEW" }) as never);
+      reportPrompt.resetPrompt.mockResolvedValue(promptView({ isDefault: true }) as never);
+
+      expect((await asAdmin(request(app).get("/api/admin/report-prompt"))).status).toBe(200);
+      expect(
+        (await asAdmin(request(app).put("/api/admin/report-prompt").send({ prompt: "NEW" }))).status
+      ).toBe(200);
+      expect(
+        (await asAdmin(request(app).post("/api/admin/report-prompt/reset"))).status
+      ).toBe(200);
+    });
+
+    it("GET returns the effective prompt view", async () => {
+      reportPrompt.getView.mockResolvedValue(promptView() as never);
+      const res = await asAdmin(request(app).get("/api/admin/report-prompt"));
+      expect(res.status).toBe(200);
+      expect(res.body.prompt).toBe("STYLE PROMPT");
+      expect(res.body.isDefault).toBe(false);
+    });
+
+    it("PUT saves a non-empty prompt with the editing admin id", async () => {
+      reportPrompt.setPrompt.mockResolvedValue(promptView({ prompt: "Terse mode" }) as never);
+      const res = await asAdmin(
+        request(app).put("/api/admin/report-prompt").send({ prompt: "  Terse mode  " })
+      );
+      expect(res.status).toBe(200);
+      // Trimmed, and attributed to the logged-in admin (sub: "admin-id").
+      expect(reportPrompt.setPrompt).toHaveBeenCalledWith("Terse mode", "admin-id");
+    });
+
+    it("PUT 400s an empty prompt", async () => {
+      const res = await asAdmin(request(app).put("/api/admin/report-prompt").send({ prompt: "   " }));
+      expect(res.status).toBe(400);
+      expect(reportPrompt.setPrompt).not.toHaveBeenCalled();
+    });
+
+    it("reset reverts to the default", async () => {
+      reportPrompt.resetPrompt.mockResolvedValue(promptView({ isDefault: true }) as never);
+      const res = await asAdmin(request(app).post("/api/admin/report-prompt/reset"));
+      expect(res.status).toBe(200);
+      expect(res.body.isDefault).toBe(true);
+      expect(reportPrompt.resetPrompt).toHaveBeenCalled();
     });
   });
 

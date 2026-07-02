@@ -6,6 +6,7 @@ import { AdminConnectionService } from "./AdminConnectionService";
 import { AdminTextCustomerService } from "./AdminTextCustomerService";
 import { requireAdminAuth, requireSuperadmin } from "./requireAdminAuth";
 import { AdminRole } from "./AdminTypes";
+import { PropertyReportPromptService } from "../../services/PropertyReportPromptService";
 
 /**
  * The admin dashboard's data API (JAK-113) — CRUD over connected sub-accounts,
@@ -48,7 +49,8 @@ export class AdminResource {
     @inject(AdminAuthService) private readonly auth: AdminAuthService,
     @inject(AdminConnectionService) private readonly connections: AdminConnectionService,
     @inject(AdminTextCustomerService) private readonly textCustomers: AdminTextCustomerService,
-    @inject(GhlStatusService) private readonly status: GhlStatusService
+    @inject(GhlStatusService) private readonly status: GhlStatusService,
+    @inject(PropertyReportPromptService) private readonly reportPrompt: PropertyReportPromptService
   ) {
     this.router = Router();
     this.configureRoutes();
@@ -72,6 +74,15 @@ export class AdminResource {
     // connection's locationId, so a gateway texter can finally be topped up.
     this.router.get("/text-customers", this.listTextCustomers.bind(this));
     this.router.post("/text-customers/credits", this.grantTextCustomerCredits.bind(this));
+
+    // AI prompt — the admin-editable STYLE/FORMAT prompt for the JAK-130 property
+    // report (JAK-131). Available to ANY logged-in admin (requireAuth only — NOT
+    // behind requireSuperadmin), so a regular operator can tune the report's look.
+    // The HARD guardrails (no emojis / only-provided-values / GoTextJake.com
+    // footer) are enforced in the writer and are NOT editable here.
+    this.router.get("/report-prompt", this.getReportPrompt.bind(this));
+    this.router.put("/report-prompt", this.updateReportPrompt.bind(this));
+    this.router.post("/report-prompt/reset", this.resetReportPrompt.bind(this));
 
     // Admin management (JAK-124, restricted in JAK-125): ONLY a superadmin may
     // manage other admins. requireSuperadmin runs after the router-level
@@ -335,6 +346,52 @@ export class AdminResource {
     }
   }
 
+  // --- AI prompt (JAK-131) --------------------------------------------------
+
+  /** Return the effective editable STYLE prompt + whether it is still the default. */
+  private async getReportPrompt(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.reportPrompt.getView();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /**
+   * Save an admin-edited STYLE prompt. The body's `prompt` is the style/format
+   * text ONLY — the hard guardrails are enforced by the writer regardless, so
+   * there is nothing dangerous to reject here beyond an empty value. Records the
+   * editing admin (req.admin.sub) for the audit stamp.
+   */
+  private async updateReportPrompt(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const prompt = typeof req.body?.prompt === "string" ? req.body.prompt.trim() : "";
+      if (!prompt) {
+        return res.status(400).json({ error: "prompt is required" });
+      }
+      if (prompt.length > MAX_PROMPT_LENGTH) {
+        return res
+          .status(400)
+          .json({ error: `prompt must be at most ${MAX_PROMPT_LENGTH} characters` });
+      }
+      const view = await this.reportPrompt.setPrompt(prompt, req.admin?.sub ?? null);
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /** Revert the STYLE prompt to the code default (clears the stored value). */
+  private async resetReportPrompt(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.reportPrompt.resetPrompt();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
   /**
    * A duplicate location_id is a client error (that sub-account is already
    * connected), not a 500. Postgres unique-violation is code 23505.
@@ -349,6 +406,9 @@ export class AdminResource {
 
 /** Minimum length for an admin-chosen password (JAK-124). */
 const MIN_PASSWORD_LENGTH = 8;
+
+/** Upper bound on the editable report STYLE prompt (JAK-131) — a sane guardrail. */
+const MAX_PROMPT_LENGTH = 8000;
 
 /** Pragmatic email shape check — a single `@` with non-empty, dot-bearing sides. */
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

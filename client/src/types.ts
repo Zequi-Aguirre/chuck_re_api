@@ -92,3 +92,16 @@ export interface AdminUserView {
   role: AdminRole;
   createdAt: string;
 }
+
+/**
+ * The editable AI STYLE/FORMAT prompt for the "Jake Property Report" (JAK-131).
+ * `prompt` is the effective value (the stored edit, or the code default when
+ * `isDefault`). The hard guardrails (no emojis / only-provided-values /
+ * GoTextJake.com footer) are NOT part of this — the server enforces them.
+ */
+export interface ReportPromptView {
+  prompt: string;
+  isDefault: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
