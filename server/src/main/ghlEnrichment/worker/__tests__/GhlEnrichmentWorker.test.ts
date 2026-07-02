@@ -8,6 +8,7 @@ import { GhlCustomFieldRow, GhlCustomFieldStore } from "../../lifecycle/GhlCusto
 import { JAKE_CUSTOM_FIELDS } from "../../lifecycle/JakeCustomFields";
 import { RealEstateApiDao } from "../../../data/RealEstateApiDao";
 import { EnrichmentResult } from "../../../types/LeadEnrichment";
+import { CreditService } from "../../metering/CreditService";
 import { ENRICHMENT_NOTE_HEADING } from "../EnrichmentNote";
 import { GhlEnrichmentEventRow, GhlEnrichmentEventStore } from "../GhlEnrichmentEventStore";
 import { GhlEnrichmentWorker } from "../GhlEnrichmentWorker";
@@ -80,6 +81,7 @@ describe("GhlEnrichmentWorker", () => {
   let fields: MockProxy<GhlCustomFieldStore>;
   let realEstate: MockProxy<RealEstateApiDao>;
   let events: MockProxy<GhlEnrichmentEventStore>;
+  let credits: MockProxy<CreditService>;
   let worker: GhlEnrichmentWorker;
 
   beforeEach(() => {
@@ -88,10 +90,11 @@ describe("GhlEnrichmentWorker", () => {
     fields = mock<GhlCustomFieldStore>();
     realEstate = mock<RealEstateApiDao>();
     events = mock<GhlEnrichmentEventStore>();
-    worker = new GhlEnrichmentWorker(client, connections, fields, realEstate, events);
+    credits = mock<CreditService>();
+    worker = new GhlEnrichmentWorker(client, connections, fields, realEstate, events, credits);
 
     // Happy-path defaults: never processed, active connection, contact + property
-    // found, every canonical field provisioned, writes succeed.
+    // found, every canonical field provisioned, writes succeed, credits cover it.
     events.findByContact.mockResolvedValue(null);
     events.record.mockImplementation(async (i) => eventRow(i as Partial<GhlEnrichmentEventRow>));
     connections.getByLocationId.mockResolvedValue(conn());
@@ -100,6 +103,9 @@ describe("GhlEnrichmentWorker", () => {
     fields.listByLocation.mockResolvedValue(JAKE_CUSTOM_FIELDS.map((d) => fieldRow(d.key)));
     client.updateContactCustomFields.mockResolvedValue(undefined);
     client.createNote.mockResolvedValue({ id: "note_1", body: "x" });
+    credits.hasSufficientCredits.mockResolvedValue(true);
+    credits.costOf.mockReturnValue(1);
+    credits.chargeForEnrichment.mockResolvedValue({ ok: true, balanceAfter: 9, entries: [] });
   });
 
   describe("happy path", () => {
@@ -123,8 +129,16 @@ describe("GhlEnrichmentWorker", () => {
         "ct_1",
         expect.stringContaining(ENRICHMENT_NOTE_HEADING)
       );
+      expect(credits.chargeForEnrichment).toHaveBeenCalledWith(
+        expect.objectContaining({ locationId: "loc_1", contactId: "ct_1", plan: { skipTrace: false } })
+      );
       expect(events.record).toHaveBeenCalledWith(
-        expect.objectContaining({ location_id: "loc_1", contact_id: "ct_1", status: "enriched" })
+        expect.objectContaining({
+          location_id: "loc_1",
+          contact_id: "ct_1",
+          status: "enriched",
+          cost_estimate: 1,
+        })
       );
     });
 
@@ -203,6 +217,53 @@ describe("GhlEnrichmentWorker", () => {
       expect(outcome.status).toBe("enriched");
       expect(client.updateContactCustomFields).not.toHaveBeenCalled();
       expect(client.createNote).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("credit metering (JAK-109)", () => {
+    it("blocks and records credit_blocked when the location can't afford it — no paid work, no charge", async () => {
+      credits.hasSufficientCredits.mockResolvedValue(false);
+
+      const outcome = await worker.process(JOB);
+
+      expect(outcome).toEqual({ status: "credit_blocked", detail: "insufficient_credits" });
+      // The credit check gates BEFORE the paid enrichment call + write-back.
+      expect(realEstate.getEnrichmentDataByAddress).not.toHaveBeenCalled();
+      expect(client.updateContactCustomFields).not.toHaveBeenCalled();
+      expect(client.createNote).not.toHaveBeenCalled();
+      expect(credits.chargeForEnrichment).not.toHaveBeenCalled();
+      expect(events.record).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "credit_blocked" })
+      );
+    });
+
+    it("checks credits only after confirming there is real work to do", async () => {
+      // No usable address → a free skip; we must not even check credits.
+      client.getContact.mockResolvedValue(
+        contact({ address1: "", city: "", state: "", postalCode: "" })
+      );
+      await worker.process(JOB);
+      expect(credits.hasSufficientCredits).not.toHaveBeenCalled();
+    });
+
+    it("does not charge when there is no property match", async () => {
+      realEstate.getEnrichmentDataByAddress.mockResolvedValue(null);
+      const outcome = await worker.process(JOB);
+      expect(outcome).toEqual({ status: "skipped", detail: "no_property_match" });
+      expect(credits.chargeForEnrichment).not.toHaveBeenCalled();
+    });
+
+    it("still records the enrichment (charged 0) if the atomic charge loses a race", async () => {
+      credits.chargeForEnrichment.mockResolvedValue({ ok: false, balance: 0, required: 1 });
+
+      const outcome = await worker.process(JOB);
+
+      expect(outcome.status).toBe("enriched");
+      // Value was delivered (write-back happened) — record it, but charge 0.
+      expect(client.updateContactCustomFields).toHaveBeenCalledTimes(1);
+      expect(events.record).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "enriched", cost_estimate: 0 })
+      );
     });
   });
 

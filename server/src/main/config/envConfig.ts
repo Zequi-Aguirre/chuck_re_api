@@ -1,6 +1,18 @@
 import dotenv from "dotenv";
 dotenv.config();
 
+/**
+ * Parse a non-negative integer from an env var, falling back to `fallback` when
+ * the value is missing, non-numeric, negative, or fractional. Used for tunable
+ * pricing constants (JAK-109 credit costs) where a malformed override must never
+ * silently zero out a charge.
+ */
+function positiveIntFromEnv(raw: string | undefined, fallback: number): number {
+    if (raw === undefined || raw.trim() === "") return fallback;
+    const n = Number(raw);
+    return Number.isInteger(n) && n >= 0 ? n : fallback;
+}
+
 export class EnvConfig {
     // 🌐 General app configuration
     public readonly clientUrl: string;
@@ -39,6 +51,12 @@ export class EnvConfig {
     public readonly ghlWebhookSecret: string;
     public readonly ghlCredentialEncKey: string;
 
+    // 🎟️ Credit metering (JAK-109). Per-operation credit costs, config-driven so
+    // the economics can be tuned without a code change (these are NOT secrets —
+    // just tunable pricing constants with safe defaults).
+    public readonly creditCostEnrichment: number;
+    public readonly creditCostSkipTrace: number;
+
     constructor() {
         // 🌐 App
         this.clientUrl = process.env.VITE_ASKZACK_CLIENT_URL!;
@@ -76,6 +94,13 @@ export class EnvConfig {
         this.ghlClientSecret = process.env.GHL_CLIENT_SECRET ?? "";
         this.ghlWebhookSecret = process.env.GHL_WEBHOOK_SECRET ?? "";
         this.ghlCredentialEncKey = process.env.GHL_CREDENTIAL_ENC_KEY ?? "";
+
+        // 🎟️ Credit costs (JAK-109). Defaults: 1 credit per enriched record, +2
+        // extra for a skip-trace on top of it. Override per environment via
+        // Doppler when the economics firm up. Non-finite/negative values fall
+        // back to the default so a bad env var can never make work "free".
+        this.creditCostEnrichment = positiveIntFromEnv(process.env.CREDIT_COST_ENRICHMENT, 1);
+        this.creditCostSkipTrace = positiveIntFromEnv(process.env.CREDIT_COST_SKIP_TRACE, 2);
     }
 
     // 🌱 Canonical env-stage helper (Automator pattern). This is the single

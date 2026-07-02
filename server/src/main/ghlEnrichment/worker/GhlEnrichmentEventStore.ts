@@ -8,8 +8,14 @@ import { PostgresDatabase } from "../../data/PostgresDatabase";
  *   - `skipped`  — a permanent, non-error outcome (inactive location, contact
  *     gone, no usable address, no property match). Not worth retrying.
  *   - `failed`   — an error occurred; `detail` carries a short, secret-free note.
+ *   - `credit_blocked` — the location had insufficient credits (JAK-109), so no
+ *     paid work ran. Not an error; reprocesses cleanly once credits are granted.
  */
-export type EnrichmentEventStatus = "enriched" | "skipped" | "failed";
+export type EnrichmentEventStatus =
+  | "enriched"
+  | "skipped"
+  | "failed"
+  | "credit_blocked";
 
 /** Raw persistence row for the `ghl_enrichment_events` table (JAK-107). */
 export interface GhlEnrichmentEventRow {

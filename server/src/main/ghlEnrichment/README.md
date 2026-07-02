@@ -120,9 +120,44 @@ structured and secret-free — the decrypted Bearer token is never logged.
 With JAK-107 the core enrichment spine is end-to-end
 (JAK-104 → 105 → 106 → 108 → 107): install provisions fields, a new contact fires
 the webhook, the job enqueues, and the worker enriches + writes back. What
-remains off this spine: **JAK-109** usage metering (the events store already
-feeds it), **JAK-111** failure-handling hardening, **JAK-113** admin dashboard,
-and **JAK-114** multi-tenant text-Jake routing.
+remains off this spine: **JAK-111** failure-handling hardening, **JAK-113** admin
+dashboard, and **JAK-114** multi-tenant text-Jake routing.
+
+## What JAK-109 added (credit metering — the prepaid credit system)
+
+The app runs on **prepaid credits**. Each location has a credit balance; the
+worker charges against it and refuses paid work it can't afford. Billing / Stripe
+top-ups are **deferred** — for beta, credits are added manually
+(`CreditService.grantCredits`).
+
+- `metering/CreditCosts.ts` — pure, config-driven cost model. Per-operation costs
+  are constants sourced from Doppler (`CREDIT_COST_ENRICHMENT`,
+  `CREDIT_COST_SKIP_TRACE`) with safe defaults (1 per record, **+2 extra** for a
+  skip-trace *on top of* the base). A charge is itemized into lines (one
+  `enrichment` line, plus a `skip_trace` line when applicable) so the ledger
+  shows *what* was paid for.
+- `metering/CreditLedgerStore.ts` — SQL data-access. Owns the only real
+  concurrency in the module: `charge()` deducts **atomically** without
+  overdrawing (row-locked `SELECT … FOR UPDATE` on `credit_balances`, balance
+  update + ledger insert in one transaction — never a half-charge). `grant()`
+  adds credits the same way. Balance is a maintained column kept consistent with
+  the append-only ledger; `balance_after` snapshots make history reconstructable.
+- `metering/CreditService.ts` — business surface: price a plan, check
+  affordability, charge on success, grant (beta), and `getAccountSummary()` (the
+  simple internal read of balance + recent ledger that JAK-112's status view
+  builds on).
+- Migration: `supabase/migrations/*_create_credit_ledger.sql` (`credit_ledger` +
+  `credit_balances`; snake_case, `created/modified/deleted` timestamps, no FK so
+  billing history outlives a connection delete).
+
+Worker wiring: the worker checks the balance **before** any paid work; if short,
+it records status `credit_blocked` and skips (no free enrichment, reprocesses
+once credits are granted). On a successful write-back it deducts atomically and
+records the charged amount as the event's `cost_estimate`. A no-property-match is
+**not** charged (no value delivered). `skipTrace` is `false` on today's path —
+the engine doesn't skip-trace yet; flipping the flag applies the extra cost
+automatically. What remains: **JAK-111** failure hardening, **JAK-112/113**
+status/admin views, **JAK-155** tier caps + Stripe billing.
 
 Env / secrets are Doppler-provided via `EnvConfig`:
 `GHL_CLIENT_ID`, `GHL_CLIENT_SECRET`, `GHL_WEBHOOK_SECRET`,

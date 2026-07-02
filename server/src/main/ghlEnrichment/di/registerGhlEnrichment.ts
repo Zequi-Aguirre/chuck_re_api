@@ -13,6 +13,8 @@ import { GhlWebhookVerifier } from "../webhook/GhlWebhookVerifier";
 import { GhlEnrichmentWebhookResource } from "../webhook/GhlEnrichmentWebhookResource";
 import { GhlEnrichmentEventStore } from "../worker/GhlEnrichmentEventStore";
 import { GhlEnrichmentWorker } from "../worker/GhlEnrichmentWorker";
+import { CreditLedgerStore } from "../metering/CreditLedgerStore";
+import { CreditService } from "../metering/CreditService";
 
 /**
  * DI registration for the GHL enrichment module.
@@ -100,6 +102,20 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   if (!c.isRegistered(GhlEnrichmentEventStore)) {
     c.registerSingleton(GhlEnrichmentEventStore);
   }
+
+  // JAK-109 — credit metering: the prepaid credit system the worker charges
+  // against. The ledger store owns atomic deduct-without-overdraw (row-locked
+  // txn against credit_balances) + the append-only credit_ledger; the service
+  // wraps it with the config-driven per-operation costs and the balance read.
+  // Registered BEFORE the worker so its injection resolves. Shares the one
+  // Postgres pool with every other store.
+  if (!c.isRegistered(CreditLedgerStore)) {
+    c.registerSingleton(CreditLedgerStore);
+  }
+  if (!c.isRegistered(CreditService)) {
+    c.registerSingleton(CreditService);
+  }
+
   if (!c.isRegistered(GhlEnrichmentWorker)) {
     c.registerSingleton(GhlEnrichmentWorker);
   }

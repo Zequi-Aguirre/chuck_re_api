@@ -1,5 +1,6 @@
 import { injectable } from "tsyringe";
 import { EnvConfig } from "../../config/envConfig";
+import { CreditCostConfig } from "../metering/CreditCosts";
 
 /**
  * Module-scoped configuration surface for the GHL enrichment app.
@@ -44,6 +45,18 @@ export class GhlEnrichmentConfig {
   /** Base URL for GHL API calls. */
   get apiBaseUrl(): string {
     return this.env.ghlBaseUrl;
+  }
+
+  /**
+   * Per-operation credit costs (JAK-109). Config-driven so the enrichment
+   * economics can be tuned per environment without a code change. Not secrets —
+   * tunable pricing constants with safe defaults resolved in {@link EnvConfig}.
+   */
+  get creditCosts(): CreditCostConfig {
+    return {
+      enrichmentBaseCredits: this.env.creditCostEnrichment,
+      skipTraceCredits: this.env.creditCostSkipTrace,
+    };
   }
 
   // Env-stage passthrough. The dev/staging write-safety rule (SPEC §8 — never

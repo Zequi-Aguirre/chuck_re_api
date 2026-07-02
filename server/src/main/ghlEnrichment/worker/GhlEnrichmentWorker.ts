@@ -10,6 +10,8 @@ import {
 import { GhlCustomFieldStore } from "../lifecycle/GhlCustomFieldStore";
 import { RealEstateApiDao } from "../../data/RealEstateApiDao";
 import { EnrichmentJobPayload } from "../../types/LeadEnrichment";
+import { EnrichmentCostPlan } from "../metering/CreditCosts";
+import { CreditService } from "../metering/CreditService";
 import { buildEnrichmentNote } from "./EnrichmentNote";
 import {
   EnrichmentEventStatus,
@@ -62,7 +64,8 @@ export class GhlEnrichmentWorker {
     @inject(GhlConnectionService) private readonly connections: GhlConnectionService,
     @inject(GhlCustomFieldStore) private readonly fields: GhlCustomFieldStore,
     @inject(RealEstateApiDao) private readonly realEstate: RealEstateApiDao,
-    @inject(GhlEnrichmentEventStore) private readonly events: GhlEnrichmentEventStore
+    @inject(GhlEnrichmentEventStore) private readonly events: GhlEnrichmentEventStore,
+    @inject(CreditService) private readonly credits: CreditService
   ) {}
 
   /**
@@ -116,17 +119,30 @@ export class GhlEnrichmentWorker {
       return this.skip(ctx, "no_address");
     }
 
-    // 5. Run Jake's existing enrichment engine (reuse, don't rebuild).
+    // 5. Metering gate (JAK-109). BEFORE any paid work, confirm the location has
+    //    enough credits. If not, record `credit_blocked` and skip — we never
+    //    enrich for free and never half-charge. `skipTrace` is false on this path
+    //    (the enrichment engine doesn't skip-trace yet); when it does, flipping
+    //    the flag applies the extra cost automatically via the config-driven
+    //    credit costs — no other change here.
+    const plan: EnrichmentCostPlan = { skipTrace: false };
+    if (!(await this.credits.hasSufficientCredits(locationId, plan))) {
+      return this.creditBlocked(ctx, plan);
+    }
+
+    // 6. Run Jake's existing enrichment engine (reuse, don't rebuild).
     const result = await this.realEstate.getEnrichmentDataByAddress(address);
     if (!result) {
+      // Nothing to write back — the customer gets no value, so we don't charge
+      // (the external lookup cost is ours to absorb). Recorded as a plain skip.
       return this.skip(ctx, "no_property_match");
     }
 
-    // 6. Map to the location's provisioned custom fields (JAK-108 × JAK-105).
+    // 7. Map to the location's provisioned custom fields (JAK-108 × JAK-105).
     const rows = await this.fields.listByLocation(locationId);
     const customFields = mapEnrichmentToCustomFields(result, buildLocationFieldIdMap(rows));
 
-    // 7. Write back + summary note. Both go through the client's §8 write-safety
+    // 8. Write back + summary note. Both go through the client's §8 write-safety
     //    gate (dev echoes/skips). An empty payload means the location has no Jake
     //    fields provisioned yet — note still goes out; nothing to update.
     try {
@@ -140,14 +156,51 @@ export class GhlEnrichmentWorker {
       return this.fail(err, ctx, "write-back");
     }
 
-    // 8. Record success for idempotency + metering.
+    // 9. Charge for the delivered enrichment, atomically (JAK-109). The pre-check
+    //    (step 5) already confirmed funds; this deducts + writes the ledger. On
+    //    the rare concurrent-drain race the pre-check can't catch, we log loudly
+    //    but still record the enrichment — value was delivered — and charge 0.
+    const charge = await this.credits.chargeForEnrichment({ locationId, contactId, plan });
+    const charged = charge.ok ? this.credits.costOf(plan) : 0;
+    if (!charge.ok) {
+      this.log(
+        "error",
+        `enriched but charge failed — insufficient credits at commit ` +
+          `(had ${charge.balance}, needed ${charge.required})`,
+        ctx
+      );
+    }
+
+    // 10. Record success for idempotency + metering. cost_estimate = credits
+    //     actually charged.
     await this.events.record({
       location_id: locationId,
       contact_id: contactId,
       status: "enriched",
+      cost_estimate: charged,
     });
-    this.log("info", "enriched", ctx);
+    this.log("info", `enriched (charged ${charged} credits)`, ctx);
     return { status: "enriched" };
+  }
+
+  /**
+   * Record that the location can't afford this enrichment and complete the job
+   * cleanly (JAK-109). Not an error and not a plain skip: no paid work ran, and
+   * the row reprocesses once credits are granted. Never enriches for free.
+   */
+  private async creditBlocked(
+    ctx: JobContext,
+    plan: EnrichmentCostPlan
+  ): Promise<EnrichmentOutcome> {
+    const required = this.credits.costOf(plan);
+    await this.events.record({
+      location_id: ctx.locationId,
+      contact_id: ctx.contactId,
+      status: "credit_blocked",
+      detail: `insufficient_credits (needed ${required})`,
+    });
+    this.log("warn", `credit-blocked — needs ${required} credits`, ctx);
+    return { status: "credit_blocked", detail: "insufficient_credits" };
   }
 
   /** Record a permanent, non-error outcome and complete the job cleanly. */
