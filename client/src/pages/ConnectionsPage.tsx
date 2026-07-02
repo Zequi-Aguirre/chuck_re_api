@@ -69,7 +69,7 @@ export function ConnectionsPage() {
         </Paper>
       ) : (
         <TableContainer component={Paper}>
-          <Table>
+          <Table sx={{ minWidth: 640 }}>
             <TableHead>
               <TableRow>
                 <TableCell>Location ID</TableCell>

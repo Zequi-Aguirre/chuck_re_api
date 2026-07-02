@@ -7,7 +7,7 @@
 
 Epic: `ghl-enrichment`
 
-## In progress (7)
+## In progress (8)
 - [ ] **JAK-115** (P0) Master GHL gateway key + mode-aware text-Jake (gateway vs own_number) — depends: JAK-102, JAK-109, JAK-114
 - [ ] **JAK-118** (P2) Remove dead scaffold-clone env vars (VITE_ASKZACK_CLIENT_URL/SERVER_URL, VITE_ASKZOE_SERVER_URL, LOCAL_NGROK_URL)
 - [ ] **JAK-120** (P1) Comprehensive DEPLOY.md refresh: single up-to-date staging setup doc — depends: JAK-116, JAK-117, JAK-118, JAK-119
@@ -15,6 +15,7 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-122** (P1) Align Jake migrations to house pattern (postgrator-cli + postgres/migrate.sh, retire Supabase tooling) — depends: JAK-117
 - [ ] **JAK-123** (P1) DEPLOY.md: add explicit 'Render Service Settings' block (build-admin gotcha) — depends: JAK-121
 - [ ] **JAK-125** (P1) Superadmin role: restrict admin management (add/manage/deactivate/reset-password) to superadmins — depends: JAK-113, JAK-124
+- [ ] **JAK-126** (P1) Responsive admin dashboard with left sidebar nav (MUI Drawer) — depends: JAK-113, JAK-125
 
 ## Open (4)
 - [ ] **JAK-103** (P0) Token refresh service — depends: JAK-102
