@@ -67,3 +67,12 @@ export type {
   ParsedContactWebhook,
   RawGhlWebhookBody,
 } from "./webhook/GhlWebhookTypes";
+
+// JAK-108 — pure enrichment → GHL custom-field mapping. Turns an EnrichmentResult
+// + a location's field-id map into the updateContactCustomFields payload, using
+// the one canonical field catalog (JAK-105) so keys never drift. No I/O.
+export {
+  mapEnrichmentToCustomFields,
+  buildLocationFieldIdMap,
+} from "./fieldMapping/EnrichmentFieldMapper";
+export type { LocationFieldIdMap } from "./fieldMapping/EnrichmentFieldMapper";
