@@ -67,7 +67,7 @@ Known, fixed, or generated values — set once and move on.
 | `DB_PASS` | Postgres password from step 1. |
 | `DB_DB` | Postgres database name from step 1. |
 | `JWT_SECRET` | Signs admin-session JWTs. Any long random string (`openssl rand -hex 32`). |
-| `MASTER_API_KEY` | Internal header secret guarding `POST /api/sms/inbound` and `GET /api/ghl/status/*`. Any long random string; used in the smoke test (step 7). |
+| `MASTER_API_KEY` | Internal header secret guarding `POST /api/sms/inbound` and `GET /api/ghl/status/*`. Any long random string; used in the smoke test (step 8). |
 | `GHL_CREDENTIAL_ENC_KEY` | App-level secret that encrypts each tenant's GHL key at rest (AES-256-GCM, key = SHA-256 of this value). `openssl rand -base64 32`. |
 | `JAKE_GATEWAY_BASE_URL` | GHL API base for the gateway client: `https://services.leadconnectorhq.com`. |
 | `RE_API_KEY` | RealEstate API key (house key). Sent as `x-api-key` on text-Jake's property lookup. Unset → lookups return null and the smoke-test reply/note never happens. |
@@ -207,7 +207,82 @@ Text-Jake runs in one of two modes per connection (`ghl_connections.text_mode`):
 
 ---
 
-## 7. Smoke test
+## 7. GHL setup — connect GHL to the running server
+
+Steps 1–6 stand up the server; this step wires the **Jake gateway sub-account**
+to it so real texts flow. Two directions, and they're asymmetric:
+
+- **Inbound** (GHL → server): needs **one Workflow** that POSTs each inbound text
+  to the server's webhook.
+- **Outbound** (the reply, server → GHL): needs **no automation** — Jake replies
+  by calling the GHL API itself. You only have to grant the right scope.
+
+### 7a. Inbound — a "Customer Replied" Workflow
+
+In the Jake gateway sub-account (`JAKE_GATEWAY_LOCATION_ID`) → **Automation →
+Workflows** → create a workflow:
+
+- **Trigger:** **Customer Replied** — fires on an inbound message from a contact.
+- **Action:** **Webhook**, configured as:
+  - **Method:** `POST`
+  - **URL:** `<your-server>/api/sms/inbound`
+    (staging: `https://chuck-re-api.onrender.com/api/sms/inbound`)
+  - **Custom header:** `x-master-api-key` = your `MASTER_API_KEY` (the Doppler
+    value from step 2). Missing or wrong → the endpoint returns **401** and never
+    calls the assistant.
+  - **JSON body:**
+
+```json
+{
+  "from": "{{contact.phone}}",
+  "contactId": "{{contact.id}}",
+  "message": "{{message.body}}",
+  "locationId": "{{location.id}}"
+}
+```
+
+What the endpoint reads (`JakeSmsResource.handleInbound`) — GHL webhook field
+names vary, so each field has accepted alternates:
+
+| Field | Meaning | Alternates also accepted |
+|---|---|---|
+| `from` | **Sender** phone — the person texting in; the **billing identity** | `fromNumber`, `from_number`, `phone` |
+| `contactId` | GHL contact id (the reply target) | `contact_id`, `userId` |
+| `message` | inbound text body | `body`, `text` |
+| `locationId` | sub-account id (own-number routing context) | `location_id` |
+
+`from`, `contactId`, and `message` are **required** — omit any (or send an empty
+message) and the endpoint returns **400** without calling the assistant.
+`locationId` is optional.
+
+### 7b. Outbound (the reply) — no second automation
+
+Jake sends the reply itself; **do not** build an outbound Workflow.
+`JakeGatewayClient.sendSms` calls GHL **`POST /conversations/messages`** with the
+master **gateway** key (`JAKE_GATEWAY_GHL_API_KEY`), body
+`{ "type": "SMS", "contactId": "…", "message": "…" }`. Requirements:
+
+- **Scope (mandatory):** the gateway Private Integration token
+  (`JAKE_GATEWAY_GHL_API_KEY`, step 2 group B) **must** have the **Conversations →
+  Send Messages (write)** scope, or GHL rejects every reply. Grant it when you
+  create the Private Integration.
+- **From number:** no `fromNumber` is sent, so the reply goes out on the
+  sub-account's **default** number.
+- **Real vs echoed:** on **staging/prod** the reply is a **real SMS**
+  (`ExternalActionGuard.liveActionsAllowed = isProduction || isStaging`). In
+  **dev** it's echo-skipped — you'll see `🧪 [dev safety] skipped Jake gateway
+  write …` in the logs and nothing is sent.
+
+### 7c. End-to-end test
+
+From a real phone, text the **Jake gateway number** a property address
+(e.g. `123 Main St, Springfield IL`). Within a few seconds you should get a
+**property reply** SMS back, and a short status note ("looked up …") appears on
+the contact in GHL. This is the live equivalent of the step 8 inbound curl below.
+
+---
+
+## 8. Smoke test
 
 Liveness — the admin SPA shell (there is no dedicated `/health` route):
 

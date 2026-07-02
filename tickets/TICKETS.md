@@ -7,10 +7,11 @@
 
 Epic: `ghl-enrichment`
 
-## In progress (3)
+## In progress (4)
 - [ ] **JAK-115** (P0) Master GHL gateway key + mode-aware text-Jake (gateway vs own_number) — depends: JAK-102, JAK-109, JAK-114
 - [ ] **JAK-118** (P2) Remove dead scaffold-clone env vars (VITE_ASKZACK_CLIENT_URL/SERVER_URL, VITE_ASKZOE_SERVER_URL, LOCAL_NGROK_URL)
 - [ ] **JAK-120** (P1) Comprehensive DEPLOY.md refresh: single up-to-date staging setup doc — depends: JAK-116, JAK-117, JAK-118, JAK-119
+- [ ] **JAK-121** (P1) Add 'GHL setup' section to DEPLOY.md (connect GHL to the running server) — depends: JAK-120
 
 ## Open (3)
 - [ ] **JAK-103** (P0) Token refresh service — depends: JAK-102
