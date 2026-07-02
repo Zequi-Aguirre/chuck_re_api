@@ -17,11 +17,16 @@ migrations in `supabase/migrations/`, and the env vars in
 
 1. Render Dashboard → **New +** → **PostgreSQL**.
 2. Name it (e.g. `jake-staging-db`), pick a region + plan, **Create Database**.
-3. Once it's live, open the DB → **Connections** → copy the **External Database
-   URL** (`postgres://user:pass@host/dbname`). This is your `DATABASE_URL`.
-   - Use the **Internal** URL for the web service if the DB and service share a
-     region (faster, no egress); use the **External** URL when running migrations
-     from your laptop.
+3. Once it's live, open the DB → **Connections** and read off the discrete
+   connection fields — **Hostname**, **Port**, **Username**, **Password**,
+   **Database**. These map straight onto the HOUSE PATTERN vars in step 2
+   (`DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASS` / `DB_DB`) — Jake no longer
+   uses a single `DATABASE_URL`.
+   - **Render host gotcha:** the **Internal** hostname (a short name like
+     `jake-staging-db`) only resolves in-cluster — use it for `DB_HOST` on the
+     Render web service when the DB and service share a region (faster, no
+     egress). To reach the DB from your laptop (e.g. migrations), use the
+     **External** host, which is `${DB_HOST}.ohio-postgres.render.com`.
 
 The schema is created by the migrations in step 3 — the DB starts empty.
 
@@ -34,7 +39,11 @@ Render). Each is read in `server/src/main/config/envConfig.ts`.
 
 | Var | Purpose |
 |---|---|
-| `DATABASE_URL` | Render Postgres connection string. Backs the connection/credential store, admin users, credit ledger, and enrichment metering. |
+| `DB_HOST` | Postgres hostname. Internal Render host in-cluster; external is `${DB_HOST}.ohio-postgres.render.com`. Backs the connection/credential store, admin users, credit ledger, and enrichment metering. |
+| `DB_PORT` | Postgres port (Render default `5432`). |
+| `DB_USER` | Postgres username. |
+| `DB_PASS` | Postgres password. |
+| `DB_DB` | Postgres database name. |
 | `JWT_SECRET` | Signs admin-dashboard session JWTs (`AdminAuthService.issueToken` throws without it). Use any long random string. |
 | `GHL_CREDENTIAL_ENC_KEY` | App-level secret that encrypts each tenant's GHL API key at rest (AES-256-GCM, key = SHA-256 of this value). Generate: `openssl rand -base64 32`. Any strong value works — it's hashed to 32 bytes. |
 | `JAKE_GATEWAY_GHL_API_KEY` | Master gateway key for Zequi's one shared "Jake" GHL sub-account — the default `gateway` text mode. App-level only, **never** stored in the DB. |
@@ -71,7 +80,10 @@ create `ghl_connections`, `ghl_custom_fields`, `ghl_enrichment_events`,
 column). Point the Supabase CLI at the Render DB:
 
 ```bash
-npx supabase db push --db-url "$DATABASE_URL"
+# Compose the URL the Supabase CLI wants from the discrete DB_* vars. Run this
+# from your laptop, so use the EXTERNAL host (${DB_HOST}.ohio-postgres.render.com).
+npx supabase db push \
+  --db-url "postgresql://$DB_USER:$DB_PASS@$DB_HOST.ohio-postgres.render.com:$DB_PORT/$DB_DB"
 ```
 
 > The repo's `npm run dev-db-migrate` is the same `supabase db push` wrapped in
@@ -205,8 +217,10 @@ Confirm: a reply SMS lands on the sender's phone and a short status note
 - **Port:** the server binds `process.env.PORT || 8080`; Render injects `PORT`,
   so leave it unset and don't hardcode a port.
 - **Migrations (pre-deploy):** set the Render **Pre-Deploy Command** to
-  `npx supabase db push --db-url "$DATABASE_URL"` so schema changes apply before
-  each new build goes live. (Or run it once as a manual one-off job.)
+  `npx supabase db push --db-url "postgresql://$DB_USER:$DB_PASS@$DB_HOST:$DB_PORT/$DB_DB"`
+  so schema changes apply before each new build goes live. (This runs in-cluster,
+  so the internal `DB_HOST` resolves — no `.ohio-postgres.render.com` suffix
+  needed. Or run it once as a manual one-off job.)
 - **Redis (optional):** the enrichment webhook + BullMQ worker only mount when
   `UPSTASH_REDIS_TCP_URL` is set. Leave it unset for a text-Jake-only staging
   bring-up — the server boots fine and logs that it skipped the queue. Admin,

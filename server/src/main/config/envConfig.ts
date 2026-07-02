@@ -36,8 +36,16 @@ export class EnvConfig {
     public readonly realEstateApiKey: string;
     public readonly realEstateBaseUrl: string;
 
-    // 🗄️ Postgres (per-location connection/credential store — JAK-102 onward)
-    public readonly databaseUrl: string;
+    // 🗄️ Postgres (per-location connection/credential store — JAK-102 onward).
+    // HOUSE PATTERN (JAK-117): discrete connection vars mirroring Automator +
+    // Northstar (DB_HOST/DB_PORT/DB_USER/DB_PASS/DB_DB) instead of a single
+    // DATABASE_URL. Same var names as Automator's DBConfig so ops/Doppler stay
+    // consistent across the fleet.
+    public readonly dbHost: string;
+    public readonly dbPort: string;
+    public readonly dbUser: string;
+    public readonly dbPass: string;
+    public readonly dbDb: string;
 
     // 🧠 GoHighLevel API
     public readonly ghlApiKey: string;
@@ -102,10 +110,16 @@ export class EnvConfig {
         this.realEstateApiKey = process.env.RE_API_KEY!;
         this.realEstateBaseUrl = process.env.RE_BASE_URL!;
 
-        // 🗄️ Postgres connection string (Doppler). Optional at boot — the
-        // connection store initializes its pool lazily, so environments without
-        // a DB provisioned yet (e.g. the current dev queue-less boot) start fine.
-        this.databaseUrl = process.env.DATABASE_URL ?? "";
+        // 🗄️ Postgres discrete connection vars (Doppler). HOUSE PATTERN shared
+        // with Automator + Northstar — same DB_* var names. Optional at boot —
+        // the connection store initializes its pool lazily, so environments
+        // without a DB provisioned yet (e.g. the current dev queue-less boot)
+        // start fine.
+        this.dbHost = process.env.DB_HOST ?? "";
+        this.dbPort = process.env.DB_PORT ?? "";
+        this.dbUser = process.env.DB_USER ?? "";
+        this.dbPass = process.env.DB_PASS ?? "";
+        this.dbDb = process.env.DB_DB ?? "";
 
         // 🧠 GoHighLevel API
         this.ghlApiKey = process.env.GHL_API_KEY!;

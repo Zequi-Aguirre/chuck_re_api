@@ -10,8 +10,9 @@ Epic: `ghl-enrichment`
 ## In progress (1)
 - [ ] **JAK-115** (P0) Master GHL gateway key + mode-aware text-Jake (gateway vs own_number) — depends: JAK-102, JAK-109, JAK-114
 
-## Open (1)
+## Open (2)
 - [ ] **JAK-103** (P0) Token refresh service — depends: JAK-102
+- [ ] **JAK-117** (P1) Align DB config to house pattern (discrete DB_* vars, mirror Automator/Northstar)
 
 ## Deferred / blocked (5)
 - [ ] **JAK-150** (P3) [LATER] GHL Marketplace listing + approval requirements
