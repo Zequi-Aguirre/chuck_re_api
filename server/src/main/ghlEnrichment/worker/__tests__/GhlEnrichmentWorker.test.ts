@@ -67,7 +67,9 @@ const eventRow = (over: Partial<GhlEnrichmentEventRow> = {}): GhlEnrichmentEvent
   status: "enriched",
   detail: null,
   cost_estimate: null,
+  attempt_count: 1,
   enriched_at: new Date("2026-07-01T00:00:00Z"),
+  failed_at: null,
   created_at: new Date("2026-07-01T00:00:00Z"),
   modified_at: new Date("2026-07-01T00:00:00Z"),
   ...over,
@@ -301,6 +303,66 @@ describe("GhlEnrichmentWorker", () => {
       await expect(worker.process({ contact_id: "ct_1" })).rejects.toBeInstanceOf(
         UnrecoverableError
       );
+    });
+  });
+
+  describe("attempt tracking (JAK-111)", () => {
+    it("records the BullMQ attempt number on the event row", async () => {
+      await worker.process(JOB, { attempt: 2 });
+      expect(events.record).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "enriched", attempt_count: 2 })
+      );
+    });
+
+    it("records the attempt on a failed attempt too", async () => {
+      client.getContact.mockRejectedValue(new GhlApiError("boom", 503));
+      await expect(worker.process(JOB, { attempt: 3 })).rejects.toBeTruthy();
+      expect(events.record).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "failed", attempt_count: 3 })
+      );
+    });
+  });
+
+  describe("finalizeFailure — dead-letter (JAK-111)", () => {
+    it("refunds any charge and marks the record dead_letter", async () => {
+      credits.refundEnrichment.mockResolvedValue({
+        id: "led-r",
+        location_id: "loc_1",
+        amount: 1,
+        balance_after: 10,
+        reason: "refund",
+        contact_id: "ct_1",
+        created_at: new Date(),
+        modified_at: new Date(),
+        deleted_at: null,
+      });
+
+      await worker.finalizeFailure(JOB, "write-back: GHL 500");
+
+      // CREDIT SAFETY: never bill for a failed enrichment — reverse the charge.
+      expect(credits.refundEnrichment).toHaveBeenCalledWith({
+        locationId: "loc_1",
+        contactId: "ct_1",
+      });
+      expect(events.markDeadLetter).toHaveBeenCalledWith("loc_1", "ct_1", "write-back: GHL 500");
+    });
+
+    it("still marks dead_letter when there was nothing to refund", async () => {
+      credits.refundEnrichment.mockResolvedValue(null);
+      await worker.finalizeFailure(JOB, "load contact: GHL 500");
+      expect(events.markDeadLetter).toHaveBeenCalledTimes(1);
+    });
+
+    it("never throws — a bookkeeping error is swallowed (already terminal)", async () => {
+      credits.refundEnrichment.mockRejectedValue(new Error("db down"));
+      await expect(worker.finalizeFailure(JOB, "x")).resolves.toBeUndefined();
+      expect(events.markDeadLetter).not.toHaveBeenCalled();
+    });
+
+    it("no-ops on the legacy single-tenant path (no location)", async () => {
+      await worker.finalizeFailure({ contact_id: "ct_1" }, "x");
+      expect(credits.refundEnrichment).not.toHaveBeenCalled();
+      expect(events.markDeadLetter).not.toHaveBeenCalled();
     });
   });
 });

@@ -1,6 +1,6 @@
 import { UnrecoverableError } from "bullmq";
 import { inject, injectable } from "tsyringe";
-import { GhlApiClient, GhlApiError } from "../api/GhlApiClient";
+import { GhlApiClient } from "../api/GhlApiClient";
 import { GhlContact } from "../api/GhlApiTypes";
 import { GhlConnectionService } from "../connections/GhlConnectionService";
 import {
@@ -12,6 +12,7 @@ import { RealEstateApiDao } from "../../data/RealEstateApiDao";
 import { EnrichmentJobPayload } from "../../types/LeadEnrichment";
 import { EnrichmentCostPlan } from "../metering/CreditCosts";
 import { CreditService } from "../metering/CreditService";
+import { classifyFailure, logEnrichment, summarizeError } from "./EnrichmentFailure";
 import { buildEnrichmentNote } from "./EnrichmentNote";
 import {
   EnrichmentEventStatus,
@@ -25,10 +26,18 @@ export interface EnrichmentOutcome {
   detail?: string;
 }
 
+/** Per-run metadata the queue threads in (BullMQ attempt bookkeeping). */
+export interface EnrichmentRunMeta {
+  /** 1-based attempt number for this job (BullMQ `attemptsMade + 1`). */
+  attempt?: number;
+}
+
 /** Log/record context for a single contact. Never carries a credential. */
 interface JobContext {
   locationId: string;
   contactId: string;
+  /** 1-based processing attempt, for structured logs + the event row. */
+  attempt: number;
 }
 
 /**
@@ -51,11 +60,19 @@ interface JobContext {
  * SPEC §8 write-safety is enforced inside {@link GhlApiClient} (dev echoes/skips
  * real writes; staging/prod write), so this worker never re-derives the stage.
  *
- * Failure handling is deliberately minimal (JAK-111 hardens it): transient GHL
- * failures re-throw so BullMQ retries with backoff and eventually dead-letters;
- * permanent failures throw {@link UnrecoverableError} to skip straight to the
- * failed set; expected non-error outcomes are recorded as `skipped` and complete
- * cleanly. The decrypted Bearer token is NEVER logged.
+ * Failure handling (JAK-111) is centralized: {@link classifyFailure} is the one
+ * place that decides transient-vs-permanent. Transient failures (network / 429 /
+ * 5xx / DB blip) re-throw so BullMQ retries with exponential backoff + jitter;
+ * permanent failures (a GHL 4xx — bad payload, malformed request) throw
+ * {@link UnrecoverableError} to fail fast. Either way the per-record state is
+ * persisted on `ghl_enrichment_events` so nothing is silently lost, and when
+ * BullMQ gives up the queue calls {@link finalizeFailure} to mark the terminal
+ * `dead_letter` state AND refund any charge — we never bill for a failed
+ * enrichment. Expected non-error outcomes are recorded as `skipped`/`credit_blocked`
+ * and complete cleanly. All logs are structured + secret-free; the decrypted
+ * Bearer token is NEVER logged. Idempotent under retry: the credit charge is a
+ * no-op for an already-charged contact (JAK-109 ledger), so a reprocess never
+ * double-charges, and the events upsert never double-writes state.
  */
 @injectable()
 export class GhlEnrichmentWorker {
@@ -70,9 +87,13 @@ export class GhlEnrichmentWorker {
 
   /**
    * Process one enrichment job. Returns the outcome for `enriched`/`skipped`;
-   * throws (for BullMQ retry / dead-letter) on a real failure.
+   * throws (for BullMQ retry / dead-letter) on a real failure. `meta.attempt`
+   * (BullMQ `attemptsMade + 1`) is recorded on the event row for inspection.
    */
-  async process(payload: EnrichmentJobPayload): Promise<EnrichmentOutcome> {
+  async process(
+    payload: EnrichmentJobPayload,
+    meta: EnrichmentRunMeta = {}
+  ): Promise<EnrichmentOutcome> {
     const { contact_id: contactId, location_id: locationId } = payload;
 
     // This worker is the multi-tenant path — it requires a location. The queue
@@ -81,13 +102,13 @@ export class GhlEnrichmentWorker {
     if (!locationId) {
       throw new UnrecoverableError("enrichment job missing location_id");
     }
-    const ctx: JobContext = { locationId, contactId };
+    const ctx: JobContext = { locationId, contactId, attempt: meta.attempt ?? 1 };
 
     // 1. Idempotency. A prior `enriched` row means a duplicate / retried delivery
     //    — do nothing. A prior `failed`/`skipped` row is allowed to reprocess.
     const existing = await this.events.findByContact(locationId, contactId);
     if (existing?.status === "enriched") {
-      this.log("info", "already enriched — skipping duplicate", ctx);
+      this.log("info", "already_enriched_skip", ctx);
       return { status: "skipped", detail: "already_enriched" };
     }
 
@@ -149,7 +170,7 @@ export class GhlEnrichmentWorker {
       if (customFields.length > 0) {
         await this.client.updateContactCustomFields(locationId, contactId, customFields);
       } else {
-        this.log("warn", "no provisioned fields to write — skipping custom-field update", ctx);
+        this.log("warn", "no_provisioned_fields", ctx);
       }
       await this.client.createNote(locationId, contactId, buildEnrichmentNote(result));
     } catch (err) {
@@ -157,30 +178,67 @@ export class GhlEnrichmentWorker {
     }
 
     // 9. Charge for the delivered enrichment, atomically (JAK-109). The pre-check
-    //    (step 5) already confirmed funds; this deducts + writes the ledger. On
-    //    the rare concurrent-drain race the pre-check can't catch, we log loudly
-    //    but still record the enrichment — value was delivered — and charge 0.
+    //    (step 5) already confirmed funds; this deducts + writes the ledger.
+    //    IDEMPOTENT per contact: on a retry where a prior attempt already charged
+    //    this contact, the ledger returns ok without a second debit — no
+    //    double-charge. On the rare concurrent-drain race the pre-check can't
+    //    catch, we log loudly but still record the enrichment (value delivered)
+    //    and charge 0.
     const charge = await this.credits.chargeForEnrichment({ locationId, contactId, plan });
     const charged = charge.ok ? this.credits.costOf(plan) : 0;
     if (!charge.ok) {
       this.log(
         "error",
-        `enriched but charge failed — insufficient credits at commit ` +
-          `(had ${charge.balance}, needed ${charge.required})`,
-        ctx
+        "enriched_charge_shortfall",
+        ctx,
+        `insufficient credits at commit (had ${charge.balance}, needed ${charge.required})`
       );
     }
 
     // 10. Record success for idempotency + metering. cost_estimate = credits
-    //     actually charged.
+    //     actually charged. If this write fails after a successful charge, the
+    //     charge's per-contact idempotency (step 9) makes the retry safe: it
+    //     re-records without charging again.
     await this.events.record({
       location_id: locationId,
       contact_id: contactId,
       status: "enriched",
       cost_estimate: charged,
+      attempt_count: ctx.attempt,
     });
-    this.log("info", `enriched (charged ${charged} credits)`, ctx);
+    this.log("info", "enriched", ctx, `charged ${charged} credits`);
     return { status: "enriched" };
+  }
+
+  /**
+   * Finalize a job BullMQ has terminally failed (retries exhausted, or a
+   * permanent {@link UnrecoverableError}). Called from the queue's `failed`
+   * hook, NOT the hot path. It does the two things a dead-letter must guarantee:
+   *
+   *   1. CREDIT SAFETY — reverse any charge for this contact via a compensating
+   *      ledger entry (JAK-109). Idempotent + a no-op if nothing was charged, so
+   *      we never bill for an enrichment that ultimately failed.
+   *   2. Persist the terminal `dead_letter` state so the record is inspectable /
+   *      requeuable and never silently lost.
+   *
+   * Safe to call more than once for the same failure. It never re-throws — a
+   * dead-letter is already the terminal state; a bookkeeping error here is logged,
+   * not propagated.
+   */
+  async finalizeFailure(payload: EnrichmentJobPayload, summary: string): Promise<void> {
+    const { contact_id: contactId, location_id: locationId } = payload;
+    if (!locationId) return; // legacy single-tenant path has no dead-letter state
+    const ctx: JobContext = { locationId, contactId, attempt: 0 };
+    try {
+      const refund = await this.credits.refundEnrichment({ locationId, contactId });
+      if (refund) {
+        this.log("warn", "dead_letter_refund", ctx, `reversed ${refund.amount} credits`);
+      }
+      await this.events.markDeadLetter(locationId, contactId, summary);
+      this.log("error", "dead_letter", ctx, summary);
+    } catch (err) {
+      this.log("error", "dead_letter_finalize_error", ctx, summarizeError(err));
+    }
   }
 
   /**
@@ -198,8 +256,9 @@ export class GhlEnrichmentWorker {
       contact_id: ctx.contactId,
       status: "credit_blocked",
       detail: `insufficient_credits (needed ${required})`,
+      attempt_count: ctx.attempt,
     });
-    this.log("warn", `credit-blocked — needs ${required} credits`, ctx);
+    this.log("warn", "credit_blocked", ctx, `needs ${required} credits`);
     return { status: "credit_blocked", detail: "insufficient_credits" };
   }
 
@@ -210,56 +269,39 @@ export class GhlEnrichmentWorker {
       contact_id: ctx.contactId,
       status: "skipped",
       detail: reason,
+      attempt_count: ctx.attempt,
     });
-    this.log("info", `skipped (${reason})`, ctx);
+    this.log("info", "skipped", ctx, reason);
     return { status: "skipped", detail: reason };
   }
 
   /**
-   * Record a failure and re-throw so BullMQ handles the retry policy. Transient
-   * GHL failures throw as-is (retried with backoff, then dead-lettered);
-   * permanent ones throw {@link UnrecoverableError} to fail fast. Detail is a
-   * short, secret-free summary — never the Bearer token.
+   * Record a failing attempt and re-throw so BullMQ handles the retry policy.
+   * Classification is delegated to the single {@link classifyFailure} helper:
+   * transient failures throw as-is (retried with backoff + jitter, then
+   * dead-lettered by the queue's `failed` hook → {@link finalizeFailure});
+   * permanent ones throw {@link UnrecoverableError} to fail fast. `detail` is a
+   * short, secret-free summary — never the Bearer token. The row is recorded
+   * `failed` (transitional); the terminal `dead_letter` flip happens only once
+   * BullMQ actually gives up.
    */
   private async fail(err: unknown, ctx: JobContext, operation: string): Promise<never> {
-    const summary = this.errorSummary(err);
-    const transient = this.isTransient(err);
+    const { kind, summary } = classifyFailure(err);
+    const detail = `${operation}: ${summary}`.slice(0, 500);
     await this.events.record({
       location_id: ctx.locationId,
       contact_id: ctx.contactId,
       status: "failed",
-      detail: `${operation}: ${summary}`.slice(0, 500),
+      detail,
+      attempt_count: ctx.attempt,
     });
 
-    if (transient) {
-      this.log("warn", `${operation} failed (transient, will retry): ${summary}`, ctx);
+    if (kind === "transient") {
+      this.log("warn", "attempt_failed_transient", ctx, detail);
       throw err instanceof Error ? err : new Error(summary);
     }
-    this.log("error", `${operation} failed (permanent): ${summary}`, ctx);
+    this.log("error", "attempt_failed_permanent", ctx, detail);
     throw new UnrecoverableError(`${operation} failed: ${summary}`);
-  }
-
-  /**
-   * Transient = worth retrying: network/timeout (no status), rate-limit (429),
-   * or server error (5xx). A specific 4xx from GHL is permanent. Unknown,
-   * non-API errors default to transient so a blip (e.g. the DB) gets another go.
-   */
-  private isTransient(err: unknown): boolean {
-    if (err instanceof GhlApiError) {
-      const status = err.status;
-      if (status === undefined) return true;
-      if (status === 429) return true;
-      return status >= 500 && status <= 599;
-    }
-    return true;
-  }
-
-  /** A short, SECRET-FREE description of an error for logs + the event detail. */
-  private errorSummary(err: unknown): string {
-    if (err instanceof GhlApiError) {
-      return err.status ? `GHL ${err.status}` : err.message;
-    }
-    return err instanceof Error ? err.message : "unknown error";
   }
 
   /**
@@ -282,11 +324,23 @@ export class GhlEnrichmentWorker {
     return locality ? `${street}, ${locality}` : street;
   }
 
-  /** Structured, secret-free log line. The Bearer token never reaches here. */
-  private log(level: "info" | "warn" | "error", message: string, ctx: JobContext): void {
-    const line = `🧩 [jak-107] ${message} — location=${ctx.locationId} contact=${ctx.contactId}`;
-    if (level === "error") console.error(line);
-    else if (level === "warn") console.warn(line);
-    else console.log(line);
+  /**
+   * Structured, secret-free, queryable log line (JAK-111). `event` is a
+   * machine-readable name; `detail` is redacted at the {@link logEnrichment}
+   * boundary. The decrypted Bearer token never reaches here.
+   */
+  private log(
+    level: "info" | "warn" | "error",
+    event: string,
+    ctx: JobContext,
+    detail?: string
+  ): void {
+    logEnrichment(level, {
+      event,
+      locationId: ctx.locationId,
+      contactId: ctx.contactId,
+      attempt: ctx.attempt || undefined,
+      detail,
+    });
   }
 }

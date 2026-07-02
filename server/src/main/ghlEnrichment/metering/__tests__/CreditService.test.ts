@@ -96,6 +96,28 @@ describe("CreditService", () => {
     });
   });
 
+  describe("refundEnrichment", () => {
+    it("reverses a contact's charge via the ledger, defaulting the reason to refund", async () => {
+      store.refund.mockResolvedValue(ledgerRow({ amount: 1, reason: "refund" }));
+
+      const row = await service.refundEnrichment({ locationId: "loc_1", contactId: "ct_1" });
+
+      expect(store.refund).toHaveBeenCalledWith({
+        locationId: "loc_1",
+        contactId: "ct_1",
+        reason: "refund",
+      });
+      expect(row?.reason).toBe("refund");
+    });
+
+    it("returns null when there was nothing to refund (idempotent no-op)", async () => {
+      store.refund.mockResolvedValue(null);
+      expect(
+        await service.refundEnrichment({ locationId: "loc_1", contactId: "ct_1" })
+      ).toBeNull();
+    });
+  });
+
   describe("grantCredits", () => {
     it("grants via the ledger, defaulting the reason to manual_grant", async () => {
       store.grant.mockResolvedValue(ledgerRow({ amount: 100, reason: "manual_grant" }));

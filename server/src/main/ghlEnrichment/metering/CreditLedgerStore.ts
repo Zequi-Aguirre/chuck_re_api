@@ -1,3 +1,4 @@
+import { PoolClient } from "pg";
 import { injectable } from "tsyringe";
 import { PostgresDatabase } from "../../data/PostgresDatabase";
 import { CreditChargeLine, CreditLedgerReason } from "./CreditCosts";
@@ -66,6 +67,12 @@ export class CreditLedgerStore {
    * NOTHING is written (no half-charge) and `{ ok: false }` is returned.
    *
    * Each line's positive `amount` is recorded as a negative ledger `amount`.
+   *
+   * IDEMPOTENT per contact (JAK-111): when `contactId` is given, a charge that
+   * already has an outstanding (non-refunded) debit for that contact is a no-op
+   * — it returns `ok:true` with the current balance and no new entries. This is
+   * what keeps a BullMQ retry from double-charging a contact whose first attempt
+   * charged but then failed before recording success.
    */
   async charge(input: {
     locationId: string;
@@ -88,6 +95,14 @@ export class CreditLedgerStore {
         [input.locationId]
       );
       const balance = locked.rows[0]?.balance ?? 0;
+
+      // Idempotency: if this contact already carries a net debit (charged, not
+      // refunded), a retry must NOT charge again. Return the current balance,
+      // nothing written. Checked under the lock so it's race-safe.
+      if (input.contactId && (await this.outstandingChargeNet(client, input.locationId, input.contactId)) < 0) {
+        await client.query("ROLLBACK");
+        return { ok: true, balanceAfter: balance, entries: [] };
+      }
 
       if (balance < required) {
         await client.query("ROLLBACK");
@@ -174,5 +189,85 @@ export class CreditLedgerStore {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Reverse the outstanding enrichment charge for a contact with a compensating
+   * ledger entry (JAK-111 credit safety). Used when an enrichment that was
+   * already charged ultimately fails / dead-letters: we must never bill for a
+   * failed enrichment. Locks the balance, computes the net debit still owed for
+   * the contact, credits it back exactly, and appends ONE positive `refund` row.
+   *
+   * IDEMPOTENT: if the contact carries no outstanding debit (never charged, or
+   * already refunded), nothing is written and `null` is returned — so a retry or
+   * a duplicate dead-letter hook can call it safely.
+   */
+  async refund(input: {
+    locationId: string;
+    contactId: string;
+    reason?: CreditLedgerReason;
+  }): Promise<CreditLedgerRow | null> {
+    const client = await this.db.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `INSERT INTO credit_balances (location_id) VALUES ($1)
+         ON CONFLICT (location_id) DO NOTHING`,
+        [input.locationId]
+      );
+      const locked = await client.query<{ balance: number }>(
+        `SELECT balance FROM credit_balances WHERE location_id = $1 FOR UPDATE`,
+        [input.locationId]
+      );
+      const balance = locked.rows[0]?.balance ?? 0;
+
+      const net = await this.outstandingChargeNet(client, input.locationId, input.contactId);
+      if (net >= 0) {
+        // Nothing outstanding to reverse — idempotent no-op.
+        await client.query("ROLLBACK");
+        return null;
+      }
+
+      const refundAmount = -net; // net is negative; reverse the exact debit.
+      const balanceAfter = balance + refundAmount;
+      await client.query(
+        `UPDATE credit_balances SET balance = $2, modified_at = now()
+         WHERE location_id = $1`,
+        [input.locationId, balanceAfter]
+      );
+      const inserted = await client.query<CreditLedgerRow>(
+        `INSERT INTO credit_ledger
+           (location_id, amount, balance_after, reason, contact_id)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING *`,
+        [input.locationId, refundAmount, balanceAfter, input.reason ?? "refund", input.contactId]
+      );
+      await client.query("COMMIT");
+      return inserted.rows[0];
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * The net (signed) credit delta still on the books for one contact: the sum of
+   * every non-voided ledger row referencing it. Negative = a charge that has not
+   * been refunded; 0 = never charged, or charged-and-refunded. Runs on the
+   * caller's transaction client so it reads the row-locked, consistent view.
+   */
+  private async outstandingChargeNet(
+    client: PoolClient,
+    locationId: string,
+    contactId: string
+  ): Promise<number> {
+    const agg = await client.query<{ net: number }>(
+      `SELECT COALESCE(SUM(amount), 0)::int AS net FROM credit_ledger
+       WHERE location_id = $1 AND contact_id = $2 AND deleted_at IS NULL`,
+      [locationId, contactId]
+    );
+    return Number(agg.rows[0]?.net ?? 0);
   }
 }

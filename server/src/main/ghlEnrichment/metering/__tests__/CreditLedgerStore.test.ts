@@ -8,11 +8,18 @@ import { CreditLedgerStore } from "../CreditLedgerStore";
  * exact SQL formatting. `FOR UPDATE` returns the locked balance; each
  * credit_ledger INSERT returns a stub row.
  */
-const routeTxn = (client: MockProxy<PoolClient>, lockedBalance: number): void => {
+const routeTxn = (
+  client: MockProxy<PoolClient>,
+  lockedBalance: number,
+  outstandingNet = 0
+): void => {
   let ledgerSeq = 0;
   (client.query as jest.Mock).mockImplementation(async (text: unknown) => {
     const sql = String(text);
     if (sql.includes("FOR UPDATE")) return { rows: [{ balance: lockedBalance }] };
+    // The per-contact idempotency / refund probe: net signed delta already on
+    // the books for the contact (negative = an unrefunded charge).
+    if (sql.includes("SUM(amount)")) return { rows: [{ net: outstandingNet }] };
     if (sql.includes("INSERT INTO credit_ledger")) {
       return { rows: [{ id: `led-${++ledgerSeq}` }] };
     }
@@ -138,6 +145,96 @@ describe("CreditLedgerStore", () => {
       await expect(
         store.charge({ locationId: "loc_1", lines: [{ reason: "enrichment", amount: 1 }] })
       ).rejects.toThrow("db down");
+      expect(sqlSequence(client)).toContain("ROLLBACK");
+      expect(client.release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("charge idempotency by contact (JAK-111)", () => {
+    it("is a no-op when the contact already carries an unrefunded charge", async () => {
+      // Contact already net -1 on the books → a retry must NOT charge again.
+      routeTxn(client, 10, -1);
+
+      const result = await store.charge({
+        locationId: "loc_1",
+        contactId: "ct_1",
+        lines: [{ reason: "enrichment", amount: 1 }],
+      });
+
+      expect(result).toEqual({ ok: true, balanceAfter: 10, entries: [] });
+      const seq = sqlSequence(client);
+      expect(seq).toContain("ROLLBACK");
+      expect(seq).not.toContain("COMMIT");
+      // No new debit written.
+      expect(seq).not.toEqual(
+        expect.arrayContaining([expect.stringContaining("INSERT INTO credit_ledger")])
+      );
+      expect(client.release).toHaveBeenCalledTimes(1);
+    });
+
+    it("charges normally when the contact was charged then refunded (net 0)", async () => {
+      routeTxn(client, 10, 0);
+      const result = await store.charge({
+        locationId: "loc_1",
+        contactId: "ct_1",
+        lines: [{ reason: "enrichment", amount: 1 }],
+      });
+      expect(result.ok).toBe(true);
+      expect(sqlSequence(client)).toContain("COMMIT");
+    });
+
+    it("skips the idempotency probe entirely for a contactless charge", async () => {
+      routeTxn(client, 5);
+      await store.charge({ locationId: "loc_1", lines: [{ reason: "enrichment", amount: 1 }] });
+      expect(sqlSequence(client)).not.toEqual(
+        expect.arrayContaining([expect.stringContaining("SUM(amount)")])
+      );
+    });
+  });
+
+  describe("refund (compensating entry, JAK-111)", () => {
+    it("reverses the outstanding charge and writes one positive refund row", async () => {
+      // Balance 4, contact owes a net -1 charge → refund credits it back to 5.
+      routeTxn(client, 4, -1);
+
+      const row = await store.refund({ locationId: "loc_1", contactId: "ct_1" });
+
+      expect(row).toEqual({ id: "led-1" });
+      expect(paramsOf(client, "UPDATE credit_balances")).toEqual(["loc_1", 5]);
+      expect(paramsOf(client, "INSERT INTO credit_ledger")).toEqual([
+        "loc_1",
+        1, // positive reversal of the -1 debit
+        5,
+        "refund",
+        "ct_1",
+      ]);
+      expect(sqlSequence(client)).toContain("COMMIT");
+      expect(client.release).toHaveBeenCalledTimes(1);
+    });
+
+    it("is an idempotent no-op when nothing is outstanding (net >= 0)", async () => {
+      routeTxn(client, 10, 0);
+      const row = await store.refund({ locationId: "loc_1", contactId: "ct_1" });
+      expect(row).toBeNull();
+      const seq = sqlSequence(client);
+      expect(seq).toContain("ROLLBACK");
+      expect(seq).not.toContain("COMMIT");
+      expect(seq).not.toEqual(
+        expect.arrayContaining([expect.stringContaining("INSERT INTO credit_ledger")])
+      );
+    });
+
+    it("rolls back and releases the client if a statement throws", async () => {
+      (client.query as jest.Mock).mockImplementation(async (text: unknown) => {
+        const sql = String(text);
+        if (sql.includes("FOR UPDATE")) return { rows: [{ balance: 4 }] };
+        if (sql.includes("SUM(amount)")) return { rows: [{ net: -1 }] };
+        if (sql.includes("INSERT INTO credit_ledger")) throw new Error("db down");
+        return { rows: [] };
+      });
+      await expect(store.refund({ locationId: "loc_1", contactId: "ct_1" })).rejects.toThrow(
+        "db down"
+      );
       expect(sqlSequence(client)).toContain("ROLLBACK");
       expect(client.release).toHaveBeenCalledTimes(1);
     });
