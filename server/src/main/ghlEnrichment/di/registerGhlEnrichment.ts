@@ -5,6 +5,7 @@ import { PostgresDatabase } from "../../data/PostgresDatabase";
 import { CredentialCipher } from "../connections/CredentialCipher";
 import { GhlConnectionStore } from "../connections/GhlConnectionStore";
 import { GhlConnectionService } from "../connections/GhlConnectionService";
+import { GhlApiClient } from "../api/GhlApiClient";
 
 /**
  * DI registration for the GHL enrichment module.
@@ -46,5 +47,13 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   }
   if (!c.isRegistered(GhlConnectionService)) {
     c.registerSingleton(GhlConnectionService);
+  }
+
+  // JAK-104 — multi-tenant GHL API v2 client. Pulls per-location credentials
+  // from the JAK-102 connection store (decrypted key + base_url), NOT from a
+  // single Doppler key. Handles retries + rate-limit backoff. Supersedes the
+  // single-tenant MVP GhlApiDao for the per-location path.
+  if (!c.isRegistered(GhlApiClient)) {
+    c.registerSingleton(GhlApiClient);
   }
 };

@@ -1,0 +1,293 @@
+import axios, { AxiosInstance, AxiosRequestConfig } from "axios";
+import { injectable } from "tsyringe";
+import { GhlEnrichmentConfig } from "../config/GhlEnrichmentConfig";
+import { GhlConnectionService } from "../connections/GhlConnectionService";
+import { GhlConnection } from "../connections/GhlConnectionTypes";
+import {
+  CreateCustomFieldInput,
+  GhlContact,
+  GhlCustomField,
+  GhlCustomFieldValue,
+  GhlNote,
+} from "./GhlApiTypes";
+
+/** Raised when no active connection exists for a location — callers stop processing. */
+export class GhlConnectionUnavailableError extends Error {
+  constructor(public readonly locationId: string, reason: string) {
+    super(`No usable GHL connection for location ${locationId}: ${reason}`);
+    this.name = "GhlConnectionUnavailableError";
+  }
+}
+
+/** Raised when a GHL request ultimately fails (after any retries). */
+export class GhlApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status?: number,
+    public readonly method?: string,
+    public readonly url?: string
+  ) {
+    super(message);
+    this.name = "GhlApiError";
+  }
+}
+
+/**
+ * Multi-tenant GHL API v2 client (JAK-104).
+ *
+ * This is the canonical, per-location successor to the single-tenant MVP
+ * {@link import("../../data/GhlApiDao").GhlApiDao}: every call resolves the
+ * caller's credentials from the JAK-102 encrypted connection store
+ * ({@link GhlConnectionService} → decrypted `apiKey` + per-location `base_url`),
+ * NOT from a single Doppler `GHL_API_KEY`. Doppler holds only the app-level
+ * encryption key. The worker/webhook paths migrate onto this client in
+ * JAK-106/JAK-107.
+ *
+ * Responsibilities:
+ *  - Inject the correct per-location Bearer token + base URL (one cached axios
+ *    instance per location).
+ *  - Retry transient failures (429 rate-limit, 5xx, network) with exponential
+ *    backoff, honouring `Retry-After` on 429. 4xx (other) fail fast.
+ *  - Enforce SPEC §8 write-safety at the client boundary: dev never writes to a
+ *    real GHL sub-account (writes are echoed + skipped). The dedicated
+ *    dev/staging mock-sink ticket builds on this guard.
+ *
+ * Thin by design — only the methods the enrichment MVP needs.
+ */
+@injectable()
+export class GhlApiClient {
+  /** GHL API version pin, matching the rest of the app. */
+  private static readonly API_VERSION = "2021-07-28";
+  private static readonly REQUEST_TIMEOUT_MS = 30_000;
+  private static readonly MAX_RETRIES = 3;
+  private static readonly BASE_BACKOFF_MS = 500;
+  private static readonly MAX_BACKOFF_MS = 20_000;
+
+  /** One axios instance per location id, built lazily from stored credentials. */
+  private readonly clients = new Map<string, AxiosInstance>();
+
+  constructor(
+    private readonly connections: GhlConnectionService,
+    private readonly config: GhlEnrichmentConfig
+  ) {}
+
+  // ────────────────────────────── Reads ──────────────────────────────
+
+  /** Fetch a contact. Returns null if GHL reports it doesn't exist (404). */
+  async getContact(locationId: string, contactId: string): Promise<GhlContact | null> {
+    const data = await this.request<{ contact?: GhlContact } | null>(
+      locationId,
+      { method: "GET", url: `/contacts/${contactId}` },
+      { notFoundAsNull: true }
+    );
+    return data?.contact ?? null;
+  }
+
+  /** List every custom field defined on a location (write-back targeting, JAK-108). */
+  async listCustomFields(locationId: string): Promise<GhlCustomField[]> {
+    const data = await this.request<{ customFields?: GhlCustomField[] }>(locationId, {
+      method: "GET",
+      url: `/locations/${locationId}/customFields`,
+    });
+    return data?.customFields ?? [];
+  }
+
+  // ────────────────────────────── Writes ─────────────────────────────
+  // SPEC §8: these never touch a real GHL location off-prod (dev echoes + skips).
+
+  /** Write enrichment values onto a contact's custom fields. */
+  async updateContactCustomFields(
+    locationId: string,
+    contactId: string,
+    customFields: GhlCustomFieldValue[]
+  ): Promise<void> {
+    if (!this.assertWriteAllowed(locationId, `update contact ${contactId} custom fields`)) {
+      return;
+    }
+    await this.request<unknown>(locationId, {
+      method: "PUT",
+      url: `/contacts/${contactId}`,
+      data: { customFields },
+    });
+  }
+
+  /** Attach a note to a contact (the "Jake Enrichment" note). Null when skipped off-prod. */
+  async createNote(
+    locationId: string,
+    contactId: string,
+    body: string
+  ): Promise<GhlNote | null> {
+    if (!this.assertWriteAllowed(locationId, `create note on contact ${contactId}`)) {
+      return null;
+    }
+    const data = await this.request<{ note?: GhlNote }>(locationId, {
+      method: "POST",
+      url: `/contacts/${contactId}/notes`,
+      data: { body },
+    });
+    return data?.note ?? null;
+  }
+
+  /** Provision a custom field on a location (install lifecycle, JAK-105). Null when skipped off-prod. */
+  async createCustomField(
+    locationId: string,
+    input: CreateCustomFieldInput
+  ): Promise<GhlCustomField | null> {
+    if (!this.assertWriteAllowed(locationId, `create custom field "${input.name}"`)) {
+      return null;
+    }
+    const data = await this.request<{ customField?: GhlCustomField }>(locationId, {
+      method: "POST",
+      url: `/locations/${locationId}/customFields`,
+      data: {
+        name: input.name,
+        dataType: input.dataType,
+        ...(input.fieldKey ? { fieldKey: input.fieldKey } : {}),
+        ...(input.parentId ? { parentId: input.parentId } : {}),
+      },
+    });
+    return data?.customField ?? null;
+  }
+
+  // ──────────────────────────── Internals ────────────────────────────
+
+  /**
+   * Resolve (and cache) the axios instance for a location, wiring its decrypted
+   * per-location credentials. Throws {@link GhlConnectionUnavailableError} if
+   * the location is unknown or inactive (uninstalled) — callers stop processing.
+   */
+  private async httpFor(locationId: string): Promise<AxiosInstance> {
+    const cached = this.clients.get(locationId);
+    if (cached) return cached;
+
+    const conn = await this.connections.getByLocationId(locationId);
+    if (!conn) {
+      throw new GhlConnectionUnavailableError(locationId, "no connection on file");
+    }
+    if (conn.status !== "active") {
+      throw new GhlConnectionUnavailableError(locationId, `status is ${conn.status}`);
+    }
+
+    const client = this.createHttpClient(conn);
+    this.clients.set(locationId, client);
+    return client;
+  }
+
+  /**
+   * Build a per-location axios instance. Protected so tests can substitute a
+   * mocked transport without hitting the network. The Bearer token is the
+   * decrypted per-location key and is NEVER logged.
+   */
+  protected createHttpClient(conn: GhlConnection): AxiosInstance {
+    return axios.create({
+      baseURL: conn.baseUrl,
+      headers: {
+        Authorization: `Bearer ${conn.apiKey}`,
+        Version: GhlApiClient.API_VERSION,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      timeout: GhlApiClient.REQUEST_TIMEOUT_MS,
+    });
+  }
+
+  /**
+   * Issue a request with retry + rate-limit backoff. Retries 429 / 5xx / network
+   * errors up to {@link MAX_RETRIES}; other 4xx fail fast. With
+   * `notFoundAsNull`, a 404 resolves to null instead of throwing.
+   */
+  private async request<T>(
+    locationId: string,
+    config: AxiosRequestConfig,
+    opts: { notFoundAsNull?: boolean } = {}
+  ): Promise<T> {
+    const http = await this.httpFor(locationId);
+    const method = (config.method ?? "GET").toString().toUpperCase();
+
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= GhlApiClient.MAX_RETRIES; attempt++) {
+      try {
+        const response = await http.request<T>(config);
+        return response.data;
+      } catch (err) {
+        lastError = err;
+        const status = axios.isAxiosError(err) ? err.response?.status : undefined;
+
+        if (opts.notFoundAsNull && status === 404) {
+          return null as T;
+        }
+
+        const isLastAttempt = attempt === GhlApiClient.MAX_RETRIES;
+        if (!this.isRetriable(status) || isLastAttempt) {
+          throw new GhlApiError(
+            `GHL ${method} ${config.url} failed` +
+              (status ? ` with status ${status}` : ` (${this.errorSummary(err)})`),
+            status,
+            method,
+            config.url
+          );
+        }
+
+        await this.delay(this.backoffMs(attempt, err));
+      }
+    }
+    // Unreachable — the loop either returns or throws — but satisfies the compiler.
+    throw new GhlApiError(
+      `GHL ${method} ${config.url} failed (${this.errorSummary(lastError)})`,
+      undefined,
+      method,
+      config.url
+    );
+  }
+
+  /** Retry only transient failures: rate-limit, server errors, and network drops. */
+  private isRetriable(status: number | undefined): boolean {
+    if (status === undefined) return true; // network / timeout, no response
+    if (status === 429) return true;
+    return status >= 500 && status <= 599;
+  }
+
+  /**
+   * Backoff for a given attempt. On 429 with a numeric `Retry-After` (seconds),
+   * honour it; otherwise exponential (base·2^attempt) with jitter, capped.
+   */
+  private backoffMs(attempt: number, err: unknown): number {
+    if (axios.isAxiosError(err) && err.response?.status === 429) {
+      const retryAfter = Number(err.response.headers?.["retry-after"]);
+      if (Number.isFinite(retryAfter) && retryAfter > 0) {
+        return Math.min(retryAfter * 1000, GhlApiClient.MAX_BACKOFF_MS);
+      }
+    }
+    const exponential = GhlApiClient.BASE_BACKOFF_MS * 2 ** attempt;
+    const jitter = Math.floor(Math.random() * GhlApiClient.BASE_BACKOFF_MS);
+    return Math.min(exponential + jitter, GhlApiClient.MAX_BACKOFF_MS);
+  }
+
+  /** A short, secret-free description of an error for logs/messages. */
+  private errorSummary(err: unknown): string {
+    if (axios.isAxiosError(err)) return err.code ?? err.message;
+    return err instanceof Error ? err.message : "unknown error";
+  }
+
+  /**
+   * SPEC §8 write-safety gate. Real writes to a GHL sub-account happen only in
+   * production; dev echoes the intended write and skips it (returns false).
+   * Staging is expected to point at a dedicated test sub-account, so it writes.
+   * This is the first-line guard the dedicated dev/staging mock-sink ticket
+   * builds on.
+   */
+  private assertWriteAllowed(locationId: string, operation: string): boolean {
+    if (this.config.isProduction || this.config.isStaging) {
+      return true;
+    }
+    console.log(
+      `🧪 [dev echo] skipping GHL write for location ${locationId}: ${operation}`
+    );
+    return false;
+  }
+
+  /** Sleep helper. Protected so tests can stub it out to run instantly. */
+  protected delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+}

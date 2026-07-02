@@ -17,3 +17,17 @@ export type {
   CreateGhlConnectionInput,
   UpdateGhlConnectionInput,
 } from "./connections/GhlConnectionTypes";
+
+// JAK-104 — multi-tenant GHL API v2 client (per-location auth, retries, backoff).
+export {
+  GhlApiClient,
+  GhlApiError,
+  GhlConnectionUnavailableError,
+} from "./api/GhlApiClient";
+export type {
+  GhlContact,
+  GhlCustomField,
+  GhlCustomFieldValue,
+  GhlNote,
+  CreateCustomFieldInput,
+} from "./api/GhlApiTypes";
