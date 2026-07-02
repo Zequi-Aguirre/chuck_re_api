@@ -4,6 +4,7 @@ import { mock, MockProxy } from "jest-mock-extended";
 import { EnvConfig } from "../../config/envConfig";
 import { JakeAssistantService } from "../../services/JakeAssistantService";
 import { JakeSmsResource } from "../JakeSmsResource";
+import { normalizeInboundAddress } from "../../util/address";
 
 // Obviously-fake, generated-looking key. NOT a real credential.
 const FAKE_MASTER_KEY = "master_fake_unit_test_key_00000000";
@@ -100,6 +101,53 @@ describe("JakeSmsResource", () => {
 
       const senders = assistant.handleInboundMessage.mock.calls.map(([m]) => m.senderPhone);
       expect(senders).toEqual(["+15550001111", "+15550002222"]);
+    });
+  });
+
+  // JAK-128: GHL's real inbound payload delivers the message as an OBJECT
+  // ({ type, body }), not a string. Before the fix the object was coerced via
+  // String(obj) → "[object Object]", so the address never parsed (parsedAddress
+  // stayed null) and the user got a guidance reply instead of a property lookup.
+  describe("GHL object-shaped message (JAK-128)", () => {
+    it("unwraps message: { type, body } so the address extracts and parses", async () => {
+      const address = "123 Main St, City, ST 12345";
+      const res = await post({
+        contactId: "ct_ghl",
+        from: "+15559990000",
+        message: { type: 2, body: address },
+      });
+
+      expect(res.status).toBe(200);
+      const [forwarded] = assistant.handleInboundMessage.mock.calls[0];
+      // The assistant receives the unwrapped string, not "[object Object]".
+      expect(forwarded.message).toBe(address);
+      // And that string is a real, parseable address (parsedAddress non-null).
+      expect(normalizeInboundAddress(forwarded.message)).not.toBeNull();
+    });
+
+    it("still accepts a plain-string message unchanged", async () => {
+      const address = "7640 sunset strip, sunrise, fl 33322";
+      await post({ contactId: "ct_str", from: "+15559990000", message: address });
+
+      const [forwarded] = assistant.handleInboundMessage.mock.calls[0];
+      expect(forwarded.message).toBe(address);
+      expect(normalizeInboundAddress(forwarded.message)).not.toBeNull();
+    });
+
+    it("resolves locationId from a nested GHL location object, staying optional", async () => {
+      // Nested location object → id extracted.
+      await post({
+        contactId: "ct_loc",
+        from: "+15559990000",
+        message: { type: 2, body: "hi" },
+        location: { id: "loc_nested" },
+      });
+      expect(assistant.handleInboundMessage.mock.calls[0][0].locationId).toBe("loc_nested");
+
+      // No location anywhere → undefined, and the flow still succeeds (gateway).
+      const res = await post({ contactId: "ct_none", from: "+15559990000", message: "hi" });
+      expect(res.status).toBe(200);
+      expect(assistant.handleInboundMessage.mock.calls[1][0].locationId).toBeUndefined();
     });
   });
 });
