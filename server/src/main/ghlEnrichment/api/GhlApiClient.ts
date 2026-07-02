@@ -1,6 +1,6 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from "axios";
 import { injectable } from "tsyringe";
-import { GhlEnrichmentConfig } from "../config/GhlEnrichmentConfig";
+import { ExternalActionGuard } from "../../safety/ExternalActionGuard";
 import { GhlConnectionService } from "../connections/GhlConnectionService";
 import { GhlConnection } from "../connections/GhlConnectionTypes";
 import {
@@ -48,9 +48,11 @@ export class GhlApiError extends Error {
  *    instance per location).
  *  - Retry transient failures (429 rate-limit, 5xx, network) with exponential
  *    backoff, honouring `Retry-After` on 429. 4xx (other) fail fast.
- *  - Enforce SPEC §8 write-safety at the client boundary: dev never writes to a
- *    real GHL sub-account (writes are echoed + skipped). The dedicated
- *    dev/staging mock-sink ticket builds on this guard.
+ *  - Enforce SPEC §8 write-safety: dev never writes to a real GHL sub-account.
+ *    The gate lives at the single {@link request} chokepoint (JAK-110) — every
+ *    mutating verb (POST/PUT/PATCH/DELETE) is echoed + skipped off prod/staging
+ *    via the shared {@link ExternalActionGuard}, so a new write method can never
+ *    forget the guard. Reads (GET) are free and pass through.
  *
  * Thin by design — only the methods the enrichment MVP needs.
  */
@@ -68,7 +70,7 @@ export class GhlApiClient {
 
   constructor(
     private readonly connections: GhlConnectionService,
-    private readonly config: GhlEnrichmentConfig
+    private readonly guard: ExternalActionGuard
   ) {}
 
   // ────────────────────────────── Reads ──────────────────────────────
@@ -93,7 +95,9 @@ export class GhlApiClient {
   }
 
   // ────────────────────────────── Writes ─────────────────────────────
-  // SPEC §8: these never touch a real GHL location off-prod (dev echoes + skips).
+  // SPEC §8: these never touch a real GHL location off-prod. No per-method
+  // guard — the mutating verb is caught at the single request() chokepoint
+  // below, which echoes + skips off prod/staging and returns null.
 
   /** Write enrichment values onto a contact's custom fields. */
   async updateContactCustomFields(
@@ -101,9 +105,6 @@ export class GhlApiClient {
     contactId: string,
     customFields: GhlCustomFieldValue[]
   ): Promise<void> {
-    if (!this.assertWriteAllowed(locationId, `update contact ${contactId} custom fields`)) {
-      return;
-    }
     await this.request<unknown>(locationId, {
       method: "PUT",
       url: `/contacts/${contactId}`,
@@ -117,9 +118,6 @@ export class GhlApiClient {
     contactId: string,
     body: string
   ): Promise<GhlNote | null> {
-    if (!this.assertWriteAllowed(locationId, `create note on contact ${contactId}`)) {
-      return null;
-    }
     const data = await this.request<{ note?: GhlNote }>(locationId, {
       method: "POST",
       url: `/contacts/${contactId}/notes`,
@@ -133,9 +131,6 @@ export class GhlApiClient {
     locationId: string,
     input: CreateCustomFieldInput
   ): Promise<GhlCustomField | null> {
-    if (!this.assertWriteAllowed(locationId, `create custom field "${input.name}"`)) {
-      return null;
-    }
     const data = await this.request<{ customField?: GhlCustomField }>(locationId, {
       method: "POST",
       url: `/locations/${locationId}/customFields`,
@@ -201,8 +196,21 @@ export class GhlApiClient {
     config: AxiosRequestConfig,
     opts: { notFoundAsNull?: boolean } = {}
   ): Promise<T> {
-    const http = await this.httpFor(locationId);
     const method = (config.method ?? "GET").toString().toUpperCase();
+
+    // SPEC §8 / JAK-110 — the single write-safety gate. Every mutating verb
+    // funnels through here, so no write method can bypass it. Off prod/staging
+    // we echo the intended write and skip it (no connection resolved, no HTTP),
+    // returning null so callers surface "skipped" cleanly. Reads pass through.
+    if (this.isMutation(method) && !this.guard.liveActionsAllowed) {
+      this.guard.echoSkipped(
+        "GHL write",
+        `${method} ${config.url} (location ${locationId})`
+      );
+      return null as T;
+    }
+
+    const http = await this.httpFor(locationId);
 
     let lastError: unknown;
     for (let attempt = 0; attempt <= GhlApiClient.MAX_RETRIES; attempt++) {
@@ -269,21 +277,9 @@ export class GhlApiClient {
     return err instanceof Error ? err.message : "unknown error";
   }
 
-  /**
-   * SPEC §8 write-safety gate. Real writes to a GHL sub-account happen only in
-   * production; dev echoes the intended write and skips it (returns false).
-   * Staging is expected to point at a dedicated test sub-account, so it writes.
-   * This is the first-line guard the dedicated dev/staging mock-sink ticket
-   * builds on.
-   */
-  private assertWriteAllowed(locationId: string, operation: string): boolean {
-    if (this.config.isProduction || this.config.isStaging) {
-      return true;
-    }
-    console.log(
-      `🧪 [dev echo] skipping GHL write for location ${locationId}: ${operation}`
-    );
-    return false;
+  /** Whether an HTTP verb mutates state (and so must be gated off prod/staging). */
+  private isMutation(method: string): boolean {
+    return method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE";
   }
 
   /** Sleep helper. Protected so tests can stub it out to run instantly. */

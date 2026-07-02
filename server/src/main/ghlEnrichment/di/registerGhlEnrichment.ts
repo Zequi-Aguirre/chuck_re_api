@@ -1,5 +1,6 @@
 import { DependencyContainer } from "tsyringe";
 import { GhlEnrichmentConfig } from "../config/GhlEnrichmentConfig";
+import { ExternalActionGuard } from "../../safety/ExternalActionGuard";
 import { GhlApiDao } from "../../data/GhlApiDao";
 import { PostgresDatabase } from "../../data/PostgresDatabase";
 import { CredentialCipher } from "../connections/CredentialCipher";
@@ -34,6 +35,14 @@ import { CreditService } from "../metering/CreditService";
 export const registerGhlEnrichment = (c: DependencyContainer): void => {
   if (!c.isRegistered(GhlEnrichmentConfig)) {
     c.registerSingleton(GhlEnrichmentConfig);
+  }
+
+  // JAK-110 — the single dev-safety boundary. One env-gated guard that every
+  // outbound transport (GhlApiClient writes, GhlApiDao writes/SMS, RealEstate
+  // paid lookups) consults, so real/costly/customer-visible actions are
+  // structurally impossible off prod/staging and can't be re-toggled per-call.
+  if (!c.isRegistered(ExternalActionGuard)) {
+    c.registerSingleton(ExternalActionGuard);
   }
 
   // GhlApiDao already ships from the MVP; keep a single shared instance so the

@@ -3,6 +3,7 @@
 import axios, { AxiosInstance, CreateAxiosDefaults } from "axios";
 import { injectable } from "tsyringe";
 import { EnvConfig } from "../config/envConfig.ts";
+import { ExternalActionGuard } from "../safety/ExternalActionGuard.ts";
 import { EnrichmentResult } from "../types/LeadEnrichment.ts";
 import {
   MailerEnrichmentResponse,
@@ -17,7 +18,21 @@ import {
 export class RealEstateApiDao {
   private readonly http: AxiosInstance;
 
-  constructor(private readonly env: EnvConfig) {
+  /**
+   * Dev-safety mocks (JAK-110). These are what the paid endpoints return off
+   * prod/staging instead of spending a real credit — deterministic "no match"
+   * payloads (never fabricated owner/PII), so dev flows resolve to "no property
+   * found" and no lookup is billed.
+   */
+  private static readonly DEV_MOCK_SEARCH: RealEstateApiPropertySearchResponse = { data: [] };
+  private static readonly DEV_MOCK_DETAIL: RealEstateApiPropertyDetailResponse = {
+    data: { mlsActive: false },
+  };
+
+  constructor(
+    private readonly env: EnvConfig,
+    private readonly guard: ExternalActionGuard
+  ) {
     const config: CreateAxiosDefaults = {
       baseURL: this.env.realEstateBaseUrl,
       headers: {
@@ -32,16 +47,33 @@ export class RealEstateApiDao {
   }
 
   /**
+   * The SINGLE paid-lookup chokepoint (SPEC §8 / JAK-110). Every billable
+   * PropertySearch / PropertyDetail call funnels through here, so dev-safety is
+   * enforced in exactly one place: off prod/staging we never spend — the call is
+   * echoed and a deterministic `devMock` is returned instead of hitting the API.
+   * This is an ENV GATE (via {@link ExternalActionGuard}), not a runtime toggle.
+   */
+  private async paidPost<T>(url: string, body: object, devMock: T): Promise<T> {
+    if (!this.guard.liveActionsAllowed) {
+      this.guard.echoSkipped("paid RealEstate API lookup", `POST ${url}`);
+      return devMock;
+    }
+    const resp = await this.http.post<T>(url, body);
+    return resp.data;
+  }
+
+  /**
    * PropertySearch fallback — fuzzy lookup for when parsing or detail lookup fails.
    */
   public async findPropertyIdByAddress(addressString: string): Promise<number | null> {
     try {
-      const resp = await this.http.post<RealEstateApiPropertySearchResponse>("/v2/PropertySearch", {
-        size: 5,
-        address: addressString,
-      });
+      const data = await this.paidPost<RealEstateApiPropertySearchResponse>(
+        "/v2/PropertySearch",
+        { size: 5, address: addressString },
+        RealEstateApiDao.DEV_MOCK_SEARCH
+      );
 
-      const first = resp.data.data?.[0];
+      const first = data.data?.[0];
       const idStr = first?.id;
       const id = typeof idStr === "string" ? Number(idStr) : idStr;
 
@@ -61,12 +93,13 @@ export class RealEstateApiDao {
     addressString: string
   ): Promise<RealEstateApiPropertySearchResult | null> {
     try {
-      const resp = await this.http.post<RealEstateApiPropertySearchResponse>("/v2/PropertySearch", {
-        size: 1,
-        address: addressString,
-      });
+      const data = await this.paidPost<RealEstateApiPropertySearchResponse>(
+        "/v2/PropertySearch",
+        { size: 1, address: addressString },
+        RealEstateApiDao.DEV_MOCK_SEARCH
+      );
 
-      return resp.data.data?.[0] ?? null;
+      return data.data?.[0] ?? null;
     } catch (err: any) {
       console.error(`❌ PropertySearch error: ${err.message}`);
       return null;
@@ -84,8 +117,12 @@ export class RealEstateApiDao {
     zip: string;
   }): Promise<RealEstateApiPropertyDetail | null> {
     try {
-      const resp = await this.http.post<RealEstateApiPropertyDetailResponse>("/v2/PropertyDetail", parts);
-      return resp.data.data ?? null;
+      const data = await this.paidPost<RealEstateApiPropertyDetailResponse>(
+        "/v2/PropertyDetail",
+        parts,
+        RealEstateApiDao.DEV_MOCK_DETAIL
+      );
+      return data.data ?? null;
     } catch (err: any) {
       console.error(`❌ PropertyDetail (by address) error: ${err.message}`);
       return null;
@@ -97,8 +134,12 @@ export class RealEstateApiDao {
    */
   public async getPropertyDetailById(id: number): Promise<RealEstateApiPropertyDetail | null> {
     try {
-      const resp = await this.http.post<RealEstateApiPropertyDetailResponse>("/v2/PropertyDetail", { id });
-      return resp.data.data ?? null;
+      const data = await this.paidPost<RealEstateApiPropertyDetailResponse>(
+        "/v2/PropertyDetail",
+        { id },
+        RealEstateApiDao.DEV_MOCK_DETAIL
+      );
+      return data.data ?? null;
     } catch (err: any) {
       console.error(`❌ PropertyDetail (by ID) error: ${err.message}`);
       return null;
