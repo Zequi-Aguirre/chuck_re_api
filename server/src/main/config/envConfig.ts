@@ -57,6 +57,15 @@ export class EnvConfig {
     public readonly creditCostEnrichment: number;
     public readonly creditCostSkipTrace: number;
 
+    // 🔐 Admin dashboard (JAK-113). The first-admin bootstrap credentials come
+    // from Doppler — NEVER hardcoded in code or a migration. On boot, if both are
+    // set and no admin with that email exists yet, one is created (password
+    // bcrypt-hashed). Leave them unset once the admin exists. The session TTL
+    // governs how long an issued admin JWT stays valid.
+    public readonly adminSeedEmail: string;
+    public readonly adminSeedPassword: string;
+    public readonly adminSessionTtlHours: number;
+
     constructor() {
         // 🌐 App
         this.clientUrl = process.env.VITE_ASKZACK_CLIENT_URL!;
@@ -101,6 +110,12 @@ export class EnvConfig {
         // back to the default so a bad env var can never make work "free".
         this.creditCostEnrichment = positiveIntFromEnv(process.env.CREDIT_COST_ENRICHMENT, 1);
         this.creditCostSkipTrace = positiveIntFromEnv(process.env.CREDIT_COST_SKIP_TRACE, 2);
+
+        // 🔐 Admin dashboard bootstrap (JAK-113). Optional — unset on environments
+        // where the admin already exists. Never defaulted to a real credential.
+        this.adminSeedEmail = process.env.ADMIN_SEED_EMAIL ?? "";
+        this.adminSeedPassword = process.env.ADMIN_SEED_PASSWORD ?? "";
+        this.adminSessionTtlHours = positiveIntFromEnv(process.env.ADMIN_SESSION_TTL_HOURS, 12);
     }
 
     // 🌱 Canonical env-stage helper (Automator pattern). This is the single

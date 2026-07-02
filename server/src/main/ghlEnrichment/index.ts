@@ -124,3 +124,20 @@ export type {
   LocationStatusSummary,
   LocationStatusDetail,
 } from "./status/GhlStatusTypes";
+
+// JAK-113 — admin dashboard: email/password auth + sub-account CRUD. The beta
+// onboarding UI + auth layer over the services above; reuses JAK-102/109/112,
+// reimplements no business logic. Passwords are bcrypt-hashed; the API key is
+// write-only (encrypted at rest, never returned after save).
+export { AdminAuthResource } from "./admin/AdminAuthResource";
+export { AdminResource } from "./admin/AdminResource";
+export { AdminAuthService } from "./admin/AdminAuthService";
+export { AdminConnectionService } from "./admin/AdminConnectionService";
+export { AdminUserStore } from "./admin/AdminUserStore";
+export { requireAdminAuth, ADMIN_COOKIE } from "./admin/requireAdminAuth";
+export type {
+  AdminUser,
+  AdminUserRow,
+  AdminTokenPayload,
+  AdminConnectionView,
+} from "./admin/AdminTypes";

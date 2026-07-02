@@ -18,6 +18,11 @@ import { CreditLedgerStore } from "../metering/CreditLedgerStore";
 import { CreditService } from "../metering/CreditService";
 import { GhlStatusService } from "../status/GhlStatusService";
 import { GhlStatusResource } from "../status/GhlStatusResource";
+import { AdminUserStore } from "../admin/AdminUserStore";
+import { AdminAuthService } from "../admin/AdminAuthService";
+import { AdminConnectionService } from "../admin/AdminConnectionService";
+import { AdminAuthResource } from "../admin/AdminAuthResource";
+import { AdminResource } from "../admin/AdminResource";
 
 /**
  * DI registration for the GHL enrichment module.
@@ -140,5 +145,27 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   }
   if (!c.isRegistered(GhlStatusResource)) {
     c.registerSingleton(GhlStatusResource);
+  }
+
+  // JAK-113 — admin dashboard: the beta onboarding UI + its auth/data API. This
+  // is the UI + auth LAYER over the services above (JAK-102 connections, JAK-109
+  // credits, JAK-112 status) — it reuses them, reimplementing no business logic.
+  // Admin users authenticate with a bcrypt-hashed password (AdminUserStore /
+  // AdminAuthService) and the CRUD/status/credits API (AdminResource) is fully
+  // session-guarded. Shares the one Postgres pool with every other store.
+  if (!c.isRegistered(AdminUserStore)) {
+    c.registerSingleton(AdminUserStore);
+  }
+  if (!c.isRegistered(AdminAuthService)) {
+    c.registerSingleton(AdminAuthService);
+  }
+  if (!c.isRegistered(AdminConnectionService)) {
+    c.registerSingleton(AdminConnectionService);
+  }
+  if (!c.isRegistered(AdminAuthResource)) {
+    c.registerSingleton(AdminAuthResource);
+  }
+  if (!c.isRegistered(AdminResource)) {
+    c.registerSingleton(AdminResource);
   }
 };

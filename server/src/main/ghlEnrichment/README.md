@@ -169,3 +169,47 @@ Environment stage is resolved through the single canonical helper on
 `EnvConfig`: `isProduction` / `isStaging` / `isDev` (Automator pattern). The
 dev/staging write-safety rule (SPEC §8 — never write to a real GHL sub-account
 off prod) reads these; do not re-derive the stage anywhere else.
+
+## What JAK-113 added (admin dashboard — the beta onboarding path)
+
+The internal dashboard where Zequi onboards beta sub-accounts. This is the **UI +
+auth layer** over the existing services (JAK-102 connections, JAK-109 credits,
+JAK-112 status) — it reimplements **no** business logic. (OAuth marketplace
+install is deferred, JAK-150; today sub-accounts are connected by pasting a key.)
+
+Backend (`admin/`):
+- `AdminUserStore.ts` + migration `*_create_admin_users.sql` — the `admin_users`
+  table. Passwords are stored **only** as a bcrypt hash (`password_hash`), never
+  plaintext, never reversible.
+- `AdminAuthService.ts` — bcrypt hash/verify (constant-time so a missing account
+  can't be timed apart from a wrong password), JWT issue/verify signed with the
+  app `JWT_SECRET`, and `seedFirstAdmin()` — the first admin is bootstrapped from
+  `ADMIN_SEED_EMAIL` / `ADMIN_SEED_PASSWORD` (Doppler) at boot. **No credential
+  is ever hardcoded in code or a migration.**
+- `requireAdminAuth.ts` — middleware guarding every data route; reads the session
+  JWT from the httpOnly `jake_admin_session` cookie (or a Bearer header).
+- `AdminAuthResource.ts` — `POST /api/admin/auth/login|logout`, `GET .../me`. The
+  JWT is delivered as an httpOnly, sameSite=lax cookie (secure in prod); login
+  failures are a single generic 401 (no account enumeration).
+- `AdminConnectionService.ts` — thin adapter: create/edit/rotate delegate to
+  `GhlConnectionService` (key **encrypted at rest** via the JAK-102 cipher),
+  deactivate to the JAK-104/110 inactive path (`GhlInstallLifecycleService`),
+  credit grants to `CreditService`. Every value it returns is the masked
+  `AdminConnectionView` — **the API key is write-only: never returned after save,
+  never logged, never shown again** (only a constant `••••••••` mask).
+- `AdminResource.ts` — the session-guarded data API under `/api/admin`: list
+  (reuses JAK-112 `listLocationStatuses`), create, detail (reuses JAK-112
+  `getLocationStatus`), edit/rotate, activate, deactivate, delete, and manual
+  credit grant/adjustment.
+
+Frontend (`client/`): a **separately-built** React + MUI SPA (`npm run
+build-admin` → `client/dist`) **served by this same Express server** under
+`/admin` (`JakeServer.mountAdminSpa`) — no second server, mirroring the
+Automator/Northstar pattern. Login → list sub-accounts → connect one (paste key +
+location id + base url) → per-account status (connection state, credit balance,
+recent outcomes, failures) with edit/rotate/deactivate/delete and manual credit
+grants.
+
+To run locally: `npm run build-admin` (or `npm run dev-admin` for the Vite dev
+server proxying `/api` to `:8080`), boot the server, and sign in at `/admin` with
+the `ADMIN_SEED_*` credentials.

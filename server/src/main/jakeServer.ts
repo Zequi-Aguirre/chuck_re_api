@@ -3,6 +3,8 @@ import dotenv from "dotenv";
 import express, { Express } from "express";
 import http from "http";
 import cors from "cors";
+import fs from "fs";
+import path from "path";
 import { container } from "tsyringe";
 
 import { appConfig } from "./config";
@@ -14,7 +16,13 @@ import { Authenticator } from "./middleware/authenticator.ts";
 import { MailerResource } from "./resources/MailerResource.ts";
 import { GhlWebhookResource } from "./resources/GhlWebhookResource.ts";
 import { JakeSmsResource } from "./resources/JakeSmsResource.ts";
-import { GhlEnrichmentWebhookResource, GhlStatusResource } from "./ghlEnrichment/index.ts";
+import {
+    GhlEnrichmentWebhookResource,
+    GhlStatusResource,
+    AdminAuthResource,
+    AdminResource,
+    AdminAuthService,
+} from "./ghlEnrichment/index.ts";
 // Services
 import { LeadEnrichmentQueueService } from "./services/LeadEnrichmentQueueService.ts";
 
@@ -82,6 +90,20 @@ export class JakeServer {
         this.app.use("/api/mailer", container.resolve(MailerResource).router);
         this.app.use("/api/sms", container.resolve(JakeSmsResource).router);
 
+        // 🔐 JAK-113 — admin dashboard API. NOT gated on Redis: it only reads/writes
+        // Postgres (connections, credits, status). Auth endpoints are public
+        // (login); everything under /api/admin is session-guarded internally.
+        this.app.use("/api/admin/auth", container.resolve(AdminAuthResource).router);
+        this.app.use("/api/admin", container.resolve(AdminResource).router);
+
+        // 🖥️ JAK-113 — serve the built React/MUI admin SPA from THIS server (no
+        // second server; mirrors the Automator/Northstar single-server pattern).
+        this.mountAdminSpa();
+
+        // 🌱 Bootstrap the first admin from Doppler env (never a hardcoded
+        // credential). No-ops unless ADMIN_SEED_* are set and the admin is absent.
+        await this.seedAdmin();
+
         // 🚀 Start Lead Enrichment Worker (but NOT the HTTP server)
         if (redisConfigured) {
             try {
@@ -105,6 +127,50 @@ export class JakeServer {
             });
 
         return this;
+    }
+
+    /**
+     * Serve the built admin SPA (client/dist) under /admin from this same server.
+     * The React app is built separately (`npm run build-admin`) into client/dist;
+     * here we static-serve that build and fall back to index.html for client-side
+     * routes (deep links like /admin/connections/:id). If the build isn't present
+     * (e.g. a backend-only dev boot), we log and skip — the API still works.
+     */
+    private mountAdminSpa(): void {
+        const clientDist = path.resolve(process.cwd(), "client", "dist");
+        const indexHtml = path.join(clientDist, "index.html");
+
+        if (!fs.existsSync(indexHtml)) {
+            console.log(
+                "ℹ️ Admin SPA build not found at client/dist — skipping /admin " +
+                    "(run `npm run build-admin`). The /api/admin API is still mounted."
+            );
+            return;
+        }
+
+        this.app.use("/admin", express.static(clientDist));
+        // SPA fallback: any non-file /admin/* path returns the app shell so the
+        // client router can handle it. API routes are mounted earlier, so this
+        // never shadows them.
+        this.app.get(/^\/admin(\/.*)?$/, (_req, res) => {
+            res.sendFile(indexHtml);
+        });
+        console.log("🖥️ Admin SPA served at /admin");
+    }
+
+    /** Bootstrap the first admin from env; tolerate a queue-less/DB-less boot. */
+    private async seedAdmin(): Promise<void> {
+        if (!this.config.databaseUrl?.trim()) {
+            console.log("ℹ️ DATABASE_URL not set — skipping admin bootstrap.");
+            return;
+        }
+        try {
+            const result = await container.resolve(AdminAuthService).seedFirstAdmin();
+            if (result === "created") console.log("🔐 First admin user created from ADMIN_SEED_* env.");
+            else if (result === "exists") console.log("🔐 Admin user already present — no seed needed.");
+        } catch (err) {
+            console.error("❌ Admin bootstrap failed:", err);
+        }
     }
 
     /** Returns the Express app */
