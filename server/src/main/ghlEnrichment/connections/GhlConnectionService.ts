@@ -17,8 +17,8 @@ import {
  * auth to a sub-account": today it's a pasted API key (beta), later an OAuth
  * token — callers (enrichment webhook, text-Jake JAK-114) don't care which.
  *
- * It REPLACES the single Doppler `GHL_API_KEY` + `GHL_BASE_URL`: those creds now
- * live per-location in the DB; Doppler keeps only the app-level encryption key.
+ * Credentials live per-location in the DB (encrypted at rest); Doppler keeps
+ * only the app-level encryption key, never a tenant's GHL API key or base URL.
  */
 @injectable()
 export class GhlConnectionService {

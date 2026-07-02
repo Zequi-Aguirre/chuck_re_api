@@ -7,10 +7,15 @@ The GoHighLevel lead-enrichment Marketplace app. Full spec:
 This module lives **inside** Jake's existing TS / Express / tsyringe server and
 **extends the parked MVP scaffolding** — it does not duplicate it:
 
-- `data/GhlApiDao.ts` — GHL axios client (contacts, tags, SMS).
-- `resources/GhlWebhookResource.ts` — `/api/ghl/webhook` receiver.
-- `worker/LeadEnrichmentWorker.ts` + `services/LeadEnrichment*` — the Redis /
-  BullMQ enrichment pipeline (only wired when Redis is configured).
+- `services/LeadEnrichmentQueueService.ts` — the Redis / BullMQ enrichment queue
+  (only wired when Redis is configured): the JAK-106 webhook enqueues onto it and
+  the JAK-107 `GhlEnrichmentWorker` consumes it.
+
+> **JAK-119:** the original single-tenant MVP client (`data/GhlApiDao.ts`, the
+> `/api/ghl/webhook` receiver, and the `LeadEnrichmentService`/`LeadEnrichmentWorker`
+> pair) has been retired along with the Doppler `GHL_API_KEY` + `GHL_BASE_URL`
+> creds. All GHL access now goes through the multi-tenant `GhlApiClient` with
+> per-location credentials from the JAK-102 store.
 
 ## What JAK-101 added (scaffolding + config + DI only — no business logic)
 
@@ -25,9 +30,9 @@ This module lives **inside** Jake's existing TS / Express / tsyringe server and
 
 The **single source of GHL credentials** for BOTH the enrichment webhook path
 AND text-Jake (JAK-114). A `connection` is one row per sub-account (location):
-`{ location_id, api_key (encrypted at rest), base_url, phone_numbers[] }`. It
-replaces the single Doppler `GHL_API_KEY` + `GHL_BASE_URL` — those creds move
-per-location into Postgres; Doppler keeps only the app-level encryption key.
+`{ location_id, api_key (encrypted at rest), base_url, phone_numbers[] }`. GHL
+creds live per-location in Postgres (encrypted at rest); Doppler keeps only the
+app-level encryption key, never a tenant's own key or base URL.
 
 - `connections/GhlConnectionTypes.ts` — the `GhlConnection` domain shape + I/O.
 - `connections/CredentialCipher.ts` — AES-256-GCM encrypt/decrypt; 256-bit key
@@ -106,9 +111,8 @@ JAK-106 webhook enqueues and, for that one contact, runs end-to-end:
   the metering log JAK-109 reads); UPSERTs one row per `(location, contact)`.
 - `worker/EnrichmentNote.ts` — pure "Jake Enrichment" note rendering.
 - Migration: `supabase/migrations/*_create_ghl_enrichment_events.sql`.
-- `services/LeadEnrichmentQueueService` routes jobs: multi-tenant (a
-  `location_id` is present, the JAK-106 path) → `GhlEnrichmentWorker`; legacy
-  single-tenant MVP jobs → the parked `LeadEnrichmentService`.
+- `services/LeadEnrichmentQueueService` dispatches every job (each carries a
+  `location_id` from the JAK-106 path) to the multi-tenant `GhlEnrichmentWorker`.
 
 Failure handling is deliberately **minimal** (JAK-111 hardens it): transient GHL
 failures (429/5xx/network) re-throw so BullMQ retries with backoff and the job

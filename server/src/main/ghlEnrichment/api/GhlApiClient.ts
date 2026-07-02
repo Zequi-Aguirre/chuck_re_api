@@ -36,13 +36,11 @@ export class GhlApiError extends Error {
 /**
  * Multi-tenant GHL API v2 client (JAK-104).
  *
- * This is the canonical, per-location successor to the single-tenant MVP
- * {@link import("../../data/GhlApiDao").GhlApiDao}: every call resolves the
- * caller's credentials from the JAK-102 encrypted connection store
+ * This is the canonical, per-location client: every call resolves the caller's
+ * credentials from the JAK-102 encrypted connection store
  * ({@link GhlConnectionService} → decrypted `apiKey` + per-location `base_url`),
- * NOT from a single Doppler `GHL_API_KEY`. Doppler holds only the app-level
- * encryption key. The worker/webhook paths migrate onto this client in
- * JAK-106/JAK-107.
+ * NOT from a single app-wide Doppler key. Doppler holds only the app-level
+ * encryption key. The worker/webhook paths use this client (JAK-106/JAK-107).
  *
  * Responsibilities:
  *  - Inject the correct per-location Bearer token + base URL (one cached axios

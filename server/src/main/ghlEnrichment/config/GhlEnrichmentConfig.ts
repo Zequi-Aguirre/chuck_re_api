@@ -10,9 +10,8 @@ import { CreditCostConfig } from "../metering/CreditCosts";
  * touches `process.env` directly.
  *
  * Scaffolding only (JAK-101) — no business logic. The pieces that consume this
- * (OAuth install, webhook verify, credential store, worker) land in later
- * tickets and build on the parked MVP scaffolding (GhlApiDao, the Redis
- * enrichment worker, /api/ghl) rather than duplicating it.
+ * (OAuth install, webhook verify, credential store, worker) resolve their
+ * settings here rather than reading `process.env` directly.
  */
 @injectable()
 export class GhlEnrichmentConfig {
@@ -40,11 +39,6 @@ export class GhlEnrichmentConfig {
    */
   get credentialEncryptionKey(): string {
     return this.env.ghlCredentialEncKey;
-  }
-
-  /** Base URL for GHL API calls. */
-  get apiBaseUrl(): string {
-    return this.env.ghlBaseUrl;
   }
 
   /**
