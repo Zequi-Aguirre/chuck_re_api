@@ -15,6 +15,7 @@ import Divider from "@mui/material/Divider";
 import IconButton from "@mui/material/IconButton";
 import MenuIcon from "@mui/icons-material/Menu";
 import GroupsIcon from "@mui/icons-material/Groups";
+import SmsIcon from "@mui/icons-material/Sms";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import LogoutIcon from "@mui/icons-material/Logout";
 import { useAuth } from "../auth";
@@ -35,6 +36,7 @@ export function Layout() {
   // never renders for a regular admin (route + API 403 back it up).
   const navItems = [
     { label: "Sub-accounts", to: "/", icon: <GroupsIcon />, show: true },
+    { label: "Text customers", to: "/text-customers", icon: <SmsIcon />, show: true },
     {
       label: "Admins",
       to: "/admins",

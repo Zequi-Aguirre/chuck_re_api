@@ -23,6 +23,7 @@ import { GhlStatusResource } from "../status/GhlStatusResource";
 import { AdminUserStore } from "../admin/AdminUserStore";
 import { AdminAuthService } from "../admin/AdminAuthService";
 import { AdminConnectionService } from "../admin/AdminConnectionService";
+import { AdminTextCustomerService } from "../admin/AdminTextCustomerService";
 import { AdminAuthResource } from "../admin/AdminAuthResource";
 import { AdminResource } from "../admin/AdminResource";
 
@@ -173,6 +174,13 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   }
   if (!c.isRegistered(AdminConnectionService)) {
     c.registerSingleton(AdminConnectionService);
+  }
+  // JAK-129 — grant credits to a tier-1 text-Jake customer BY PHONE. Reuses the
+  // JAK-115 customer resolution + the JAK-109 credit ledger; the customer id is
+  // the credit-account key, so a gateway texter (no sub-account) can be topped
+  // up. Shares the one Postgres pool.
+  if (!c.isRegistered(AdminTextCustomerService)) {
+    c.registerSingleton(AdminTextCustomerService);
   }
   if (!c.isRegistered(AdminAuthResource)) {
     c.registerSingleton(AdminAuthResource);

@@ -5,6 +5,7 @@ import {
   LedgerEntryView,
   LocationStatusDetail,
   LocationStatusSummary,
+  TextCustomerView,
 } from "./types";
 
 /**
@@ -111,6 +112,22 @@ export const api = {
     return request(`/connections/${encodeURIComponent(locationId)}/credits`, {
       method: "POST",
       body: JSON.stringify({ amount, reason }),
+    });
+  },
+
+  // --- text-Jake customers (JAK-129) ---
+  async listTextCustomers(): Promise<TextCustomerView[]> {
+    const body = await request<{ customers: TextCustomerView[] }>("/text-customers");
+    return body.customers;
+  },
+  async grantTextCustomerCredits(
+    phone: string,
+    amount: number,
+    reason: "manual_grant" | "adjustment"
+  ): Promise<{ balance: number; customer: TextCustomerView }> {
+    return request("/text-customers/credits", {
+      method: "POST",
+      body: JSON.stringify({ phone, amount, reason }),
     });
   },
 
