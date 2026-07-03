@@ -67,7 +67,12 @@ export class ConversationMemoryService {
     return newestFirst.reverse();
   }
 
-  /** "The last address they sent" — resolves an OK refresh that carries no address. */
+  /**
+   * "The last address they sent" — the MOST RECENT address this phone resolved to,
+   * by recency. Resolves an OK refresh that carries no address (JAK-134), and the
+   * default target for a BARE skip-trace / comps with no explicit reference
+   * (JAK-154) — so a bare "skip trace" hits the newest property, not an older one.
+   */
   async lastResolvedAddress(phone: string): Promise<string | null> {
     return this.store.lastResolvedAddress(phone);
   }

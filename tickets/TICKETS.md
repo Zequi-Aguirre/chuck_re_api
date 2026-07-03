@@ -31,14 +31,13 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-124** (P1) Admin management: logged-in admin can create another admin — depends: JAK-113
 - [ ] **JAK-149** (P1) Mobile-first admin pages: cards on mobile for all data tables, no horizontal scroll — depends: JAK-146
 
-## Deferred / blocked (5)
+## Deferred / blocked (4)
 - [ ] **JAK-150** (P3) [LATER] GHL Marketplace listing + approval requirements
 - [ ] **JAK-151** (P3) [LATER] Tier pricing + billing + enrichment caps + unit economics — depends: JAK-109
 - [ ] **JAK-152** (P3) [LATER] Onboarding: white-glove + self-serve field-mapping guide — depends: JAK-105
 - [ ] **JAK-153** (P3) [LATER] Privacy Policy + Terms pages for Jake
-- [ ] **JAK-154** (P3) [LATER] CRM upsell bundle (GHL SaaS resale + AskZoe concierge)
 
-## Done (28)
+## Done (29)
 - [x] **JAK-100** (P0) Project ticket store (SQLite in-repo)
 - [x] **JAK-101** (P0) GHL app scaffolding + Doppler config + env helper — depends: JAK-100
 - [x] **JAK-102** (P0) Encrypted connection/credential store — depends: JAK-101
@@ -67,3 +66,4 @@ Epic: `ghl-enrichment`
 - [x] **JAK-146** (P0) Text-customer profile fields (name/email) + mobile-first text-customers admin page — depends: JAK-129, JAK-115
 - [x] **JAK-147** (P0) Sync text customer to Jake GHL sub-account + set 'text Jake' approval field — depends: JAK-146, JAK-104, JAK-102, JAK-110
 - [x] **JAK-148** (P0) Two-level hold for text customers (soft on-hold + hard deactivate) with GHL 'text Jake' field flip — depends: JAK-147, JAK-146, JAK-110
+- [x] **JAK-154** (P0) Bare skip-trace/comps default to the MOST RECENT address (fix: re-ran an older/already-handled property) — depends: JAK-135, JAK-138, JAK-145
