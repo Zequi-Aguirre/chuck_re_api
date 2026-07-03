@@ -100,6 +100,27 @@ export class TextJakeCustomerStore {
     return result.rows[0] ?? null;
   }
 
+  /**
+   * Record the GHL contact id resolved when syncing a customer to the Jake
+   * sub-account (JAK-147). Returns the updated row, or null if no live customer
+   * has that id. Kept separate from the profile write so a sync can persist the
+   * link without re-touching the admin-entered fields.
+   */
+  async setGhlContactId(
+    id: string,
+    ghlContactId: string
+  ): Promise<TextJakeCustomerRow | null> {
+    const result = await this.db.query<TextJakeCustomerRow>(
+      `UPDATE text_jake_customers
+       SET ghl_contact_id = $2,
+           modified_at = now()
+       WHERE id = $1 AND deleted_at IS NULL
+       RETURNING *`,
+      [id, ghlContactId]
+    );
+    return result.rows[0] ?? null;
+  }
+
   /** Look up a customer by phone without creating one. */
   async findByPhone(phone: string): Promise<TextJakeCustomerRow | null> {
     const result = await this.db.query<TextJakeCustomerRow>(

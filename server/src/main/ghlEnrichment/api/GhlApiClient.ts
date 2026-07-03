@@ -10,6 +10,7 @@ import {
   GhlCustomFieldValue,
   GhlNote,
   GhlSmsSendResult,
+  UpsertContactInput,
 } from "./GhlApiTypes";
 
 /** Raised when no active connection exists for a location — callers stop processing. */
@@ -93,6 +94,26 @@ export class GhlApiClient {
     return data?.customFields ?? [];
   }
 
+  /**
+   * Find a single contact in a location by phone number (JAK-147) — GHL v2's
+   * duplicate-search endpoint. Returns the matched contact, or null when the
+   * location has no contact on that number. A READ, so it passes through in every
+   * environment (only writes are gated). Used to prefill the admin form and to
+   * confirm a texter's existing contact.
+   */
+  async findContactByPhone(locationId: string, phone: string): Promise<GhlContact | null> {
+    const data = await this.request<{ contact?: GhlContact } | null>(
+      locationId,
+      {
+        method: "GET",
+        url: "/contacts/search/duplicate",
+        params: { locationId, number: phone },
+      },
+      { notFoundAsNull: true }
+    );
+    return data?.contact ?? null;
+  }
+
   // ────────────────────────────── Writes ─────────────────────────────
   // SPEC §8: these never touch a real GHL location off-prod. No per-method
   // guard — the mutating verb is caught at the single request() chokepoint
@@ -109,6 +130,37 @@ export class GhlApiClient {
       url: `/contacts/${contactId}`,
       data: { customFields },
     });
+  }
+
+  /**
+   * Find-or-create a contact by phone in a location and write its profile +
+   * custom fields (JAK-147) — GHL v2's `POST /contacts/upsert`. IDEMPOTENT: the
+   * phone is the dedupe key, so re-upserting the same number updates the SAME
+   * contact rather than duplicating it (re-saving a text customer is safe). As a
+   * POST it's gated at the {@link request} chokepoint — off prod/staging it's
+   * echoed + skipped (returns null), so dev never writes to a real sub-account.
+   */
+  async upsertContact(
+    locationId: string,
+    input: UpsertContactInput
+  ): Promise<GhlContact | null> {
+    const data: Record<string, unknown> = {
+      locationId,
+      phone: input.phone,
+    };
+    // Only send fields we actually have — never blank a value with null.
+    if (input.firstName != null) data.firstName = input.firstName;
+    if (input.lastName != null) data.lastName = input.lastName;
+    if (input.email != null) data.email = input.email;
+    if (input.customFields && input.customFields.length > 0) {
+      data.customFields = input.customFields;
+    }
+    const res = await this.request<{ contact?: GhlContact } | null>(locationId, {
+      method: "POST",
+      url: "/contacts/upsert",
+      data,
+    });
+    return res?.contact ?? null;
   }
 
   /** Attach a note to a contact (the "Jake Enrichment" note). Null when skipped off-prod. */

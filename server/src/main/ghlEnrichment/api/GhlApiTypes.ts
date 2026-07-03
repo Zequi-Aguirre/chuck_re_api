@@ -62,6 +62,23 @@ export interface GhlSmsSendResult {
 }
 
 /**
+ * Input for finding-or-creating a contact by phone in a location (JAK-147).
+ * Mirrors the GHL v2 `POST /contacts/upsert` body: the phone is the dedupe key,
+ * so re-upserting the same number updates the SAME contact instead of creating a
+ * duplicate (idempotent). Name / email / customFields are optional and only sent
+ * when present — we never blank a field a user set by passing null.
+ */
+export interface UpsertContactInput {
+  /** E.164 phone — the dedupe key GHL matches an existing contact on. */
+  phone: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  email?: string | null;
+  /** Custom-field values to set on the contact (e.g. the "text Jake" approval). */
+  customFields?: GhlCustomFieldValue[];
+}
+
+/**
  * Input for provisioning a custom field on a location (JAK-105 uses this to
  * auto-create the canonical Jake fields on install).
  */

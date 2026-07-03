@@ -186,9 +186,11 @@ export function TextCustomersPage() {
         open={formCustomer !== undefined}
         customer={formCustomer ?? null}
         onClose={() => setFormCustomer(undefined)}
-        onSaved={(customer) => {
+        onSaved={(customer, sync) => {
           const name = customerDisplayName(customer) || customer.phone;
-          setToast(`Saved ${name}.`);
+          // Surface the GHL sync outcome inline (JAK-147) — "Synced…", the dev
+          // "sync runs in staging/production only", or a not-found/error note.
+          setToast(sync?.message ? `Saved ${name}. ${sync.message}` : `Saved ${name}.`);
           load();
         }}
       />

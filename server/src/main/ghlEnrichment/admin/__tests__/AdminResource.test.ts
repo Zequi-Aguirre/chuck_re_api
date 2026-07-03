@@ -5,6 +5,7 @@ import { GhlStatusService } from "../../status/GhlStatusService";
 import { AdminAuthService } from "../AdminAuthService";
 import { AdminConnectionService, API_KEY_MASK } from "../AdminConnectionService";
 import { AdminTextCustomerService } from "../AdminTextCustomerService";
+import { TextCustomerSyncResult } from "../../customers/TextCustomerGhlSyncService";
 import { AdminResource } from "../AdminResource";
 import { AdminConnectionView, AdminTextCustomerView } from "../AdminTypes";
 import { PropertyReportPromptService } from "../../../services/PropertyReportPromptService";
@@ -221,6 +222,16 @@ describe("AdminResource", () => {
     ...over,
   });
 
+  // The GHL sync outcome the service returns alongside a saved customer (JAK-147).
+  const syncResult = (
+    over: Partial<TextCustomerSyncResult> = {}
+  ): TextCustomerSyncResult => ({
+    status: "synced",
+    ghlContactId: "ghl_1",
+    message: "Synced to GoHighLevel and approved to text Jake.",
+    ...over,
+  });
+
   describe("GET /text-customers", () => {
     it("is behind the auth gate", async () => {
       auth.verifyToken.mockReturnValue(null);
@@ -294,10 +305,16 @@ describe("AdminResource", () => {
       expect(textCustomers.create).not.toHaveBeenCalled();
     });
 
-    it("creates a customer, persisting name + email", async () => {
-      textCustomers.create.mockResolvedValue(
-        textCustomerView({ firstName: "Ada", lastName: "Lovelace", email: "ada@example.com" })
-      );
+    it("creates a customer, persisting name + email, and returns the GHL sync outcome", async () => {
+      textCustomers.create.mockResolvedValue({
+        customer: textCustomerView({
+          firstName: "Ada",
+          lastName: "Lovelace",
+          email: "ada@example.com",
+          ghlContactId: "ghl_1",
+        }),
+        sync: syncResult(),
+      });
       const res = await asAdmin(
         request(app).post("/api/admin/text-customers").send({
           phone: "+17865274077",
@@ -309,6 +326,9 @@ describe("AdminResource", () => {
       expect(res.status).toBe(201);
       expect(res.body.customer.firstName).toBe("Ada");
       expect(res.body.customer.email).toBe("ada@example.com");
+      // The sync result rides along so the UI can surface it inline (JAK-147).
+      expect(res.body.sync.status).toBe("synced");
+      expect(res.body.customer.ghlContactId).toBe("ghl_1");
       expect(textCustomers.create).toHaveBeenCalledWith({
         phone: "+17865274077",
         firstName: "Ada",
@@ -318,7 +338,10 @@ describe("AdminResource", () => {
     });
 
     it("allows saving WITHOUT an email (email optional → null)", async () => {
-      textCustomers.create.mockResolvedValue(textCustomerView({ firstName: "Ada" }));
+      textCustomers.create.mockResolvedValue({
+        customer: textCustomerView({ firstName: "Ada" }),
+        sync: syncResult({ status: "skipped", ghlContactId: null }),
+      });
       const res = await asAdmin(
         request(app).post("/api/admin/text-customers").send({ phone: "+17865274077", firstName: "Ada" })
       );
@@ -368,10 +391,11 @@ describe("AdminResource", () => {
       expect(textCustomers.update).not.toHaveBeenCalled();
     });
 
-    it("updates name + email and returns the refreshed view", async () => {
-      textCustomers.update.mockResolvedValue(
-        textCustomerView({ firstName: "Grace", email: "grace@example.com", creditBalance: 4 })
-      );
+    it("updates name + email and returns the refreshed view + sync outcome", async () => {
+      textCustomers.update.mockResolvedValue({
+        customer: textCustomerView({ firstName: "Grace", email: "grace@example.com", creditBalance: 4 }),
+        sync: syncResult(),
+      });
       const res = await asAdmin(
         request(app).put("/api/admin/text-customers/cust-1").send({
           phone: "+17865274077",
@@ -383,6 +407,7 @@ describe("AdminResource", () => {
       expect(res.status).toBe(200);
       expect(res.body.customer.firstName).toBe("Grace");
       expect(res.body.customer.creditBalance).toBe(4);
+      expect(res.body.sync.status).toBe("synced");
       expect(textCustomers.update).toHaveBeenCalledWith("cust-1", {
         phone: "+17865274077",
         firstName: "Grace",
@@ -392,7 +417,10 @@ describe("AdminResource", () => {
     });
 
     it("allows clearing the email on edit (blank → null)", async () => {
-      textCustomers.update.mockResolvedValue(textCustomerView());
+      textCustomers.update.mockResolvedValue({
+        customer: textCustomerView(),
+        sync: syncResult({ status: "skipped", ghlContactId: null }),
+      });
       await asAdmin(
         request(app)
           .put("/api/admin/text-customers/cust-1")
@@ -428,6 +456,61 @@ describe("AdminResource", () => {
         request(app).put("/api/admin/text-customers/cust-1").send({ phone: "+15559998888" })
       );
       expect(res.status).toBe(409);
+    });
+  });
+
+  // --- Find contact in the Jake sub-account (JAK-147) ------------------------
+
+  describe("POST /text-customers/find-contact", () => {
+    it("is behind the auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app)
+        .post("/api/admin/text-customers/find-contact")
+        .send({ phone: "+17865274077" });
+      expect(res.status).toBe(401);
+      expect(textCustomers.findContact).not.toHaveBeenCalled();
+    });
+
+    it("400s a missing phone", async () => {
+      const res = await asAdmin(
+        request(app).post("/api/admin/text-customers/find-contact").send({})
+      );
+      expect(res.status).toBe(400);
+      expect(textCustomers.findContact).not.toHaveBeenCalled();
+    });
+
+    it("returns the matched contact for prefill", async () => {
+      textCustomers.findContact.mockResolvedValue({
+        found: true,
+        contact: {
+          ghlContactId: "ghl_1",
+          firstName: "Ada",
+          lastName: "Lovelace",
+          email: "ada@example.com",
+        },
+        message: "Found an existing GoHighLevel contact.",
+      });
+      const res = await asAdmin(
+        request(app).post("/api/admin/text-customers/find-contact").send({ phone: "+17865274077" })
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.found).toBe(true);
+      expect(res.body.contact.firstName).toBe("Ada");
+      expect(textCustomers.findContact).toHaveBeenCalledWith("+17865274077");
+    });
+
+    it("returns a friendly not-found result (no contact yet)", async () => {
+      textCustomers.findContact.mockResolvedValue({
+        found: false,
+        contact: null,
+        message: "No GoHighLevel contact on that number yet — one will be created when you save.",
+      });
+      const res = await asAdmin(
+        request(app).post("/api/admin/text-customers/find-contact").send({ phone: "+15550001111" })
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.found).toBe(false);
+      expect(res.body.contact).toBeNull();
     });
   });
 

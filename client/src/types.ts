@@ -86,6 +86,41 @@ export interface TextCustomerInput {
   email: string | null;
 }
 
+/** Outcome of syncing a text customer to the Jake GHL sub-account (JAK-147). */
+export type TextCustomerSyncStatus =
+  | "synced"
+  | "skipped"
+  | "field_not_found"
+  | "not_connected"
+  | "error";
+
+export interface TextCustomerSyncResult {
+  status: TextCustomerSyncStatus;
+  ghlContactId: string | null;
+  /** Friendly, non-technical line to show the admin inline. */
+  message: string;
+}
+
+/** A saved customer plus its GHL sync outcome — the create/update response (JAK-147). */
+export interface TextCustomerWriteResult {
+  customer: TextCustomerView;
+  sync: TextCustomerSyncResult;
+}
+
+/** A contact matched by "find contact", trimmed to what the form prefills (JAK-147). */
+export interface FindContactMatch {
+  ghlContactId: string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+}
+
+export interface FindContactResult {
+  found: boolean;
+  contact: FindContactMatch | null;
+  message: string;
+}
+
 /** Admin privilege level (JAK-125). Mirrors the server's AdminRole. */
 export type AdminRole = "admin" | "superadmin";
 
