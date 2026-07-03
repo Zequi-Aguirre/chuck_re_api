@@ -8,6 +8,8 @@ import { GhlConnection } from "../../ghlEnrichment/connections/GhlConnectionType
 import { TextJakeCustomerService } from "../../ghlEnrichment/customers/TextJakeCustomerService";
 import { TextJakeCustomer } from "../../ghlEnrichment/customers/TextJakeCustomerTypes";
 import { CreditService } from "../../ghlEnrichment/metering/CreditService";
+import { ConversationMemoryService } from "../../ghlEnrichment/conversation/ConversationMemoryService";
+import { LookupRow } from "../../ghlEnrichment/conversation/ConversationTypes";
 import { PropertyReportWriter } from "../PropertyReportWriter";
 import { PropertyReportData } from "../../types/PropertyReport";
 
@@ -29,7 +31,24 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
   let customers: MockProxy<TextJakeCustomerService>;
   let credits: MockProxy<CreditService>;
   let reportWriter: MockProxy<PropertyReportWriter>;
+  let memory: MockProxy<ConversationMemoryService>;
   let service: JakeAssistantService;
+
+  const lookupRow = (over: Partial<LookupRow> = {}): LookupRow => ({
+    id: "lk_1",
+    customer_id: "cust_x",
+    phone: "+15559990000",
+    message_id: "msg_1",
+    normalized_address: "123 Main St, Springfield, IL 62704",
+    address_key: "123 main st, springfield, il 62704",
+    order_index: 1,
+    property_id: "p1",
+    property_record: { address: "123 Main St, Springfield, IL 62704" },
+    report_text: "Jake Property Report\n123 Main St\n\nGet more property info\nGoTextJake.com",
+    fetched_at: new Date("2026-07-01T00:00:00Z"),
+    created_at: new Date("2026-07-01T00:00:00Z"),
+    ...over,
+  });
 
   const connection = (over: Partial<GhlConnection> = {}): GhlConnection => ({
     id: "11111111-1111-1111-1111-111111111111",
@@ -62,6 +81,15 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     customers = mock<TextJakeCustomerService>();
     credits = mock<CreditService>();
     reportWriter = mock<PropertyReportWriter>();
+    memory = mock<ConversationMemoryService>();
+
+    // Memory is exercised in its own suites; here it defaults to a "no cache,
+    // no prior address" world so the classic single-path tests keep their shape.
+    memory.appendInbound.mockResolvedValue({ id: "msg_1" } as never);
+    memory.appendOutbound.mockResolvedValue({ id: "msg_out" } as never);
+    memory.recordLookup.mockResolvedValue({ id: "lk_1" } as never);
+    memory.checkCache.mockResolvedValue(null);
+    memory.lastResolvedAddress.mockResolvedValue(null);
 
     // The writer is exercised in its own suite; here it just echoes enough of the
     // assembled data back so the flow assertions (message contains the address)
@@ -86,7 +114,8 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       connections,
       customers,
       credits,
-      reportWriter
+      reportWriter,
+      memory
     );
   });
 
@@ -441,6 +470,151 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(result.charged).toBe(0);
       expect(credits.chargeForTextLookup).not.toHaveBeenCalled();
       expect(gateway.createContactNote).toHaveBeenCalledWith("ct_1", expect.stringContaining("no property match"));
+      // No match ⇒ nothing to cache for a free re-serve.
+      expect(memory.recordLookup).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── JAK-134: conversation memory + lookup cache + free re-serve ─────────────
+  describe("conversation memory (JAK-134)", () => {
+    it("persists EVERY inbound message with the resolved address", async () => {
+      realEstate.searchPropertyByAddress.mockResolvedValue({ address: "1 A St" } as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "123 Main St, Springfield, IL 62704",
+      });
+
+      expect(memory.appendInbound).toHaveBeenCalledWith(
+        expect.objectContaining({
+          phone: "+15559990000",
+          body: "123 Main St, Springfield, IL 62704",
+          resolvedAddress: "123 Main St, Springfield, IL 62704",
+        })
+      );
+    });
+
+    it("persists a non-address inbound with resolvedAddress = null", async () => {
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "hey there",
+      });
+
+      expect(memory.appendInbound).toHaveBeenCalledWith(
+        expect.objectContaining({ body: "hey there", resolvedAddress: null })
+      );
+    });
+  });
+
+  describe("cache MISS → paid lookup is snapshotted (JAK-134)", () => {
+    it("looks up, charges, and records the snapshot for a future free re-serve", async () => {
+      const record = { id: 987, address: "123 Main St, Springfield, IL 62704" };
+      realEstate.searchPropertyByAddress.mockResolvedValue(record as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "123 Main St, Springfield, IL 62704",
+      });
+
+      expect(memory.checkCache).toHaveBeenCalledWith("+15559990000", "123 Main St, Springfield, IL 62704");
+      expect(realEstate.searchPropertyByAddress).toHaveBeenCalledWith("123 Main St, Springfield, IL 62704");
+      expect(credits.chargeForTextLookup).toHaveBeenCalledWith({ accountId: "acct_+15559990000" });
+      expect(result.charged).toBe(1);
+      // The whole record + the exact reply text are snapshotted (report id as string).
+      expect(memory.recordLookup).toHaveBeenCalledWith(
+        expect.objectContaining({
+          normalizedAddress: "123 Main St, Springfield, IL 62704",
+          propertyId: "987",
+          propertyRecord: record,
+          reportText: expect.stringContaining("Jake Property Report"),
+        })
+      );
+    });
+  });
+
+  describe("cache HIT → FREE re-serve, no paid API, no charge (JAK-134)", () => {
+    it("re-serves the stored report for free and invites an OK refresh", async () => {
+      memory.checkCache.mockResolvedValue(lookupRow());
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "123 Main St, Springfield, IL 62704",
+      });
+
+      // Dev no-spend / free-reserve: the PAID API is NEVER called and NOTHING is charged.
+      expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
+      expect(credits.chargeForTextLookup).not.toHaveBeenCalled();
+      // The LLM writer is not re-run either — the STORED report is served verbatim.
+      expect(reportWriter.write).not.toHaveBeenCalled();
+      expect(result.charged).toBe(0);
+      expect(result.reserved).toBe(true);
+
+      // The reply is the stored report + the free-re-serve notice, footer LAST.
+      const sent = (gateway.sendSms.mock.calls[0]![0] as { message: string }).message;
+      expect(sent).toContain("123 Main St");
+      expect(sent).toContain("already on record");
+      expect(sent).toMatch(/reply ok for a fresh copy \(costs 1 credit\)/i);
+      expect(sent.endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+      // No emojis in the re-served copy.
+      expect(sent).not.toMatch(/\p{Extended_Pictographic}/u);
+    });
+
+    it("re-serves for free EVEN when the customer is out of credits", async () => {
+      memory.checkCache.mockResolvedValue(lookupRow());
+      credits.hasCreditsForTextLookup.mockResolvedValue(false);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "123 Main St, Springfield, IL 62704",
+      });
+
+      expect(result.reserved).toBe(true);
+      expect(result.outOfCredits).toBeUndefined();
+      expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("OK reply → fresh PAID copy of the last address (JAK-134)", () => {
+    it("charges and refreshes the last resolved address", async () => {
+      memory.lastResolvedAddress.mockResolvedValue("742 Evergreen Terrace, Springfield, IL 62704");
+      realEstate.searchPropertyByAddress.mockResolvedValue({ id: 42, address: "742 Evergreen Terrace" } as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "OK",
+      });
+
+      expect(memory.lastResolvedAddress).toHaveBeenCalledWith("+15559990000");
+      // "OK" carries no address, so the cache is not consulted — this is a paid refresh.
+      expect(memory.checkCache).not.toHaveBeenCalled();
+      expect(realEstate.searchPropertyByAddress).toHaveBeenCalledWith(
+        "742 Evergreen Terrace, Springfield, IL 62704"
+      );
+      expect(credits.chargeForTextLookup).toHaveBeenCalledWith({ accountId: "acct_+15559990000" });
+      expect(result.charged).toBe(1);
+      expect(result.refreshed).toBe(true);
+      expect(memory.recordLookup).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to guidance when there is no prior address to refresh", async () => {
+      memory.lastResolvedAddress.mockResolvedValue(null);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "ok",
+      });
+
+      expect(result.address).toBeNull();
+      expect(result.charged).toBe(0);
+      expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
+      expect(credits.chargeForTextLookup).not.toHaveBeenCalled();
     });
   });
 });

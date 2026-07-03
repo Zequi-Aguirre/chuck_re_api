@@ -11,6 +11,9 @@ import { GhlApiClient } from "../api/GhlApiClient";
 import { JakeGatewayClient } from "../gateway/JakeGatewayClient";
 import { TextJakeCustomerStore } from "../customers/TextJakeCustomerStore";
 import { TextJakeCustomerService } from "../customers/TextJakeCustomerService";
+import { ConversationStore } from "../conversation/ConversationStore";
+import { ConversationSettingsService } from "../conversation/ConversationSettingsService";
+import { ConversationMemoryService } from "../conversation/ConversationMemoryService";
 import { GhlCustomFieldStore } from "../lifecycle/GhlCustomFieldStore";
 import { GhlInstallLifecycleService } from "../lifecycle/GhlInstallLifecycleService";
 import { LeadEnrichmentQueueService } from "../../services/LeadEnrichmentQueueService";
@@ -199,6 +202,22 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   }
   if (!c.isRegistered(PropertyReportPromptService)) {
     c.registerSingleton(PropertyReportPromptService);
+  }
+
+  // JAK-134 — conversation memory + property lookup cache: the FOUNDATION of the
+  // Conversational Text-Jake epic. The store persists ordered per-phone history +
+  // paid-lookup snapshots; the settings service fronts the two admin-configurable
+  // knobs (context_window_size, free_reserve_window_days) via the SAME app_settings
+  // KV store as JAK-131; the memory service is the read/write business surface the
+  // assistant uses for the free re-serve rule. All singletons; share the one pool.
+  if (!c.isRegistered(ConversationStore)) {
+    c.registerSingleton(ConversationStore);
+  }
+  if (!c.isRegistered(ConversationSettingsService)) {
+    c.registerSingleton(ConversationSettingsService);
+  }
+  if (!c.isRegistered(ConversationMemoryService)) {
+    c.registerSingleton(ConversationMemoryService);
   }
 
   if (!c.isRegistered(AdminResource)) {
