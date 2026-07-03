@@ -7,6 +7,7 @@ import { AdminTextCustomerService } from "./AdminTextCustomerService";
 import { requireAdminAuth, requireSuperadmin } from "./requireAdminAuth";
 import { AdminRole } from "./AdminTypes";
 import { PropertyReportPromptService } from "../../services/PropertyReportPromptService";
+import { OrchestratorPromptService } from "../../services/orchestrator/OrchestratorPromptService";
 
 /**
  * The admin dashboard's data API (JAK-113) — CRUD over connected sub-accounts,
@@ -50,7 +51,8 @@ export class AdminResource {
     @inject(AdminConnectionService) private readonly connections: AdminConnectionService,
     @inject(AdminTextCustomerService) private readonly textCustomers: AdminTextCustomerService,
     @inject(GhlStatusService) private readonly status: GhlStatusService,
-    @inject(PropertyReportPromptService) private readonly reportPrompt: PropertyReportPromptService
+    @inject(PropertyReportPromptService) private readonly reportPrompt: PropertyReportPromptService,
+    @inject(OrchestratorPromptService) private readonly orchestratorPrompt: OrchestratorPromptService
   ) {
     this.router = Router();
     this.configureRoutes();
@@ -83,6 +85,15 @@ export class AdminResource {
     this.router.get("/report-prompt", this.getReportPrompt.bind(this));
     this.router.put("/report-prompt", this.updateReportPrompt.bind(this));
     this.router.post("/report-prompt/reset", this.resetReportPrompt.bind(this));
+
+    // AI prompt — the admin-editable STYLE/CLASSIFICATION prompt for the JAK-135
+    // orchestrator/router (same editable pattern as JAK-131). Available to ANY
+    // logged-in admin (requireAuth only). The HARD routing rules (fixed intent
+    // set, JSON-only output, never-invent-an-address) are appended by the router
+    // client and are NOT editable here.
+    this.router.get("/orchestrator-prompt", this.getOrchestratorPrompt.bind(this));
+    this.router.put("/orchestrator-prompt", this.updateOrchestratorPrompt.bind(this));
+    this.router.post("/orchestrator-prompt/reset", this.resetOrchestratorPrompt.bind(this));
 
     // Admin management (JAK-124, restricted in JAK-125): ONLY a superadmin may
     // manage other admins. requireSuperadmin runs after the router-level
@@ -386,6 +397,53 @@ export class AdminResource {
   private async resetReportPrompt(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     try {
       const view = await this.reportPrompt.resetPrompt();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  // --- Orchestrator/router prompt (JAK-135) ---------------------------------
+
+  /** Return the effective editable router prompt + whether it is still the default. */
+  private async getOrchestratorPrompt(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.orchestratorPrompt.getView();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /**
+   * Save an admin-edited router prompt. The body's `prompt` is the
+   * style/classification text ONLY — the hard routing rules (intent set,
+   * JSON-only output, never-invent-an-address) are appended by the router client
+   * regardless, so there is nothing dangerous to reject beyond an empty value.
+   * Records the editing admin (req.admin.sub) for the audit stamp.
+   */
+  private async updateOrchestratorPrompt(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const prompt = typeof req.body?.prompt === "string" ? req.body.prompt.trim() : "";
+      if (!prompt) {
+        return res.status(400).json({ error: "prompt is required" });
+      }
+      if (prompt.length > MAX_PROMPT_LENGTH) {
+        return res
+          .status(400)
+          .json({ error: `prompt must be at most ${MAX_PROMPT_LENGTH} characters` });
+      }
+      const view = await this.orchestratorPrompt.setPrompt(prompt, req.admin?.sub ?? null);
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /** Revert the router prompt to the code default (clears the stored value). */
+  private async resetOrchestratorPrompt(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.orchestratorPrompt.resetPrompt();
       return res.status(200).json(view);
     } catch (err) {
       return next(err);

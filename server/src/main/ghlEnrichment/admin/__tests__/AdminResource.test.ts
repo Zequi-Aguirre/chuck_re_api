@@ -8,6 +8,7 @@ import { AdminTextCustomerService } from "../AdminTextCustomerService";
 import { AdminResource } from "../AdminResource";
 import { AdminConnectionView, AdminTextCustomerView } from "../AdminTypes";
 import { PropertyReportPromptService } from "../../../services/PropertyReportPromptService";
+import { OrchestratorPromptService } from "../../../services/orchestrator/OrchestratorPromptService";
 
 // Obviously-fake, low-entropy placeholder used by the reset-password tests.
 // Held in a constant (not inlined next to a `password:` key) so a secret
@@ -32,6 +33,7 @@ describe("AdminResource", () => {
   let textCustomers: MockProxy<AdminTextCustomerService>;
   let status: MockProxy<GhlStatusService>;
   let reportPrompt: MockProxy<PropertyReportPromptService>;
+  let orchestratorPrompt: MockProxy<OrchestratorPromptService>;
   let app: Express;
 
   beforeEach(() => {
@@ -40,6 +42,7 @@ describe("AdminResource", () => {
     textCustomers = mock<AdminTextCustomerService>();
     status = mock<GhlStatusService>();
     reportPrompt = mock<PropertyReportPromptService>();
+    orchestratorPrompt = mock<OrchestratorPromptService>();
     // Default: authenticated AS A SUPERADMIN so the admin-management tests reach
     // their handlers. Individual tests override to a plain admin / no session.
     auth.verifyToken.mockReturnValue({ sub: "admin-id", email: "admin@example.com", role: "superadmin" });
@@ -48,7 +51,8 @@ describe("AdminResource", () => {
     app.use(express.json());
     app.use(
       "/api/admin",
-      new AdminResource(auth, connections, textCustomers, status, reportPrompt).router
+      new AdminResource(auth, connections, textCustomers, status, reportPrompt, orchestratorPrompt)
+        .router
     );
   });
 
@@ -312,6 +316,82 @@ describe("AdminResource", () => {
       expect(res.status).toBe(200);
       expect(res.body.isDefault).toBe(true);
       expect(reportPrompt.resetPrompt).toHaveBeenCalled();
+    });
+  });
+
+  // --- Orchestrator/router prompt (JAK-135) ---------------------------------
+
+  describe("AI prompt (orchestrator-prompt)", () => {
+    const promptView = (over: Record<string, unknown> = {}) => ({
+      prompt: "ROUTER PROMPT",
+      isDefault: false,
+      updatedAt: new Date("2026-07-03T00:00:00Z"),
+      updatedBy: "admin-id",
+      ...over,
+    });
+
+    it("is behind the auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app).get("/api/admin/orchestrator-prompt");
+      expect(res.status).toBe(401);
+      expect(orchestratorPrompt.getView).not.toHaveBeenCalled();
+    });
+
+    it("is available to a REGULAR admin — NOT superadmin-gated (JAK-135)", async () => {
+      asPlainAdmin();
+      orchestratorPrompt.getView.mockResolvedValue(promptView({ isDefault: true }) as never);
+      orchestratorPrompt.setPrompt.mockResolvedValue(promptView({ prompt: "NEW" }) as never);
+      orchestratorPrompt.resetPrompt.mockResolvedValue(promptView({ isDefault: true }) as never);
+
+      expect((await asAdmin(request(app).get("/api/admin/orchestrator-prompt"))).status).toBe(200);
+      expect(
+        (await asAdmin(request(app).put("/api/admin/orchestrator-prompt").send({ prompt: "NEW" })))
+          .status
+      ).toBe(200);
+      expect(
+        (await asAdmin(request(app).post("/api/admin/orchestrator-prompt/reset"))).status
+      ).toBe(200);
+    });
+
+    it("GET returns the effective prompt view (no hash/secret fields)", async () => {
+      orchestratorPrompt.getView.mockResolvedValue(promptView() as never);
+      const res = await asAdmin(request(app).get("/api/admin/orchestrator-prompt"));
+      expect(res.status).toBe(200);
+      expect(res.body.prompt).toBe("ROUTER PROMPT");
+      expect(res.body.isDefault).toBe(false);
+      // The view is prompt/metadata only — never any credential-bearing field.
+      expect(res.body).toEqual({
+        prompt: "ROUTER PROMPT",
+        isDefault: false,
+        updatedAt: "2026-07-03T00:00:00.000Z",
+        updatedBy: "admin-id",
+      });
+    });
+
+    it("PUT saves a non-empty prompt with the editing admin id", async () => {
+      orchestratorPrompt.setPrompt.mockResolvedValue(promptView({ prompt: "Route terse" }) as never);
+      const res = await asAdmin(
+        request(app).put("/api/admin/orchestrator-prompt").send({ prompt: "  Route terse  " })
+      );
+      expect(res.status).toBe(200);
+      // Trimmed, and attributed to the logged-in admin (sub: "admin-id").
+      expect(orchestratorPrompt.setPrompt).toHaveBeenCalledWith("Route terse", "admin-id");
+    });
+
+    it("PUT 400s an empty prompt", async () => {
+      const res = await asAdmin(
+        request(app).put("/api/admin/orchestrator-prompt").send({ prompt: "   " })
+      );
+      expect(res.status).toBe(400);
+      expect(orchestratorPrompt.setPrompt).not.toHaveBeenCalled();
+    });
+
+    it("reset reverts to the default", async () => {
+      orchestratorPrompt.resetPrompt.mockResolvedValue(promptView({ isDefault: true }) as never);
+      const res = await asAdmin(request(app).post("/api/admin/orchestrator-prompt/reset"));
+      expect(res.status).toBe(200);
+      expect(res.body.isDefault).toBe(true);
+      expect(orchestratorPrompt.resetPrompt).toHaveBeenCalled();
     });
   });
 

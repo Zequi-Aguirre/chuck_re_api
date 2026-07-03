@@ -5,6 +5,7 @@ import {
   LedgerEntryView,
   LocationStatusDetail,
   LocationStatusSummary,
+  OrchestratorPromptView,
   ReportPromptView,
   TextCustomerView,
 } from "./types";
@@ -144,6 +145,20 @@ export const api = {
   },
   async resetReportPrompt(): Promise<ReportPromptView> {
     return request<ReportPromptView>("/report-prompt/reset", { method: "POST" });
+  },
+
+  // --- Orchestrator/router prompt (JAK-135) ---
+  async getOrchestratorPrompt(): Promise<OrchestratorPromptView> {
+    return request<OrchestratorPromptView>("/orchestrator-prompt");
+  },
+  async updateOrchestratorPrompt(prompt: string): Promise<OrchestratorPromptView> {
+    return request<OrchestratorPromptView>("/orchestrator-prompt", {
+      method: "PUT",
+      body: JSON.stringify({ prompt }),
+    });
+  },
+  async resetOrchestratorPrompt(): Promise<OrchestratorPromptView> {
+    return request<OrchestratorPromptView>("/orchestrator-prompt/reset", { method: "POST" });
   },
 
   // --- admins (JAK-124) ---

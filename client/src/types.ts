@@ -105,3 +105,17 @@ export interface ReportPromptView {
   updatedAt: string | null;
   updatedBy: string | null;
 }
+
+/**
+ * The editable AI STYLE/CLASSIFICATION prompt for the text-Jake orchestrator /
+ * router (JAK-135). `prompt` is the effective value (the stored edit, or the code
+ * default when `isDefault`). The hard routing rules (fixed intent set, JSON-only
+ * output, never-invent-an-address) are NOT part of this — the router client
+ * appends them, so an edit here can never break routing.
+ */
+export interface OrchestratorPromptView {
+  prompt: string;
+  isDefault: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
