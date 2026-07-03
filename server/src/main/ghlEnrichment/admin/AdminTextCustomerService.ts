@@ -3,6 +3,11 @@ import { CreditLedgerRow, CreditLedgerStore } from "../metering/CreditLedgerStor
 import { CreditService } from "../metering/CreditService";
 import { normalizePhone, TextJakeCustomerService } from "../customers/TextJakeCustomerService";
 import { TextJakeCustomerRow, TextJakeCustomerStore } from "../customers/TextJakeCustomerStore";
+import {
+  FindContactResult,
+  TextCustomerGhlSyncService,
+  TextCustomerSyncResult,
+} from "../customers/TextCustomerGhlSyncService";
 import { AdminTextCustomerView } from "./AdminTypes";
 
 /** The new balance plus the ledger entry a grant produced. */
@@ -18,6 +23,12 @@ export interface TextCustomerInput {
   firstName: string | null;
   lastName: string | null;
   email: string | null;
+}
+
+/** A saved customer view plus the outcome of syncing them to GHL (JAK-147). */
+export interface TextCustomerWriteResult {
+  customer: AdminTextCustomerView;
+  sync: TextCustomerSyncResult;
 }
 
 /**
@@ -46,7 +57,8 @@ export class AdminTextCustomerService {
     private readonly customers: TextJakeCustomerService,
     private readonly customerStore: TextJakeCustomerStore,
     private readonly credits: CreditService,
-    private readonly ledger: CreditLedgerStore
+    private readonly ledger: CreditLedgerStore,
+    private readonly sync: TextCustomerGhlSyncService
   ) {}
 
   /**
@@ -68,30 +80,65 @@ export class AdminTextCustomerService {
    * name + email. The phone is normalized to the same stable key the billing
    * path uses, so a later text from that number maps to this same customer. A
    * brand-new customer has a 0 balance (no ledger activity yet).
+   *
+   * JAK-147: after persisting, the customer is synced to the Jake GHL sub-account
+   * (find-or-create the contact + set "text Jake" approved). A sync problem never
+   * fails the create — the DB row is the billing identity; the sync outcome is
+   * returned alongside for the admin to see.
    */
-  async create(input: TextCustomerInput): Promise<AdminTextCustomerView> {
-    const row = await this.customerStore.create(normalizePhone(input.phone), {
+  async create(input: TextCustomerInput): Promise<TextCustomerWriteResult> {
+    const phone = normalizePhone(input.phone);
+    const row = await this.customerStore.create(phone, {
       firstName: input.firstName,
       lastName: input.lastName,
       email: input.email,
     });
-    return toView(row, 0);
+    const sync = await this.sync.syncCustomer({ phone, ...profileOf(input) });
+    const finalRow = await this.persistContactId(row, sync);
+    return { customer: toView(finalRow, 0), sync };
   }
 
   /**
    * Update a text customer's phone + profile from the admin dashboard (JAK-146).
-   * Returns the updated view with the current credit balance, or null if no live
+   * Returns the updated view + GHL sync outcome (JAK-147), or null if no live
    * customer has that id. Credits are untouched here — that's the grant path.
    */
-  async update(id: string, input: TextCustomerInput): Promise<AdminTextCustomerView | null> {
-    const row = await this.customerStore.updateProfile(id, normalizePhone(input.phone), {
+  async update(id: string, input: TextCustomerInput): Promise<TextCustomerWriteResult | null> {
+    const phone = normalizePhone(input.phone);
+    const row = await this.customerStore.updateProfile(id, phone, {
       firstName: input.firstName,
       lastName: input.lastName,
       email: input.email,
     });
     if (!row) return null;
-    const balance = await this.credits.getBalance(row.id);
-    return toView(row, balance);
+    const sync = await this.sync.syncCustomer({ phone, ...profileOf(input) });
+    const finalRow = await this.persistContactId(row, sync);
+    const balance = await this.credits.getBalance(finalRow.id);
+    return { customer: toView(finalRow, balance), sync };
+  }
+
+  /**
+   * Look up the existing Jake-sub-account contact for a phone (JAK-147) so the
+   * admin form can prefill name/email before saving. Delegates to the sync
+   * service, which never throws.
+   */
+  async findContact(phone: string): Promise<FindContactResult> {
+    return this.sync.findContact(normalizePhone(phone));
+  }
+
+  /**
+   * Persist the GHL contact id a live sync resolved, so re-saves and the billing
+   * path share the same link. A skipped/failed sync (no id) leaves the row as-is.
+   */
+  private async persistContactId(
+    row: TextJakeCustomerRow,
+    sync: TextCustomerSyncResult
+  ): Promise<TextJakeCustomerRow> {
+    if (sync.ghlContactId && sync.ghlContactId !== row.ghl_contact_id) {
+      const updated = await this.customerStore.setGhlContactId(row.id, sync.ghlContactId);
+      if (updated) return updated;
+    }
+    return row;
   }
 
   /**
@@ -128,6 +175,15 @@ export class AdminTextCustomerService {
       balance: entry.balance_after,
     };
   }
+}
+
+/** The name/email slice of an input, for the GHL sync payload (phone added by caller). */
+function profileOf(input: TextCustomerInput): {
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+} {
+  return { firstName: input.firstName, lastName: input.lastName, email: input.email };
 }
 
 /** Fold a raw customer row + its resolved balance into the safe admin view. */

@@ -180,6 +180,42 @@ describe("GhlApiClient", () => {
       client.transport.request.mockResolvedValue(ok({}));
       expect(await client.listCustomFields("loc_1")).toEqual([]);
     });
+
+    it("finds a contact by phone via the duplicate-search endpoint (JAK-147)", async () => {
+      connections.getByLocationId.mockResolvedValue(conn());
+      const client = new TestGhlApiClient(connections, prodGuard);
+      client.transport.request.mockResolvedValue(
+        ok({ contact: { id: "ct_1", firstName: "Ada", phone: "+17865274077" } })
+      );
+
+      const contact = await client.findContactByPhone("loc_1", "+17865274077");
+
+      expect(contact?.id).toBe("ct_1");
+      const call = client.transport.request.mock.calls[0][0];
+      expect(call.method).toBe("GET");
+      expect(call.url).toBe("/contacts/search/duplicate");
+      expect(call.params).toEqual({ locationId: "loc_1", number: "+17865274077" });
+    });
+
+    it("returns null (not an error) when no contact matches the phone", async () => {
+      connections.getByLocationId.mockResolvedValue(conn());
+      const client = new TestGhlApiClient(connections, prodGuard);
+      client.transport.request.mockRejectedValue(axiosError(404));
+
+      expect(await client.findContactByPhone("loc_1", "+15550000000")).toBeNull();
+      // 404-as-null must NOT trigger retries.
+      expect(client.transport.request).toHaveBeenCalledTimes(1);
+    });
+
+    it("still finds a contact by phone in DEV (a read, not a write)", async () => {
+      connections.getByLocationId.mockResolvedValue(conn());
+      const client = new TestGhlApiClient(connections, devGuard);
+      client.transport.request.mockResolvedValue(ok({ contact: { id: "ct_1" } }));
+
+      const contact = await client.findContactByPhone("loc_1", "+17865274077");
+      expect(contact?.id).toBe("ct_1");
+      expect(client.transport.request).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("writes + SPEC §8 dev safety", () => {
@@ -259,6 +295,68 @@ describe("GhlApiClient", () => {
       const call = client.transport.request.mock.calls[0][0];
       expect(call.method).toBe("POST");
       expect(call.url).toBe("/locations/loc_1/customFields");
+    });
+
+    it("upserts a contact by phone with profile + custom fields in production (JAK-147)", async () => {
+      connections.getByLocationId.mockResolvedValue(conn());
+      const client = new TestGhlApiClient(connections, prodGuard);
+      client.transport.request.mockResolvedValue(ok({ contact: { id: "ct_1" } }));
+
+      const contact = await client.upsertContact("loc_1", {
+        phone: "+17865274077",
+        firstName: "Ada",
+        lastName: "Lovelace",
+        email: "ada@example.com",
+        customFields: [{ id: "f_textjake", value: true }],
+      });
+
+      expect(contact?.id).toBe("ct_1");
+      const call = client.transport.request.mock.calls[0][0];
+      expect(call.method).toBe("POST");
+      expect(call.url).toBe("/contacts/upsert");
+      expect(call.data).toEqual({
+        locationId: "loc_1",
+        phone: "+17865274077",
+        firstName: "Ada",
+        lastName: "Lovelace",
+        email: "ada@example.com",
+        customFields: [{ id: "f_textjake", value: true }],
+      });
+    });
+
+    it("omits absent name/email from the upsert payload (never blanks a value)", async () => {
+      connections.getByLocationId.mockResolvedValue(conn());
+      const client = new TestGhlApiClient(connections, prodGuard);
+      client.transport.request.mockResolvedValue(ok({ contact: { id: "ct_1" } }));
+
+      await client.upsertContact("loc_1", {
+        phone: "+17865274077",
+        firstName: null,
+        lastName: null,
+        email: null,
+      });
+
+      expect(client.transport.request.mock.calls[0][0].data).toEqual({
+        locationId: "loc_1",
+        phone: "+17865274077",
+      });
+    });
+
+    it("echoes and SKIPS the contact upsert in dev (no real create/update)", async () => {
+      connections.getByLocationId.mockResolvedValue(conn());
+      const client = new TestGhlApiClient(connections, devGuard);
+
+      const contact = await client.upsertContact("loc_1", {
+        phone: "+17865274077",
+        firstName: "Ada",
+        lastName: null,
+        email: null,
+        customFields: [{ id: "f_textjake", value: true }],
+      });
+
+      expect(contact).toBeNull();
+      expect(client.transport.request).not.toHaveBeenCalled();
+      expect(connections.getByLocationId).not.toHaveBeenCalled();
     });
   });
 

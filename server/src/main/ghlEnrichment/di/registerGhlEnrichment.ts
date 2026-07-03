@@ -20,6 +20,7 @@ import { GhlApiClient } from "../api/GhlApiClient";
 import { JakeGatewayClient } from "../gateway/JakeGatewayClient";
 import { TextJakeCustomerStore } from "../customers/TextJakeCustomerStore";
 import { TextJakeCustomerService } from "../customers/TextJakeCustomerService";
+import { TextCustomerGhlSyncService } from "../customers/TextCustomerGhlSyncService";
 import { ConversationStore } from "../conversation/ConversationStore";
 import { ConversationSettingsService } from "../conversation/ConversationSettingsService";
 import { ConversationMemoryService } from "../conversation/ConversationMemoryService";
@@ -197,6 +198,15 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   if (!c.isRegistered(AdminConnectionService)) {
     c.registerSingleton(AdminConnectionService);
   }
+  // JAK-147 — sync a text customer into the Jake GHL sub-account: find-or-create
+  // their contact + set the pre-existing "text Jake" approval field. Reuses the
+  // JAK-104 client (per-location creds from the JAK-102 store) + the JAK-110
+  // write gate; the Jake sub-account is the EXISTING gateway location config, so
+  // no new Doppler key. Registered before AdminTextCustomerService, which injects it.
+  if (!c.isRegistered(TextCustomerGhlSyncService)) {
+    c.registerSingleton(TextCustomerGhlSyncService);
+  }
+
   // JAK-129 — grant credits to a tier-1 text-Jake customer BY PHONE. Reuses the
   // JAK-115 customer resolution + the JAK-109 credit ledger; the customer id is
   // the credit-account key, so a gateway texter (no sub-account) can be topped

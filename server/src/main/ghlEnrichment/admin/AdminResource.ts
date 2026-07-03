@@ -91,8 +91,13 @@ export class AdminResource {
     // connection's locationId, so a gateway texter can finally be topped up.
     this.router.get("/text-customers", this.listTextCustomers.bind(this));
     // Create / edit a texter's profile (JAK-146): name + optional email, keyed by
-    // the required phone. Distinct from the /credits grant below.
+    // the required phone. On save each also syncs the texter to the Jake GHL
+    // sub-account and sets "text Jake" = approved (JAK-147). Distinct from the
+    // /credits grant below.
     this.router.post("/text-customers", this.createTextCustomer.bind(this));
+    // Prefill the form from an existing Jake-sub-account contact (JAK-147). A
+    // literal path, so it never collides with the PUT /:id edit route below.
+    this.router.post("/text-customers/find-contact", this.findTextCustomerContact.bind(this));
     this.router.put("/text-customers/:id", this.updateTextCustomer.bind(this));
     this.router.post("/text-customers/credits", this.grantTextCustomerCredits.bind(this));
 
@@ -427,10 +432,30 @@ export class AdminResource {
       if ("error" in parsed) {
         return res.status(400).json({ error: parsed.error });
       }
-      const customer = await this.textCustomers.create(parsed.value);
-      return res.status(201).json({ customer });
+      // The result carries both the saved customer and the GHL sync outcome
+      // (JAK-147) — the UI surfaces the sync message inline.
+      const { customer, sync } = await this.textCustomers.create(parsed.value);
+      return res.status(201).json({ customer, sync });
     } catch (err) {
       return this.handleTextCustomerWriteError(err, res, next);
+    }
+  }
+
+  /**
+   * Look up an existing Jake-sub-account contact by phone (JAK-147) so the admin
+   * form can prefill name/email. A READ only — creating/approving happens on
+   * save. Never leaks GHL internals: returns a friendly found/not-found result.
+   */
+  private async findTextCustomerContact(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const phone = str(req.body?.phone);
+      if (!phone) {
+        return res.status(400).json({ error: "phone is required" });
+      }
+      const result = await this.textCustomers.findContact(phone);
+      return res.status(200).json(result);
+    } catch (err) {
+      return next(err);
     }
   }
 
@@ -449,11 +474,11 @@ export class AdminResource {
       if ("error" in parsed) {
         return res.status(400).json({ error: parsed.error });
       }
-      const customer = await this.textCustomers.update(id, parsed.value);
-      if (!customer) {
+      const result = await this.textCustomers.update(id, parsed.value);
+      if (!result) {
         return res.status(404).json({ error: "unknown customer" });
       }
-      return res.status(200).json({ customer });
+      return res.status(200).json({ customer: result.customer, sync: result.sync });
     } catch (err) {
       return this.handleTextCustomerWriteError(err, res, next);
     }

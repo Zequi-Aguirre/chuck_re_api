@@ -9,7 +9,18 @@ import {
 import { TextJakeCustomerService } from "../../customers/TextJakeCustomerService";
 import { TextJakeCustomerStore, TextJakeCustomerRow } from "../../customers/TextJakeCustomerStore";
 import { TextJakeCustomer } from "../../customers/TextJakeCustomerTypes";
+import {
+  TextCustomerGhlSyncService,
+  TextCustomerSyncResult,
+} from "../../customers/TextCustomerGhlSyncService";
 import { AdminTextCustomerService } from "../AdminTextCustomerService";
+
+/** The default off-prod sync outcome — no contact id, nothing persisted. */
+const skippedSync: TextCustomerSyncResult = {
+  status: "skipped",
+  ghlContactId: null,
+  message: "Saved. Syncing to GoHighLevel runs in staging and production only.",
+};
 
 const config = (textLookup = 1): GhlEnrichmentConfig =>
   ({
@@ -86,6 +97,7 @@ describe("AdminTextCustomerService", () => {
   let customerStore: MockProxy<TextJakeCustomerStore>;
   let ledger: CreditLedgerStore;
   let credits: CreditService;
+  let sync: MockProxy<TextCustomerGhlSyncService>;
   let service: AdminTextCustomerService;
 
   beforeEach(() => {
@@ -93,7 +105,11 @@ describe("AdminTextCustomerService", () => {
     customerStore = mock<TextJakeCustomerStore>();
     ledger = inMemoryLedger();
     credits = new CreditService(ledger, config());
-    service = new AdminTextCustomerService(customers, customerStore, credits, ledger);
+    sync = mock<TextCustomerGhlSyncService>();
+    // Default: the off-prod "skipped" outcome so create/update don't try to
+    // persist a contact id unless a test opts into a live sync.
+    sync.syncCustomer.mockResolvedValue(skippedSync);
+    service = new AdminTextCustomerService(customers, customerStore, credits, ledger, sync);
   });
 
   it("grants credits BY PHONE onto the customer's own account, unblocking text lookups", async () => {
@@ -131,7 +147,7 @@ describe("AdminTextCustomerService", () => {
       customerRow({ first_name: "Ada", last_name: "Lovelace", email: "ada@example.com" })
     );
 
-    const view = await service.create({
+    const { customer } = await service.create({
       phone: " +1 786 527 4077 ",
       firstName: "Ada",
       lastName: "Lovelace",
@@ -144,10 +160,51 @@ describe("AdminTextCustomerService", () => {
       lastName: "Lovelace",
       email: "ada@example.com",
     });
-    expect(view.firstName).toBe("Ada");
-    expect(view.email).toBe("ada@example.com");
+    expect(customer.firstName).toBe("Ada");
+    expect(customer.email).toBe("ada@example.com");
     // A brand-new customer has no ledger activity yet.
-    expect(view.creditBalance).toBe(0);
+    expect(customer.creditBalance).toBe(0);
+  });
+
+  it("syncs a created customer to the Jake sub-account and returns the sync outcome (JAK-147)", async () => {
+    customerStore.create.mockResolvedValue(
+      customerRow({ first_name: "Ada", email: "ada@example.com" })
+    );
+    // A live sync resolves a contact id, which the service persists back.
+    sync.syncCustomer.mockResolvedValue({
+      status: "synced",
+      ghlContactId: "ghl_1",
+      message: "Synced to GoHighLevel and approved to text Jake.",
+    });
+    customerStore.setGhlContactId.mockResolvedValue(
+      customerRow({ first_name: "Ada", email: "ada@example.com", ghl_contact_id: "ghl_1" })
+    );
+
+    const { customer, sync: result } = await service.create({
+      phone: " +1 786 527 4077 ",
+      firstName: "Ada",
+      lastName: null,
+      email: "ada@example.com",
+    });
+
+    // The normalized phone + profile are pushed to GHL...
+    expect(sync.syncCustomer).toHaveBeenCalledWith({
+      phone: "+17865274077",
+      firstName: "Ada",
+      lastName: null,
+      email: "ada@example.com",
+    });
+    // ...and the resolved contact id is persisted + reflected in the view.
+    expect(customerStore.setGhlContactId).toHaveBeenCalledWith("cust-1", "ghl_1");
+    expect(customer.ghlContactId).toBe("ghl_1");
+    expect(result.status).toBe("synced");
+  });
+
+  it("does NOT persist a contact id when the sync is skipped/failed (JAK-147)", async () => {
+    customerStore.create.mockResolvedValue(customerRow());
+    // Default skippedSync has no ghlContactId.
+    await service.create({ phone: "+17865274077", firstName: null, lastName: null, email: null });
+    expect(customerStore.setGhlContactId).not.toHaveBeenCalled();
   });
 
   it("updates a customer's profile and returns the view with its current balance (JAK-146)", async () => {
@@ -157,7 +214,7 @@ describe("AdminTextCustomerService", () => {
     // Balance is read from the ledger, not reset by the profile edit.
     await ledger.grant({ locationId: "cust-1", amount: 6, reason: "manual_grant" });
 
-    const view = await service.update("cust-1", {
+    const result = await service.update("cust-1", {
       phone: "+17865274077",
       firstName: "Grace",
       lastName: "Hopper",
@@ -169,19 +226,42 @@ describe("AdminTextCustomerService", () => {
       lastName: "Hopper",
       email: "grace@example.com",
     });
-    expect(view?.firstName).toBe("Grace");
-    expect(view?.creditBalance).toBe(6);
+    expect(result?.customer.firstName).toBe("Grace");
+    expect(result?.customer.creditBalance).toBe(6);
+    // An edit also re-syncs to GHL (idempotent upsert by phone).
+    expect(sync.syncCustomer).toHaveBeenCalledWith({
+      phone: "+17865274077",
+      firstName: "Grace",
+      lastName: "Hopper",
+      email: "grace@example.com",
+    });
   });
 
-  it("returns null when updating an unknown customer (JAK-146)", async () => {
+  it("returns null when updating an unknown customer, without syncing (JAK-146/147)", async () => {
     customerStore.updateProfile.mockResolvedValue(null);
-    const view = await service.update("nope", {
+    const result = await service.update("nope", {
       phone: "+17865274077",
       firstName: null,
       lastName: null,
       email: null,
     });
-    expect(view).toBeNull();
+    expect(result).toBeNull();
+    // No live customer → nothing to sync.
+    expect(sync.syncCustomer).not.toHaveBeenCalled();
+  });
+
+  it("delegates find-contact to the sync service with a normalized phone (JAK-147)", async () => {
+    sync.findContact.mockResolvedValue({
+      found: true,
+      contact: { ghlContactId: "ghl_1", firstName: "Ada", lastName: null, email: "ada@example.com" },
+      message: "Found an existing GoHighLevel contact.",
+    });
+
+    const res = await service.findContact(" +1 786 527 4077 ");
+
+    expect(sync.findContact).toHaveBeenCalledWith("+17865274077");
+    expect(res.found).toBe(true);
+    expect(res.contact?.ghlContactId).toBe("ghl_1");
   });
 
   it("lists customers with their credit balances joined by account key", async () => {

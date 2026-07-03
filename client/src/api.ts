@@ -15,8 +15,10 @@ import {
   ReportPromptView,
   SkipTraceCostView,
   SkipTracePromptView,
+  FindContactResult,
   TextCustomerInput,
   TextCustomerView,
+  TextCustomerWriteResult,
 } from "./types";
 
 /**
@@ -132,19 +134,25 @@ export const api = {
     return body.customers;
   },
   // Create / edit a texter's profile (JAK-146): name + optional email, phone required.
-  async createTextCustomer(input: TextCustomerInput): Promise<TextCustomerView> {
-    const body = await request<{ customer: TextCustomerView }>("/text-customers", {
+  // The response carries the GHL sync outcome too (JAK-147) so the form can show it.
+  async createTextCustomer(input: TextCustomerInput): Promise<TextCustomerWriteResult> {
+    return request<TextCustomerWriteResult>("/text-customers", {
       method: "POST",
       body: JSON.stringify(input),
     });
-    return body.customer;
   },
-  async updateTextCustomer(id: string, input: TextCustomerInput): Promise<TextCustomerView> {
-    const body = await request<{ customer: TextCustomerView }>(
-      `/text-customers/${encodeURIComponent(id)}`,
-      { method: "PUT", body: JSON.stringify(input) }
-    );
-    return body.customer;
+  async updateTextCustomer(id: string, input: TextCustomerInput): Promise<TextCustomerWriteResult> {
+    return request<TextCustomerWriteResult>(`/text-customers/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(input),
+    });
+  },
+  // Look up an existing Jake-sub-account contact by phone, to prefill the form (JAK-147).
+  async findTextCustomerContact(phone: string): Promise<FindContactResult> {
+    return request<FindContactResult>("/text-customers/find-contact", {
+      method: "POST",
+      body: JSON.stringify({ phone }),
+    });
   },
   async grantTextCustomerCredits(
     phone: string,
