@@ -168,10 +168,30 @@ DB_HOST="$DB_HOST.ohio-postgres.render.com" npm run dev-db-migrate
 
 > `npm run dev-db-migrate` wraps `cd postgres && ./migrate.sh` in
 > `doppler run -p jake -c dev` so the `DB_*` vars resolve for **local**/laptop
-> runs. `npm run db-migrate` is the bare `cd postgres && ./migrate.sh` used by
-> Render's Pre-Deploy Command, where `DB_*` are already injected into the
-> environment (see "Render specifics"). New migrations: `npm run
-> create-migration <name>` scaffolds a `<version>.do._<name>.sql` file.
+> runs. `npm run db-migrate` runs `npm run check:migration-filenames` (a
+> timestamp-collision / hand-numbering guard) and then `cd postgres &&
+> ./migrate.sh`; it is Render's Pre-Deploy Command, where `DB_*` are already
+> injected into the environment (see "Render specifics").
+
+### Migration golden rules (READ THIS — a broken one dies the whole deploy)
+
+Postgrator applies migrations in `yyyyMMddHHmmss` version order and **MD5-checksums
+every already-applied migration on every run**. If a file's bytes no longer match
+what a DB recorded, the pre-deploy fails with `MD5 checksum failed for migration
+[<version>]` **before applying anything** — exactly the JAK-133 staging outage,
+caused by JAK-132 editing an already-applied seed migration in place.
+
+1. **Create migrations ONLY via `npm run create-migration <name>`.** It stamps a
+   real `<yyyyMMddHHmmss>.do._<name>.sql` filename. This is the single supported way.
+2. **NEVER hand-number a migration filename.** Hand-picked numbers collide and/or
+   sort wrong. `npm run check:migration-filenames` (run automatically inside
+   `db-migrate`) fails the build on a collision or a malformed name.
+3. **NEVER edit or rename a migration that has already been applied anywhere**
+   (staging/prod/a teammate's DB). Its checksum is frozen the moment it runs.
+4. **A change to seed/prompt/reference data on an existing table is a NEW forward
+   migration** — a guarded `UPDATE`/`INSERT` in a fresh `create-migration` file —
+   **never an edit to the migration that first seeded it.** Value-guard the update
+   (`WHERE value = <old default>`) so an operator's customization is never clobbered.
 
 ---
 
