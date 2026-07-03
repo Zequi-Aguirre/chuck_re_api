@@ -234,7 +234,7 @@ export function CompsSettingsPage() {
             onChange={(e) => setCostDraft(e.target.value)}
             disabled={savingCost}
             inputProps={{ min: 1, step: 1 }}
-            sx={{ width: 160 }}
+            sx={{ width: { xs: "100%", sm: 160 } }}
           />
           <Button
             variant="contained"
@@ -266,7 +266,7 @@ export function CompsSettingsPage() {
               onChange={(e) => setParamsDraft((d) => ({ ...d, [f.key]: e.target.value }))}
               disabled={savingParams}
               inputProps={{ step: f.step ?? 1 }}
-              sx={{ width: 200 }}
+              sx={{ width: { xs: "100%", sm: 200 } }}
             />
           ))}
         </Stack>

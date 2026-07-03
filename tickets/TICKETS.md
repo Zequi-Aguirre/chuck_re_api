@@ -24,11 +24,12 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-132** (P1) Feed FULL PropertySearch response to AI report writer; guarantee mortgage/foreclosure/lien flags surface — depends: JAK-130, JAK-131
 - [ ] **JAK-133** (P0) HOTFIX: restore edited-in-place applied migration (unbreak staging deploy) + adopt real-timestamp migration tooling — depends: JAK-132
 
-## Open (4)
+## Open (5)
 - [ ] **JAK-103** (P0) Token refresh service — depends: JAK-102
 - [ ] **JAK-117** (P1) Align DB config to house pattern (discrete DB_* vars, mirror Automator/Northstar)
 - [ ] **JAK-119** (P1) Retire legacy single-tenant GHL_API_KEY + GHL_BASE_URL path (chuck_re_api MVP leftovers)
 - [ ] **JAK-124** (P1) Admin management: logged-in admin can create another admin — depends: JAK-113
+- [ ] **JAK-149** (P1) Mobile-first admin pages: cards on mobile for all data tables, no horizontal scroll — depends: JAK-146
 
 ## Deferred / blocked (5)
 - [ ] **JAK-150** (P3) [LATER] GHL Marketplace listing + approval requirements

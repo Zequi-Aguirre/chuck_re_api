@@ -14,7 +14,11 @@ import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
+import Chip from "@mui/material/Chip";
 import Link from "@mui/material/Link";
+import useMediaQuery from "@mui/material/useMediaQuery";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import { api } from "../api";
 import { LocationStatusDetail } from "../types";
@@ -22,11 +26,19 @@ import { StatusChip } from "../components/StatusChip";
 import { ConnectionFormDialog } from "../components/ConnectionFormDialog";
 import { GrantCreditsDialog } from "../components/GrantCreditsDialog";
 import { ConfirmDialog } from "../components/ConfirmDialog";
+import { ADMIN_MOBILE_QUERY } from "./responsiveLayout";
 
-/** Full per-sub-account view: status, credits, outcomes, failures, and actions. */
+/**
+ * Full per-sub-account view: status, credits, outcomes, failures, and actions.
+ *
+ * MOBILE-FIRST (JAK-149): the header actions already wrap; below the mobile
+ * breakpoint the ledger + activity/failure tables render as CARDS instead of
+ * wide tables so the page fits a phone with no horizontal scroll.
+ */
 export function ConnectionDetailPage() {
   const { locationId = "" } = useParams();
   const navigate = useNavigate();
+  const isMobile = useMediaQuery(ADMIN_MOBILE_QUERY);
   const [detail, setDetail] = useState<LocationStatusDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -179,7 +191,7 @@ export function ConnectionDetailPage() {
         {failures.length === 0 ? (
           <Empty>No failures — nice.</Empty>
         ) : (
-          <EventTable events={failures} />
+          <EventTable events={failures} isMobile={isMobile} />
         )}
       </SectionPaper>
 
@@ -188,7 +200,7 @@ export function ConnectionDetailPage() {
         {enrichment.recent.length === 0 ? (
           <Empty>No enrichment events yet.</Empty>
         ) : (
-          <EventTable events={enrichment.recent} />
+          <EventTable events={enrichment.recent} isMobile={isMobile} />
         )}
       </SectionPaper>
 
@@ -196,6 +208,29 @@ export function ConnectionDetailPage() {
       <SectionPaper title="Recent credit ledger">
         {credits.recent.length === 0 ? (
           <Empty>No credit entries yet.</Empty>
+        ) : isMobile ? (
+          <Stack spacing={1.5}>
+            {credits.recent.map((e) => (
+              <Card key={e.id} variant="outlined">
+                <CardContent sx={{ py: 1.5, "&:last-child": { pb: 1.5 } }}>
+                  <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 1 }}>
+                    <Typography variant="body2" sx={{ minWidth: 0, wordBreak: "break-word" }}>
+                      {e.reason}
+                    </Typography>
+                    <Typography
+                      variant="subtitle2"
+                      sx={{ flexShrink: 0, color: e.amount < 0 ? "error.main" : "success.main" }}
+                    >
+                      {e.amount > 0 ? `+${e.amount}` : e.amount}
+                    </Typography>
+                  </Box>
+                  <Typography variant="caption" color="text.secondary">
+                    {new Date(e.createdAt).toLocaleString()} · balance {e.balanceAfter}
+                  </Typography>
+                </CardContent>
+              </Card>
+            ))}
+          </Stack>
         ) : (
           <Box sx={{ overflowX: "auto" }}>
           <Table size="small" sx={{ minWidth: 480 }}>
@@ -327,7 +362,43 @@ function Empty({ children }: { children: React.ReactNode }) {
   );
 }
 
-function EventTable({ events }: { events: LocationStatusDetail["enrichment"]["recent"] }) {
+function EventTable({
+  events,
+  isMobile,
+}: {
+  events: LocationStatusDetail["enrichment"]["recent"];
+  isMobile: boolean;
+}) {
+  // On a phone the 5-column table would force horizontal scroll, so each event
+  // renders as a self-contained card instead (JAK-149).
+  if (isMobile) {
+    return (
+      <Stack spacing={1.5}>
+        {events.map((e) => (
+          <Card key={`${e.contactId}-${e.updatedAt}`} variant="outlined">
+            <CardContent sx={{ py: 1.5, "&:last-child": { pb: 1.5 } }}>
+              <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 1 }}>
+                <Typography variant="body2" sx={{ fontFamily: "monospace", minWidth: 0, wordBreak: "break-all" }}>
+                  {e.contactId}
+                </Typography>
+                <Chip size="small" label={e.status} sx={{ flexShrink: 0 }} />
+              </Box>
+              {e.detail && (
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, wordBreak: "break-word" }}>
+                  {e.detail}
+                </Typography>
+              )}
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+                {e.attemptCount} attempt{e.attemptCount === 1 ? "" : "s"} ·{" "}
+                {new Date(e.updatedAt).toLocaleString()}
+              </Typography>
+            </CardContent>
+          </Card>
+        ))}
+      </Stack>
+    );
+  }
+
   return (
     <Box sx={{ overflowX: "auto" }}>
     <Table size="small" sx={{ minWidth: 560 }}>
