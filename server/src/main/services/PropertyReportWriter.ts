@@ -1,6 +1,5 @@
-import { injectable } from "tsyringe";
-import OpenAI from "openai";
-import { EnvConfig } from "../config/envConfig.ts";
+import { inject, injectable } from "tsyringe";
+import { LlmClient, LLM_CLIENT } from "./llm/LlmClient.ts";
 import { PropertyReportData } from "../types/PropertyReport.ts";
 import { RealEstateApiPropertySearchResult } from "../types/RealEstateApi.ts";
 import { PropertyReportPromptService } from "./PropertyReportPromptService.ts";
@@ -8,30 +7,30 @@ import { PropertyReportPromptService } from "./PropertyReportPromptService.ts";
 /**
  * Writes the text-Jake "Jake Property Report" SMS (JAK-130).
  *
- * The report is written by an LLM (OpenAI Chat Completions) that DYNAMICALLY
- * decides which of the verified fields are worth including — there's no rigid
- * template. The STYLE/FORMAT half of the system prompt is admin-editable and
- * stored in the DB ({@link PropertyReportPromptService}, JAK-131). Around it the
- * code ALWAYS enforces the HARD GUARDRAILS, which an admin can never edit away:
- * plain text with NO EMOJIS, use ONLY the exact values we provide (never invent,
- * guess, or alter any number/name/price/fact), and the GoTextJake.com footer.
- * The property data goes in the user message as JSON.
+ * The report is written by an LLM — through the provider-agnostic
+ * {@link LlmClient} layer (JAK-141: OpenAI/gpt-4o by default, Anthropic optional)
+ * — that DYNAMICALLY decides which of the verified fields are worth including;
+ * there's no rigid template. The STYLE/FORMAT half of the system prompt is
+ * admin-editable and stored in the DB ({@link PropertyReportPromptService},
+ * JAK-131). Around it the code ALWAYS enforces the HARD GUARDRAILS, which an
+ * admin can never edit away: plain text with NO EMOJIS, use ONLY the exact values
+ * we provide (never invent, guess, or alter any number/name/price/fact), and the
+ * GoTextJake.com footer. The property data goes in the user message as JSON.
  *
  * RELIABILITY: this is a generate/read call, not an outbound GHL write, so the
- * JAK-110 write-safety guard does NOT apply. But Jake must ALWAYS reply, so if
- * OpenAI errors or times out (~8s) we fall back to a deterministic, emoji-free
- * plain-text report built from the SAME data. That fallback doubles as the
- * offline path when no OPENAI_API_KEY is configured. Even on the LLM path we
+ * JAK-110 write-safety guard does NOT apply. But Jake must ALWAYS reply, so if the
+ * LLM errors or times out (~8s) we fall back to a deterministic, emoji-free
+ * plain-text report built from the SAME data. That fallback doubles as the offline
+ * path when the selected provider has no key configured. Even on the LLM path we
  * strip any stray emoji from the model output and force the exact footer as a
- * belt-and-suspenders guard, so those guardrails hold on the OUTPUT too — not
- * just in the prompt — regardless of what the admin typed.
+ * belt-and-suspenders guard, so those guardrails hold on the OUTPUT too — not just
+ * in the prompt — regardless of what the admin typed.
  *
- * The OpenAI API key is an app-level Doppler secret ({@link EnvConfig.openAiApiKey})
- * — NEVER hardcoded — and is never logged.
+ * The provider API key is an app-level Doppler secret held inside the injected
+ * {@link LlmClient} — NEVER hardcoded — and is never logged.
  */
 @injectable()
 export class PropertyReportWriter {
-    private static readonly TIMEOUT_MS = 8_000;
     private static readonly MAX_TOKENS = 500;
 
     /** Footer the report always ends with (two lines). */
@@ -56,11 +55,8 @@ export class PropertyReportWriter {
         "GoTextJake.com",
     ].join("\n");
 
-    /** Lazily-built OpenAI client (cached). Protected so tests can substitute it. */
-    private openai?: OpenAI;
-
     constructor(
-        private readonly env: EnvConfig,
+        @inject(LLM_CLIENT) private readonly llm: LlmClient,
         private readonly promptService: PropertyReportPromptService
     ) {}
 
@@ -74,37 +70,38 @@ export class PropertyReportWriter {
         data: PropertyReportData,
         fullRecord?: RealEstateApiPropertySearchResult
     ): Promise<string> {
-        try {
-            const style = await this.promptService.getEffectivePrompt();
-            const raw = await this.generateWithLlm(data, style, fullRecord);
-            const clean = this.stripEmojis(raw).trim();
-            if (clean) return this.enforceFooter(clean);
-            console.warn("⚠️ PropertyReportWriter: empty LLM output — using deterministic fallback.");
-        } catch (err) {
-            console.error(
-                "⚠️ PropertyReportWriter: OpenAI call failed — using deterministic fallback:",
-                err instanceof Error ? err.message : "unknown error"
-            );
+        // No key for the selected provider → straight to the deterministic
+        // fallback (no network, no spend).
+        if (this.llm.isAvailable) {
+            try {
+                const style = await this.promptService.getEffectivePrompt();
+                const raw = await this.generateWithLlm(data, style, fullRecord);
+                const clean = this.stripEmojis(raw).trim();
+                if (clean) return this.enforceFooter(clean);
+                console.warn("⚠️ PropertyReportWriter: empty LLM output — using deterministic fallback.");
+            } catch (err) {
+                console.error(
+                    "⚠️ PropertyReportWriter: LLM call failed — using deterministic fallback:",
+                    err instanceof Error ? err.message : "unknown error"
+                );
+            }
         }
         return this.renderFallback(data);
     }
 
-    /** Call OpenAI with the verified data. Throws on error/timeout (caught by {@link write}). */
+    /** Generate via the LLM layer with the verified data. Throws on error/timeout (caught by {@link write}). */
     protected async generateWithLlm(
         data: PropertyReportData,
         style: string,
         fullRecord?: RealEstateApiPropertySearchResult
     ): Promise<string> {
-        const completion = await this.client().chat.completions.create(
-            {
-                model: this.env.openAiModel,
-                temperature: 0.2,
-                max_tokens: PropertyReportWriter.MAX_TOKENS,
-                messages: this.buildMessages(data, style, fullRecord),
-            },
-            { timeout: PropertyReportWriter.TIMEOUT_MS }
-        );
-        return completion.choices?.[0]?.message?.content ?? "";
+        const [system, user] = this.buildMessages(data, style, fullRecord);
+        return this.llm.generateText({
+            system: system.content,
+            user: user.content,
+            maxTokens: PropertyReportWriter.MAX_TOKENS,
+            temperature: 0.2,
+        });
     }
 
     /**
@@ -308,18 +305,5 @@ export class PropertyReportWriter {
             // collapse any spaces an emoji removal may have left doubled on a line
             .replace(/[ \t]{2,}/g, " ")
             .replace(/ +\n/g, "\n");
-    }
-
-    /** Build (and cache) the OpenAI client. Protected so tests can substitute it. */
-    protected client(): OpenAI {
-        if (this.openai) return this.openai;
-        if (!this.env.openAiApiKey) {
-            throw new Error("OPENAI_API_KEY is not configured");
-        }
-        this.openai = new OpenAI({
-            apiKey: this.env.openAiApiKey,
-            timeout: PropertyReportWriter.TIMEOUT_MS,
-        });
-        return this.openai;
     }
 }

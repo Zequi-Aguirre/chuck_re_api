@@ -32,19 +32,29 @@ export class EnvConfig {
     public readonly realEstateApiKey: string;
     public readonly realEstateBaseUrl: string;
 
-    // 🤖 OpenAI — writes the text-Jake "property report" SMS (JAK-130). The key is
-    // an app-level Doppler secret (NEVER hardcoded); the model is configurable and
-    // defaults to a cheap, strong-instruction-following model. Optional at boot —
-    // empty key just means the writer always uses its deterministic fallback.
+    // 🧠 LLM provider selection (JAK-141). Jake's model layer is provider-agnostic:
+    // BOTH the router (structured classification) and the specialist writers run
+    // through one LlmClient abstraction, and this picks the implementation. Default
+    // "openai"; set "anthropic" to run everything on Claude. Config-driven (Doppler
+    // LLM_PROVIDER) so the provider can change without a redeploy; keys stay in
+    // Doppler (below), never in the DB and never in a UI.
+    public readonly llmProvider: string;
+
+    // 🤖 OpenAI — the DEFAULT provider (JAK-141), primary key. Powers the router +
+    // every specialist writer via the LlmClient layer. The key is an app-level
+    // Doppler secret (NEVER hardcoded); the model is configurable and defaults to
+    // gpt-4o. Optional at boot — with LLM_PROVIDER=openai and no key, the router +
+    // specialists use their deterministic fallbacks (NO network call, NO spend).
     public readonly openAiApiKey: string;
     public readonly openAiModel: string;
 
-    // 🧭 Anthropic — powers the text-Jake orchestrator/router (JAK-135). Claude
-    // classifies every inbound message + resolves references into a dispatch plan.
+    // 🧭 Anthropic — the OPTIONAL second provider (JAK-141). When LLM_PROVIDER=
+    // anthropic, Claude runs the router + specialists via the SAME LlmClient layer.
     // The key is an app-level Doppler secret (NEVER hardcoded); the model is
-    // configurable and defaults to the latest Opus. Optional at boot — an empty
-    // key just means the router uses its deterministic fallback (address→report,
-    // OK→refresh, else chitchat), which makes NO network call and NO paid spend.
+    // configurable and defaults to the latest Opus. Optional at boot — when
+    // selected without a key, callers use their deterministic fallbacks
+    // (address→report, OK→refresh, else chitchat / plain-text render), which make
+    // NO network call and NO paid spend.
     public readonly anthropicApiKey: string;
     public readonly anthropicModel: string;
 
@@ -114,13 +124,19 @@ export class EnvConfig {
         this.realEstateApiKey = process.env.RE_API_KEY!;
         this.realEstateBaseUrl = process.env.RE_BASE_URL!;
 
-        // 🤖 OpenAI (JAK-130). Key from Doppler (OPENAI_API_KEY) — never hardcoded.
-        // Model overridable via OPENAI_MODEL; default 'gpt-4o-mini'.
-        this.openAiApiKey = process.env.OPENAI_API_KEY ?? "";
-        this.openAiModel = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+        // 🧠 LLM provider (JAK-141). Doppler LLM_PROVIDER; default "openai".
+        // Lower-cased so "OpenAI"/"Anthropic" resolve; an unknown value is handled
+        // by the factory (falls back to openai).
+        this.llmProvider = (process.env.LLM_PROVIDER ?? "openai").trim().toLowerCase();
 
-        // 🧭 Anthropic (JAK-135). Key from Doppler (ANTHROPIC_API_KEY) — never
-        // hardcoded. Model overridable via ANTHROPIC_MODEL; default the latest Opus.
+        // 🤖 OpenAI (JAK-141, default provider). Key from Doppler (OPENAI_API_KEY) —
+        // never hardcoded. Model overridable via OPENAI_MODEL; default 'gpt-4o'.
+        this.openAiApiKey = process.env.OPENAI_API_KEY ?? "";
+        this.openAiModel = process.env.OPENAI_MODEL ?? "gpt-4o";
+
+        // 🧭 Anthropic (JAK-141, optional provider). Key from Doppler
+        // (ANTHROPIC_API_KEY) — never hardcoded. Model overridable via
+        // ANTHROPIC_MODEL; default the latest Opus.
         this.anthropicApiKey = process.env.ANTHROPIC_API_KEY ?? "";
         this.anthropicModel = process.env.ANTHROPIC_MODEL ?? "claude-opus-4-8";
 
