@@ -148,7 +148,8 @@ export function ModelPickerSection({ load, save, reset, onToast, onError }: Mode
       </Typography>
 
       <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mb: 2 }}>
-        <FormControl sx={{ width: 200 }} disabled={saving || resetting}>
+        {/* Full-width on a phone so the fields never overflow the viewport (JAK-149). */}
+        <FormControl sx={{ width: { xs: "100%", sm: 200 } }} disabled={saving || resetting}>
           <InputLabel id="provider-label">Provider</InputLabel>
           <Select
             labelId="provider-label"
@@ -167,7 +168,7 @@ export function ModelPickerSection({ load, save, reset, onToast, onError }: Mode
           inputValue={modelDraft}
           onInputChange={(_e, value) => setModelDraft(value)}
           disabled={saving || resetting}
-          sx={{ width: 320 }}
+          sx={{ width: { xs: "100%", sm: 320 } }}
           renderInput={(params) => (
             <TextField
               {...params}

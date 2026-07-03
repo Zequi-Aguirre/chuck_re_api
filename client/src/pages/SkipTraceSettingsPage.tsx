@@ -166,7 +166,7 @@ export function SkipTraceSettingsPage() {
             onChange={(e) => setCostDraft(e.target.value)}
             disabled={savingCost}
             inputProps={{ min: 1, step: 1 }}
-            sx={{ width: 160 }}
+            sx={{ width: { xs: "100%", sm: 160 } }}
           />
           <Button
             variant="contained"

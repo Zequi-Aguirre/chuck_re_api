@@ -9,21 +9,32 @@ import TableCell from "@mui/material/TableCell";
 import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
 import Chip from "@mui/material/Chip";
 import Alert from "@mui/material/Alert";
 import Snackbar from "@mui/material/Snackbar";
 import CircularProgress from "@mui/material/CircularProgress";
 import Stack from "@mui/material/Stack";
+import useMediaQuery from "@mui/material/useMediaQuery";
 import AddIcon from "@mui/icons-material/Add";
 import { api, ApiError } from "../api";
 import { AdminUserView } from "../types";
 import { AddAdminDialog } from "../components/AddAdminDialog";
 import { ResetPasswordDialog } from "../components/ResetPasswordDialog";
 import { useAuth } from "../auth";
+import { ADMIN_MOBILE_QUERY } from "./responsiveLayout";
 
-/** Admin management (JAK-124): list admins + create another one. */
+/**
+ * Admin management (JAK-124): list admins + create another one.
+ *
+ * MOBILE-FIRST (JAK-149): below the mobile breakpoint the admins list renders as
+ * CARDS (with the per-admin actions wrapping) instead of the wide table, so the
+ * page fits a phone with no horizontal scroll and "Add admin" stays on-screen.
+ */
 export function AdminsPage() {
   const { user } = useAuth();
+  const isMobile = useMediaQuery(ADMIN_MOBILE_QUERY);
   const [rows, setRows] = useState<AdminUserView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
@@ -59,10 +70,111 @@ export function AdminsPage() {
     }
   }
 
+  // Per-admin controls, shared by the card + table views. `justify` lets the
+  // table right-align them while the card leaves them left-aligned + wrapping.
+  const adminActions = (admin: AdminUserView, justify: "flex-start" | "flex-end") => {
+    const isSelf = admin.id === user?.id;
+    return (
+      <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" justifyContent={justify}>
+        <Button size="small" disabled={busyId === admin.id} onClick={() => setResetTarget(admin)}>
+          Reset password
+        </Button>
+        <Button
+          size="small"
+          color={admin.isActive ? "error" : "primary"}
+          disabled={busyId === admin.id || (isSelf && admin.isActive)}
+          title={isSelf && admin.isActive ? "You can't deactivate your own account" : undefined}
+          onClick={() => toggleActive(admin)}
+        >
+          {admin.isActive ? "Deactivate" : "Activate"}
+        </Button>
+      </Stack>
+    );
+  };
+
+  const roleChip = (admin: AdminUserView) => (
+    <Chip
+      size="small"
+      label={admin.role === "superadmin" ? "Superadmin" : "Admin"}
+      color={admin.role === "superadmin" ? "primary" : "default"}
+      variant={admin.role === "superadmin" ? "filled" : "outlined"}
+    />
+  );
+
+  const statusChip = (admin: AdminUserView) => (
+    <Chip
+      size="small"
+      label={admin.isActive ? "Active" : "Disabled"}
+      color={admin.isActive ? "success" : "default"}
+    />
+  );
+
+  const renderCards = (list: AdminUserView[]) => (
+    <Stack spacing={1.5}>
+      {list.map((admin) => {
+        const isSelf = admin.id === user?.id;
+        return (
+          <Card key={admin.id} variant="outlined">
+            <CardContent>
+              <Typography variant="subtitle1" fontWeight={700} sx={{ minWidth: 0, wordBreak: "break-word" }}>
+                {admin.email}
+                {isSelf && <Chip size="small" label="you" sx={{ ml: 1 }} variant="outlined" />}
+              </Typography>
+              <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" alignItems="center" sx={{ mt: 1 }}>
+                {roleChip(admin)}
+                {statusChip(admin)}
+                <Typography variant="caption" color="text.secondary">
+                  Created {new Date(admin.createdAt).toLocaleDateString()}
+                </Typography>
+              </Stack>
+              <Box sx={{ mt: 1.5 }}>{adminActions(admin, "flex-start")}</Box>
+            </CardContent>
+          </Card>
+        );
+      })}
+    </Stack>
+  );
+
+  const renderTable = (list: AdminUserView[]) => (
+    <TableContainer component={Paper}>
+      <Table sx={{ minWidth: 720 }}>
+        <TableHead>
+          <TableRow>
+            <TableCell>Email</TableCell>
+            <TableCell>Role</TableCell>
+            <TableCell>Status</TableCell>
+            <TableCell>Created</TableCell>
+            <TableCell align="right">Actions</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {list.map((admin) => {
+            const isSelf = admin.id === user?.id;
+            return (
+              <TableRow key={admin.id} hover>
+                <TableCell>
+                  {admin.email}
+                  {isSelf && <Chip size="small" label="you" sx={{ ml: 1 }} variant="outlined" />}
+                </TableCell>
+                <TableCell>{roleChip(admin)}</TableCell>
+                <TableCell>{statusChip(admin)}</TableCell>
+                <TableCell>{new Date(admin.createdAt).toLocaleDateString()}</TableCell>
+                <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+                  {adminActions(admin, "flex-end")}
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </TableContainer>
+  );
+
   return (
     <Box>
-      <Box sx={{ display: "flex", alignItems: "center", mb: 3 }}>
-        <Typography variant="h5" fontWeight={800} sx={{ flexGrow: 1 }}>
+      {/* flexWrap keeps the "Add admin" button on-screen on a phone. */}
+      <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1, mb: 3 }}>
+        <Typography variant="h5" fontWeight={800} sx={{ flexGrow: 1, minWidth: 0 }}>
           Admins
         </Typography>
         <Button variant="contained" startIcon={<AddIcon />} onClick={() => setAddOpen(true)}>
@@ -80,73 +192,10 @@ export function AdminsPage() {
         <Box sx={{ display: "flex", justifyContent: "center", py: 6 }}>
           <CircularProgress />
         </Box>
+      ) : isMobile ? (
+        renderCards(rows)
       ) : (
-        <TableContainer component={Paper}>
-          <Table sx={{ minWidth: 720 }}>
-            <TableHead>
-              <TableRow>
-                <TableCell>Email</TableCell>
-                <TableCell>Role</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Created</TableCell>
-                <TableCell align="right">Actions</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {rows.map((admin) => {
-                const isSelf = admin.id === user?.id;
-                return (
-                  <TableRow key={admin.id} hover>
-                    <TableCell>
-                      {admin.email}
-                      {isSelf && (
-                        <Chip size="small" label="you" sx={{ ml: 1 }} variant="outlined" />
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Chip
-                        size="small"
-                        label={admin.role === "superadmin" ? "Superadmin" : "Admin"}
-                        color={admin.role === "superadmin" ? "primary" : "default"}
-                        variant={admin.role === "superadmin" ? "filled" : "outlined"}
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <Chip
-                        size="small"
-                        label={admin.isActive ? "Active" : "Disabled"}
-                        color={admin.isActive ? "success" : "default"}
-                      />
-                    </TableCell>
-                    <TableCell>{new Date(admin.createdAt).toLocaleDateString()}</TableCell>
-                    <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
-                      <Stack direction="row" spacing={1} justifyContent="flex-end">
-                        <Button
-                          size="small"
-                          disabled={busyId === admin.id}
-                          onClick={() => setResetTarget(admin)}
-                        >
-                          Reset password
-                        </Button>
-                        <Button
-                          size="small"
-                          color={admin.isActive ? "error" : "primary"}
-                          disabled={busyId === admin.id || (isSelf && admin.isActive)}
-                          title={
-                            isSelf && admin.isActive ? "You can't deactivate your own account" : undefined
-                          }
-                          onClick={() => toggleActive(admin)}
-                        >
-                          {admin.isActive ? "Deactivate" : "Activate"}
-                        </Button>
-                      </Stack>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </TableContainer>
+        renderTable(rows)
       )}
 
       <AddAdminDialog
