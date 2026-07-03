@@ -73,9 +73,28 @@ export interface TextCustomerView {
   lastName: string | null;
   email: string | null;
   ghlContactId: string | null;
+  /** Two-level hold state (JAK-148). Mirrors the server's TextCustomerStatus. */
+  status: TextCustomerStatus;
   creditBalance: number;
   createdAt: string;
   lastSeenAt: string;
+}
+
+/**
+ * The two-level hold state of a text customer (JAK-148):
+ *  - `active`      — normal: GHL forwards their texts; Jake processes + charges.
+ *  - `on_hold`     — SOFT hold: GHL still forwards, but Jake replies a hold notice
+ *                    and does no work / no charge.
+ *  - `deactivated` — HARD off: the "text Jake" field is unapproved so GHL stops
+ *                    forwarding entirely.
+ */
+export type TextCustomerStatus = "active" | "on_hold" | "deactivated";
+
+/** The result of a hold status change (JAK-148): updated view + GHL flip outcome. */
+export interface TextCustomerStatusResult {
+  customer: TextCustomerView;
+  /** The "text Jake" field-flip outcome; null for the soft on_hold path. */
+  sync: TextCustomerSyncResult | null;
 }
 
 /** The editable identity + profile for a text customer (JAK-146). */

@@ -24,6 +24,37 @@ export function customerListLayout(isMobile: boolean): "cards" | "table" {
   return isMobile ? "cards" : "table";
 }
 
+/** The two-level hold states a text customer can be in (JAK-148). */
+export type TextCustomerStatus = "active" | "on_hold" | "deactivated";
+
+/** Human, non-technical label for a hold status (JAK-148) — shown on the card. */
+export function customerStatusLabel(status: TextCustomerStatus): string {
+  switch (status) {
+    case "on_hold":
+      return "On hold";
+    case "deactivated":
+      return "Deactivated";
+    case "active":
+    default:
+      return "Active";
+  }
+}
+
+/** MUI Chip color for a hold status — green active, amber on-hold, red off (JAK-148). */
+export function customerStatusColor(
+  status: TextCustomerStatus
+): "success" | "warning" | "error" {
+  switch (status) {
+    case "on_hold":
+      return "warning";
+    case "deactivated":
+      return "error";
+    case "active":
+    default:
+      return "success";
+  }
+}
+
 /** Full display name from first/last, or "" when the customer is unnamed. */
 export function customerDisplayName(customer: {
   firstName: string | null;

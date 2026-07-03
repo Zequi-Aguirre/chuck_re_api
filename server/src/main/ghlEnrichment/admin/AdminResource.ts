@@ -100,6 +100,15 @@ export class AdminResource {
     this.router.post("/text-customers/find-contact", this.findTextCustomerContact.bind(this));
     this.router.put("/text-customers/:id", this.updateTextCustomer.bind(this));
     this.router.post("/text-customers/credits", this.grantTextCustomerCredits.bind(this));
+    // Two-level hold controls (JAK-148). Sub-paths under :id, so no collision with
+    // the literal /credits or /find-contact routes or the PUT /:id edit above.
+    //   hold       — SOFT: GHL keeps forwarding; Jake replies "on hold", no charge.
+    //   deactivate — HARD: flip "text Jake" unapproved so GHL stops forwarding.
+    //   reactivate — back to active: re-approve "text Jake"; normal processing.
+    // NONE of these touch credits.
+    this.router.post("/text-customers/:id/hold", this.holdTextCustomer.bind(this));
+    this.router.post("/text-customers/:id/deactivate", this.deactivateTextCustomer.bind(this));
+    this.router.post("/text-customers/:id/reactivate", this.reactivateTextCustomer.bind(this));
 
     // AI prompt — the admin-editable STYLE/FORMAT prompt for the JAK-130 property
     // report (JAK-131). Available to ANY logged-in admin (requireAuth only — NOT
@@ -481,6 +490,57 @@ export class AdminResource {
       return res.status(200).json({ customer: result.customer, sync: result.sync });
     } catch (err) {
       return this.handleTextCustomerWriteError(err, res, next);
+    }
+  }
+
+  /**
+   * Put a text customer on SOFT hold (JAK-148). GHL keeps forwarding their texts
+   * (the "text Jake" field stays approved); Jake intercepts inbound server-side
+   * and replies a hold notice without processing or charging. No GHL write, no
+   * credit change. 404 if no live customer has that id.
+   */
+  private async holdTextCustomer(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    return this.changeTextCustomerStatus(req, res, next, "on_hold");
+  }
+
+  /**
+   * HARD-deactivate a text customer (JAK-148). Flips the GHL "text Jake" field to
+   * unapproved via the JAK-147 sync so GHL STOPS forwarding their texts entirely;
+   * a backstop still refuses to process/charge if one slips through. No credit
+   * change. 404 if no live customer has that id.
+   */
+  private async deactivateTextCustomer(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    return this.changeTextCustomerStatus(req, res, next, "deactivated");
+  }
+
+  /**
+   * Reactivate a text customer (JAK-148) from either hold state. Re-approves the
+   * GHL "text Jake" field so GHL forwards again and clears the hold so normal
+   * processing resumes. No credit change. 404 if no live customer has that id.
+   */
+  private async reactivateTextCustomer(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    return this.changeTextCustomerStatus(req, res, next, "active");
+  }
+
+  /** Shared body for the three hold transitions — delegates to the service. */
+  private async changeTextCustomerStatus(
+    req: Request,
+    res: Response,
+    next: NextFunction,
+    status: "on_hold" | "deactivated" | "active"
+  ): Promise<Response | void> {
+    try {
+      const id = str(req.params.id);
+      if (!id) {
+        return res.status(400).json({ error: "missing customer id" });
+      }
+      const result = await this.textCustomers.changeStatus(id, status);
+      if (!result) {
+        return res.status(404).json({ error: "unknown customer" });
+      }
+      return res.status(200).json({ customer: result.customer, sync: result.sync });
+    } catch (err) {
+      return next(err);
     }
   }
 

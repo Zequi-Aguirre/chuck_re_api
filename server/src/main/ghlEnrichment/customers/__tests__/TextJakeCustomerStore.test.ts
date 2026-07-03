@@ -9,6 +9,7 @@ const row = (over: Partial<TextJakeCustomerRow> = {}): TextJakeCustomerRow => ({
   first_name: null,
   last_name: null,
   email: null,
+  status: "active",
   created_at: new Date("2026-07-01T00:00:00Z"),
   modified_at: new Date("2026-07-02T00:00:00Z"),
   deleted_at: null,
@@ -85,6 +86,37 @@ describe("TextJakeCustomerStore profile create/update (JAK-146)", () => {
       lastName: null,
       email: null,
     });
+    expect(result).toBeNull();
+  });
+});
+
+describe("TextJakeCustomerStore.setStatus (JAK-148)", () => {
+  let db: MockProxy<PostgresDatabase>;
+  let store: TextJakeCustomerStore;
+
+  beforeEach(() => {
+    db = mock<PostgresDatabase>();
+    store = new TextJakeCustomerStore(db);
+  });
+
+  it("updates ONLY status (+ modified_at) for a live row and returns it", async () => {
+    const held = row({ status: "on_hold" });
+    (db.query as jest.Mock).mockResolvedValue({ rows: [held] });
+
+    const result = await store.setStatus("cust-1", "on_hold");
+
+    expect(result).toEqual(held);
+    const [sql, params] = (db.query as jest.Mock).mock.calls[0];
+    // The write never touches the credit ledger — status column only.
+    expect(String(sql)).toContain("SET status = $2");
+    expect(String(sql)).not.toMatch(/credit|balance|ledger/i);
+    expect(String(sql)).toContain("deleted_at IS NULL");
+    expect(params).toEqual(["cust-1", "on_hold"]);
+  });
+
+  it("returns null when no live customer matches the id", async () => {
+    (db.query as jest.Mock).mockResolvedValue({ rows: [] });
+    const result = await store.setStatus("nope", "deactivated");
     expect(result).toBeNull();
   });
 });

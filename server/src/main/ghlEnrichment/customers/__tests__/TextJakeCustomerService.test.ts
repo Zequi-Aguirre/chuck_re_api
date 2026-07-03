@@ -19,6 +19,7 @@ describe("TextJakeCustomerService", () => {
     first_name: null,
     last_name: null,
     email: null,
+    status: "active",
     created_at: new Date("2026-07-01T00:00:00Z"),
     modified_at: new Date("2026-07-01T00:00:00Z"),
     deleted_at: null,

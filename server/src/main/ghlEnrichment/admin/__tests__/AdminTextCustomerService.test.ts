@@ -72,6 +72,7 @@ const customer = (over: Partial<TextJakeCustomer> = {}): TextJakeCustomer => ({
   firstName: null,
   lastName: null,
   email: null,
+  status: "active",
   // The credit account key IS the customer id (JAK-115).
   creditAccountId: "cust-1",
   createdAt: new Date("2026-07-01T00:00:00Z"),
@@ -86,6 +87,7 @@ const customerRow = (over: Partial<TextJakeCustomerRow> = {}): TextJakeCustomerR
   first_name: null,
   last_name: null,
   email: null,
+  status: "active",
   created_at: new Date("2026-07-01T00:00:00Z"),
   modified_at: new Date("2026-07-02T00:00:00Z"),
   deleted_at: null,
@@ -280,5 +282,80 @@ describe("AdminTextCustomerService", () => {
     expect(byId.get("cust-1")?.phone).toBe("+17865274077");
     // A customer with no ledger row reads as balance 0, not undefined.
     expect(byId.get("cust-2")?.creditBalance).toBe(0);
+  });
+
+  // --- Two-level hold status changes (JAK-148) ------------------------------
+
+  describe("changeStatus (JAK-148)", () => {
+    it("on_hold: persists the status and does NOT flip the GHL approval field", async () => {
+      customerStore.setStatus.mockResolvedValue(customerRow({ status: "on_hold" }));
+
+      const result = await service.changeStatus("cust-1", "on_hold");
+
+      expect(customerStore.setStatus).toHaveBeenCalledWith("cust-1", "on_hold");
+      // SOFT hold: GHL keeps forwarding, so the approval field is left untouched.
+      expect(sync.setApproval).not.toHaveBeenCalled();
+      expect(result?.customer.status).toBe("on_hold");
+      expect(result?.sync).toBeNull();
+    });
+
+    it("deactivated: persists and flips 'text Jake' to UNAPPROVED via the sync", async () => {
+      customerStore.setStatus.mockResolvedValue(customerRow({ status: "deactivated" }));
+      sync.setApproval.mockResolvedValue({
+        status: "synced",
+        ghlContactId: "ghl_1",
+        message: "Updated in GoHighLevel — texts to Jake are turned off.",
+      });
+
+      const result = await service.changeStatus("cust-1", "deactivated");
+
+      expect(customerStore.setStatus).toHaveBeenCalledWith("cust-1", "deactivated");
+      // approved=false → GHL stops forwarding.
+      expect(sync.setApproval).toHaveBeenCalledWith(
+        { phone: "+17865274077", firstName: null, lastName: null, email: null },
+        false
+      );
+      expect(result?.customer.status).toBe("deactivated");
+      expect(result?.sync?.status).toBe("synced");
+    });
+
+    it("active: persists and RE-APPROVES 'text Jake' so GHL forwards again", async () => {
+      customerStore.setStatus.mockResolvedValue(customerRow({ status: "active" }));
+      sync.setApproval.mockResolvedValue({
+        status: "synced",
+        ghlContactId: "ghl_1",
+        message: "Synced to GoHighLevel and approved to text Jake.",
+      });
+
+      const result = await service.changeStatus("cust-1", "active");
+
+      expect(sync.setApproval).toHaveBeenCalledWith(
+        { phone: "+17865274077", firstName: null, lastName: null, email: null },
+        true
+      );
+      expect(result?.customer.status).toBe("active");
+    });
+
+    it("returns null when no live customer has that id", async () => {
+      customerStore.setStatus.mockResolvedValue(null);
+
+      const result = await service.changeStatus("nope", "on_hold");
+
+      expect(result).toBeNull();
+      expect(sync.setApproval).not.toHaveBeenCalled();
+    });
+
+    it("NEVER moves the credit balance across a hold/deactivate/reactivate", async () => {
+      // Seed a balance, then run every transition and assert it's unchanged.
+      await ledger.grant({ locationId: "cust-1", amount: 7, reason: "manual_grant" });
+      sync.setApproval.mockResolvedValue(skippedSync);
+
+      for (const status of ["on_hold", "deactivated", "active"] as const) {
+        customerStore.setStatus.mockResolvedValue(customerRow({ status }));
+        const result = await service.changeStatus("cust-1", status);
+        expect(result?.customer.creditBalance).toBe(7);
+      }
+      expect(await credits.getBalance("cust-1")).toBe(7);
+    });
   });
 });

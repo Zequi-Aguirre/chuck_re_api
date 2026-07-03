@@ -48,6 +48,9 @@ function toCustomer(row: TextJakeCustomerRow): TextJakeCustomer {
     firstName: row.first_name,
     lastName: row.last_name,
     email: row.email,
+    // Two-level hold state (JAK-148). The DB default is 'active', so a row from
+    // before this ticket (no column) still resolves to active.
+    status: row.status ?? "active",
     // The credit account key IS the customer id — stable per customer.
     creditAccountId: row.id,
     createdAt: row.created_at,
