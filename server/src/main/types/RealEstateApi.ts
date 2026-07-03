@@ -156,13 +156,26 @@ export type RealEstateApiPropertySearchResult = {
     inStateAbsenteeOwner?: boolean | null;
     outOfStateAbsenteeOwner?: boolean | null;
 
-    // Equity / mortgage signals used for the Ownership section.
+    // Equity / mortgage signals used for the Ownership + Financials sections.
     equityPercent?: number | null;
     estimatedEquity?: number | null;
     highEquity?: boolean | null;
     freeClear?: boolean | null;
     openMortgageBalance?: number | null;
+    estimatedMortgagePayment?: number | null;
     yearsOwned?: number | null;
+
+    // Distress / lien signals (JAK-132). Foreclosure/auction/REO are booleans the
+    // provider derives; auctionDate is a string when an auction is scheduled.
+    // taxLien and judgment are Yes/No FLAGS — the provider ships NO dollar amount
+    // for liens, so we never render one.
+    foreclosure?: boolean | null;
+    preForeclosure?: boolean | null;
+    reo?: boolean | null;
+    auction?: boolean | null;
+    auctionDate?: string | null;
+    taxLien?: boolean | null;
+    judgment?: boolean | null;
 
     // FEMA flood signals; only the zone descriptor is renderable.
     floodZone?: boolean | null;

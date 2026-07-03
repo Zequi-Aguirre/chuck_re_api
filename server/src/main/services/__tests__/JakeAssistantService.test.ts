@@ -342,11 +342,60 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
         "equityLevel",
         "occupancy",
         "absenteeStatus",
+        // JAK-132 money + distress fields the API didn't return.
+        "estimatedMortgageBalance",
+        "estimatedMortgagePayment",
+        "estimatedEquity",
+        "foreclosure",
+        "preForeclosure",
+        "reo",
+        "auction",
+        "auctionDate",
+        "taxLien",
+        "judgment",
       ]) {
         expect(data).not.toHaveProperty(key);
       }
       // Nothing anywhere is null/undefined.
       expect(Object.values(data).every((v) => v !== null && v !== undefined)).toBe(true);
+    });
+
+    it("maps JAK-132 Financials + Distress/Lien flags and hands the FULL record to the writer", async () => {
+      const record = {
+        address: "742 Evergreen Terrace, Springfield, IL 62704",
+        openMortgageBalance: 148000,
+        estimatedMortgagePayment: 1350,
+        estimatedEquity: 177000,
+        preForeclosure: true,
+        taxLien: true,
+        foreclosure: false, // known-false: mapped through so the report can reassure
+        judgment: false,
+      };
+      realEstate.searchPropertyByAddress.mockResolvedValue(record as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "742 Evergreen Terrace, Springfield, IL 62704",
+      });
+
+      const data = dataHandedToWriter();
+      expect(data).toMatchObject({
+        estimatedMortgageBalance: 148000,
+        estimatedMortgagePayment: 1350,
+        estimatedEquity: 177000,
+        preForeclosure: true,
+        taxLien: true,
+        foreclosure: false,
+        judgment: false,
+      });
+      // Liens are FLAGS — never a fabricated dollar amount.
+      expect(data).not.toHaveProperty("estimatedLiens");
+
+      // The COMPLETE raw record rides along as the writer's second argument so the
+      // LLM path sees every field, not just the curated subset.
+      const rawHandedToWriter = reportWriter.write.mock.calls[0]![1];
+      expect(rawHandedToWriter).toBe(record);
     });
   });
 

@@ -2,6 +2,7 @@ import { injectable } from "tsyringe";
 import OpenAI from "openai";
 import { EnvConfig } from "../config/envConfig.ts";
 import { PropertyReportData } from "../types/PropertyReport.ts";
+import { RealEstateApiPropertySearchResult } from "../types/RealEstateApi.ts";
 import { PropertyReportPromptService } from "./PropertyReportPromptService.ts";
 
 /**
@@ -69,10 +70,13 @@ export class PropertyReportWriter {
      * fallback so Jake always replies. Both paths are guaranteed emoji-free and
      * end with the exact GoTextJake.com footer.
      */
-    async write(data: PropertyReportData): Promise<string> {
+    async write(
+        data: PropertyReportData,
+        fullRecord?: RealEstateApiPropertySearchResult
+    ): Promise<string> {
         try {
             const style = await this.promptService.getEffectivePrompt();
-            const raw = await this.generateWithLlm(data, style);
+            const raw = await this.generateWithLlm(data, style, fullRecord);
             const clean = this.stripEmojis(raw).trim();
             if (clean) return this.enforceFooter(clean);
             console.warn("⚠️ PropertyReportWriter: empty LLM output — using deterministic fallback.");
@@ -86,13 +90,17 @@ export class PropertyReportWriter {
     }
 
     /** Call OpenAI with the verified data. Throws on error/timeout (caught by {@link write}). */
-    protected async generateWithLlm(data: PropertyReportData, style: string): Promise<string> {
+    protected async generateWithLlm(
+        data: PropertyReportData,
+        style: string,
+        fullRecord?: RealEstateApiPropertySearchResult
+    ): Promise<string> {
         const completion = await this.client().chat.completions.create(
             {
                 model: this.env.openAiModel,
                 temperature: 0.2,
                 max_tokens: PropertyReportWriter.MAX_TOKENS,
-                messages: this.buildMessages(data, style),
+                messages: this.buildMessages(data, style, fullRecord),
             },
             { timeout: PropertyReportWriter.TIMEOUT_MS }
         );
@@ -119,20 +127,52 @@ export class PropertyReportWriter {
      * The system + user messages. `style` is the (admin-editable) STYLE prompt;
      * the guardrails are added by {@link composeSystemPrompt}. Public + sync so
      * tests can assert prompt contents directly.
+     *
+     * JAK-132: when the caller supplies the FULL PropertySearch record we hand the
+     * model the WHOLE verified response as JSON — not just the curated subset — so
+     * it can dynamically surface money + distress fields (mortgage balance,
+     * foreclosure/pre-foreclosure, tax lien/judgment) without us extending a type
+     * per field. The curated, derived block (friendly labels like "Out-of-State
+     * Absentee Owner", "Free & Clear", lot acres) rides along beside it so those
+     * derivations aren't lost. Everything here is ground truth — the guardrails
+     * still forbid inventing or altering any of it.
      */
     buildMessages(
         data: PropertyReportData,
-        style: string
+        style: string,
+        fullRecord?: RealEstateApiPropertySearchResult
     ): { role: "system" | "user"; content: string }[] {
         return [
             { role: "system", content: this.composeSystemPrompt(style) },
-            {
-                role: "user",
-                content:
-                    "Verified property data (use only these values):\n" +
-                    JSON.stringify(data, null, 2),
-            },
+            { role: "user", content: this.buildUserPayload(data, fullRecord) },
         ];
+    }
+
+    /**
+     * The user message. With a full record present we send the COMPLETE verified
+     * response plus our derived highlights; without one (legacy/offline callers)
+     * we send just the curated data. Prefixed with an explicit "use only these
+     * values" instruction reinforcing the only-provided-values guardrail.
+     */
+    private buildUserPayload(
+        data: PropertyReportData,
+        fullRecord?: RealEstateApiPropertySearchResult
+    ): string {
+        if (!fullRecord) {
+            return (
+                "Verified property data (use only these values):\n" +
+                JSON.stringify(data, null, 2)
+            );
+        }
+        return [
+            "Verified property data (use ONLY these values — do not invent anything not present here).",
+            "",
+            "Full property record (the complete verified response — pick whichever fields are useful):",
+            JSON.stringify(fullRecord, null, 2),
+            "",
+            "Derived highlights (friendly labels we computed from the record above):",
+            JSON.stringify(data, null, 2),
+        ].join("\n");
     }
 
     /**
@@ -164,6 +204,18 @@ export class PropertyReportWriter {
                 data.absenteeStatus ?? null,
                 data.yearsOwned != null ? `Years Owned: ${data.yearsOwned}` : null,
             ]),
+            this.section("Financials", [
+                data.estimatedMortgageBalance != null
+                    ? `Estimated Mortgage Balance: ${this.money(data.estimatedMortgageBalance)}`
+                    : null,
+                data.estimatedMortgagePayment != null
+                    ? `Estimated Mortgage Payment: ${this.money(data.estimatedMortgagePayment)}`
+                    : null,
+                data.estimatedEquity != null
+                    ? `Estimated Equity: ${this.money(data.estimatedEquity)}`
+                    : null,
+            ]),
+            this.distressSection(data),
             this.section("History", [
                 data.lastSoldDate ? `Last Sold: ${data.lastSoldDate}` : null,
                 data.salePrice != null ? `Sale Price: ${this.money(data.salePrice)}` : null,
@@ -182,6 +234,32 @@ export class PropertyReportWriter {
         const clean = bullets.filter((b): b is string => typeof b === "string" && b.trim().length > 0);
         if (!clean.length) return null;
         return [title, ...clean.map((b) => `• ${b}`)].join("\n");
+    }
+
+    /**
+     * The "Distress / Liens" section (JAK-132). These are Yes/No FLAGS — never
+     * dollar amounts (the provider ships none). We list only the flags that are
+     * TRUE. If the record carried the flags but none are set, we print a single
+     * reassuring "No liens or foreclosure on record" line instead of a wall of
+     * "No"s. If the flags were entirely absent (unknown), the section is omitted.
+     */
+    private distressSection(data: PropertyReportData): string | null {
+        const flags: Array<[boolean | undefined, string]> = [
+            [data.foreclosure, "Foreclosure"],
+            [data.preForeclosure, "Pre-Foreclosure"],
+            [data.reo, "Bank-Owned (REO)"],
+            [
+                data.auction,
+                data.auctionDate ? `Auction (${data.auctionDate})` : "Auction",
+            ],
+            [data.taxLien, "Tax Lien"],
+            [data.judgment, "Judgment"],
+        ];
+        const active = flags.filter(([v]) => v === true).map(([, label]) => label);
+        if (active.length) return this.section("Distress / Liens", active);
+        const anyKnown = flags.some(([v]) => typeof v === "boolean");
+        if (anyKnown) return this.section("Distress / Liens", ["No liens or foreclosure on record"]);
+        return null;
     }
 
     private bedsBaths(data: PropertyReportData): string | null {

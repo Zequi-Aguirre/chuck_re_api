@@ -32,6 +32,37 @@ describe("PropertyReportPromptService", () => {
     expect(await svc.getEffectivePrompt()).toBe(DEFAULT);
   });
 
+  it("default prompt names the JAK-132 Financials + Distress/Lien sections and rules", () => {
+    // The report must be told to surface money + distress signals, and to treat
+    // liens as Yes/No FLAGS (never a dollar amount) with false/absent flags omitted.
+    expect(DEFAULT).toContain("Financials");
+    expect(DEFAULT).toContain("openMortgageBalance");
+    expect(DEFAULT).toContain("estimatedMortgagePayment");
+    expect(DEFAULT).toContain("estimatedEquity");
+    expect(DEFAULT).toContain("Distress / Liens");
+    expect(DEFAULT).toMatch(/foreclosure/i);
+    expect(DEFAULT).toMatch(/pre-foreclosure/i);
+    expect(DEFAULT).toMatch(/tax lien/i);
+    expect(DEFAULT).toMatch(/judgment/i);
+    expect(DEFAULT).toMatch(/FLAGS, not amounts/);
+    expect(DEFAULT).toContain("No liens or foreclosure on record");
+  });
+
+  it("keeps the seeded migration in sync with the code default (no drift)", () => {
+    const fs = require("fs");
+    const path = require("path");
+    const seed = fs.readFileSync(
+      path.join(
+        __dirname,
+        "../../../../../postgres/migrations/20260702000005.do._update_property_report_prompt_jak132.sql"
+      ),
+      "utf8"
+    );
+    // The code default is the single source of truth; the migration mirrors it
+    // verbatim inside a $prompt$...$prompt$ dollar-quoted block.
+    expect(seed).toContain(DEFAULT);
+  });
+
   it("returns the stored value when present", async () => {
     store.get.mockResolvedValue(row({ value: "STORED STYLE" }));
     expect(await svc.getEffectivePrompt()).toBe("STORED STYLE");

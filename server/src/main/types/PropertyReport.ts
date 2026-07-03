@@ -40,6 +40,30 @@ export interface PropertyReportData {
     absenteeStatus?: AbsenteeStatus;
     yearsOwned?: number;
 
+    // --- Financials (JAK-132) — estimated dollar figures from the SAME
+    // PropertySearch call. Present only when the API returned them. ---
+    /** Estimated open mortgage balance (dollars). */
+    estimatedMortgageBalance?: number;
+    /** Estimated monthly mortgage payment (dollars). */
+    estimatedMortgagePayment?: number;
+    /** Estimated equity (dollars). Distinct from `equityPercent`. */
+    estimatedEquity?: number;
+
+    // --- Distress / Liens (JAK-132) — Yes/No FLAGS, never dollar amounts. Set
+    // only when the API actually returned the flag, so the writer can tell a
+    // real `false` (checked, none on record) from an absent value (unknown). ---
+    foreclosure?: boolean;
+    preForeclosure?: boolean;
+    /** Bank-owned / real-estate-owned. */
+    reo?: boolean;
+    auction?: boolean;
+    /** Scheduled auction date, when the API provides one. */
+    auctionDate?: string;
+    /** Tax lien on record (flag only — no dollar amount exists). */
+    taxLien?: boolean;
+    /** Judgment on record (flag only — no dollar amount exists). */
+    judgment?: boolean;
+
     /** Last sale date, normalized to MM/DD/YYYY. */
     lastSoldDate?: string;
     salePrice?: number;

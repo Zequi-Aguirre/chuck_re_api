@@ -1,34 +1,20 @@
--- JAK-131 — Admin-editable AI prompt: a small key/value settings store.
+-- JAK-132 — Refresh the seeded property-report STYLE prompt so the LLM report
+-- surfaces the money + distress signals now fed to it (mortgage balance/payment,
+-- estimated equity, foreclosure/pre-foreclosure/REO/auction, tax lien, judgment).
 --
--- Holds operator-tunable application settings as text values. The first (and,
--- for now, only) key is the editable STYLE/FORMAT system prompt for the text-Jake
--- "Jake Property Report" (JAK-130). Any logged-in admin may edit it from the
--- dashboard; the HARD GUARDRAILS (no emojis, only-provided-values, the
--- GoTextJake.com footer) are enforced in CODE and are NOT stored here, so they
--- can never be edited away.
+-- The full /v2/PropertySearch record is now handed to the writer, so the prompt
+-- gains a Financials section and a Distress / Liens section, plus explicit rules
+-- that liens are Yes/No FLAGS (never a dollar amount) and that false/absent
+-- distress flags must be omitted or shown as one reassuring line — never printed
+-- as "false"/raw field names.
 --
--- `updated_by` references the admin who last saved the value (nullable: the
--- seeded default has no author, and the FK is ON DELETE SET NULL so removing an
--- admin never deletes a setting). Follows the existing snake_case / timestamptz
--- convention. No credential lives in this table or this migration.
---
--- The seeded default below MIRRORS PropertyReportPromptService.DEFAULT_STYLE_PROMPT
--- (the code fallback), which stays the single source of truth: if this row is
--- ever deleted or reset, the writer falls back to that same code default.
+-- This MIRRORS PropertyReportPromptService.DEFAULT_STYLE_PROMPT (the code default,
+-- still the single source of truth). We update ONLY the untouched seed
+-- (updated_by IS NULL) so an admin's customized prompt is never clobbered. No
+-- credential lives in this migration.
 
-create table if not exists app_settings (
-    key         text        primary key,
-    value       text        not null,
-    updated_at  timestamptz not null default now(),
-    updated_by  uuid        references admin_users (id) on delete set null
-);
-
--- Seed the editable property-report STYLE prompt. Idempotent: on a re-run an
--- existing (possibly admin-edited) value is left untouched.
-insert into app_settings (key, value)
-values (
-    'property_report_prompt',
-    $prompt$Write a "Jake Property Report" as a clean, scannable plain-text SMS.
+update app_settings
+set value = $prompt$Write a "Jake Property Report" as a clean, scannable plain-text SMS.
 
 You receive the full verified property record plus a block of derived highlights. Use whichever fields are useful; you do not have to include every field.
 
@@ -55,5 +41,5 @@ Formatting:
 - Leave exactly one blank line between sections.
 - Format numbers with thousands separators and prices with a leading $.
 - Keep the tone warm but concise - this is a text message, not a brochure.$prompt$
-)
-on conflict (key) do nothing;
+where key = 'property_report_prompt'
+  and updated_by is null;
