@@ -92,6 +92,45 @@ describe("AnthropicRouterLlmClient (JAK-135 router LLM)", () => {
       expect(out.addressOrdinal).toBe(2);
     });
 
+    it("extracts texter comp-parameter overrides for a comps request (JAK-137)", async () => {
+      const out = await new StubClient(
+        JSON.stringify({
+          intent: "comps",
+          targetAddress: "9 New St, Town, CA 90000",
+          addressOrdinal: null,
+          userFacingNote: "",
+          compParams: { radiusMiles: 1, monthsBack: 6, count: 3 },
+        })
+      ).classify(req({ parsedAddress: "9 New St, Town, CA 90000" }));
+
+      expect(out.intent).toBe("comps");
+      expect(out.compParams).toEqual({ radiusMiles: 1, monthsBack: 6, count: 3 });
+    });
+
+    it("drops non-numeric / unknown comp-parameter fields, and omits compParams when none usable", async () => {
+      const withGarbage = await new StubClient(
+        JSON.stringify({
+          intent: "comps",
+          targetAddress: "9 New St, Town, CA 90000",
+          addressOrdinal: null,
+          userFacingNote: "",
+          compParams: { count: 4, radiusMiles: "close", nonsense: 7 },
+        })
+      ).classify(req());
+      expect(withGarbage.compParams).toEqual({ count: 4 });
+
+      const none = await new StubClient(
+        JSON.stringify({
+          intent: "comps",
+          targetAddress: null,
+          addressOrdinal: null,
+          userFacingNote: "",
+          compParams: null,
+        })
+      ).classify(req());
+      expect(none.compParams).toBeUndefined();
+    });
+
     it("an unknown intent falls back to the deterministic classification", async () => {
       const out = await new StubClient(
         JSON.stringify({ intent: "banana", targetAddress: null, addressOrdinal: null, userFacingNote: "" })

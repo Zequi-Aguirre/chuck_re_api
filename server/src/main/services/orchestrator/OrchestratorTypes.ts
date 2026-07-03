@@ -8,6 +8,8 @@
 // are keyed against the {@link import("./SpecialistRegistry").SpecialistRegistry}
 // so JAK-136 (skip-trace) / JAK-137 (comps) plug in without rewriting the router.
 
+import { CompParamOverrides } from "../comps/CompsTypes";
+
 /**
  * The intents the router classifies every inbound message into.
  *
@@ -17,8 +19,9 @@
  *   report_refresh  - a bare affirmative ("OK"/"YES") that confirms a fresh PAID
  *                     copy of the last address (the JAK-134 confirm-before-spend
  *                     reply). Runs the Report specialist on the last address.
- *   skip_trace      - owner contact lookup (JAK-136, not built yet → coming soon).
- *   comps           - comparables / CMA (JAK-137, not built yet → coming soon).
+ *   skip_trace      - owner contact lookup (JAK-136). Runs the skip-trace specialist.
+ *   comps           - comparables / CMA (JAK-137). Runs the comps specialist, which
+ *                     may carry texter-supplied parameter overrides (see compParams).
  *   chitchat        - greeting / unrecognized → an emoji-free guidance reply.
  */
 export type JakeIntent =
@@ -70,6 +73,14 @@ export interface DispatchPlan {
   specialists: SpecialistPlan[];
   /** The model's short, human-readable note about what it's doing (telemetry). */
   userFacingNote: string;
+  /**
+   * Texter-supplied comp parameter overrides pulled from the message ("comps within
+   * 1 mile, last 6 months, 3 similar homes"), for the comps intent only (JAK-137).
+   * Null/absent when the texter didn't specify any — the comps specialist then uses
+   * the admin defaults. Only the fields the texter named are set; all are clamped
+   * downstream.
+   */
+  compParams?: CompParamOverrides | null;
 }
 
 /** What the assistant hands the orchestrator for one inbound message. */

@@ -11,6 +11,8 @@ import { PropertyReportPromptService } from "../../../services/PropertyReportPro
 import { OrchestratorPromptService } from "../../../services/orchestrator/OrchestratorPromptService";
 import { SkipTracePromptService } from "../../../services/skiptrace/SkipTracePromptService";
 import { SkipTraceSettingsService } from "../../../services/skiptrace/SkipTraceSettingsService";
+import { CompsPromptService } from "../../../services/comps/CompsPromptService";
+import { CompsSettingsService } from "../../../services/comps/CompsSettingsService";
 
 // Obviously-fake, low-entropy placeholder used by the reset-password tests.
 // Held in a constant (not inlined next to a `password:` key) so a secret
@@ -38,6 +40,8 @@ describe("AdminResource", () => {
   let orchestratorPrompt: MockProxy<OrchestratorPromptService>;
   let skipTracePrompt: MockProxy<SkipTracePromptService>;
   let skipTraceSettings: MockProxy<SkipTraceSettingsService>;
+  let compsPrompt: MockProxy<CompsPromptService>;
+  let compsSettings: MockProxy<CompsSettingsService>;
   let app: Express;
 
   beforeEach(() => {
@@ -49,6 +53,8 @@ describe("AdminResource", () => {
     orchestratorPrompt = mock<OrchestratorPromptService>();
     skipTracePrompt = mock<SkipTracePromptService>();
     skipTraceSettings = mock<SkipTraceSettingsService>();
+    compsPrompt = mock<CompsPromptService>();
+    compsSettings = mock<CompsSettingsService>();
     // Default: authenticated AS A SUPERADMIN so the admin-management tests reach
     // their handlers. Individual tests override to a plain admin / no session.
     auth.verifyToken.mockReturnValue({ sub: "admin-id", email: "admin@example.com", role: "superadmin" });
@@ -65,7 +71,9 @@ describe("AdminResource", () => {
         reportPrompt,
         orchestratorPrompt,
         skipTracePrompt,
-        skipTraceSettings
+        skipTraceSettings,
+        compsPrompt,
+        compsSettings
       ).router
     );
   });
@@ -521,6 +529,180 @@ describe("AdminResource", () => {
       expect(res.status).toBe(200);
       expect(res.body.isDefault).toBe(true);
       expect(skipTraceSettings.resetCost).toHaveBeenCalled();
+    });
+  });
+
+  // --- Comps specialist prompt (JAK-137) ------------------------------------
+
+  describe("AI prompt (comps-prompt)", () => {
+    const promptView = (over: Record<string, unknown> = {}) => ({
+      prompt: "COMPS PROMPT",
+      isDefault: false,
+      updatedAt: new Date("2026-07-03T00:00:00Z"),
+      updatedBy: "admin-id",
+      ...over,
+    });
+
+    it("is behind the auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app).get("/api/admin/comps-prompt");
+      expect(res.status).toBe(401);
+      expect(compsPrompt.getView).not.toHaveBeenCalled();
+    });
+
+    it("is available to a REGULAR admin — NOT superadmin-gated", async () => {
+      asPlainAdmin();
+      compsPrompt.getView.mockResolvedValue(promptView({ isDefault: true }) as never);
+      compsPrompt.setPrompt.mockResolvedValue(promptView({ prompt: "NEW" }) as never);
+      compsPrompt.resetPrompt.mockResolvedValue(promptView({ isDefault: true }) as never);
+
+      expect((await asAdmin(request(app).get("/api/admin/comps-prompt"))).status).toBe(200);
+      expect(
+        (await asAdmin(request(app).put("/api/admin/comps-prompt").send({ prompt: "NEW" }))).status
+      ).toBe(200);
+      expect((await asAdmin(request(app).post("/api/admin/comps-prompt/reset"))).status).toBe(200);
+    });
+
+    it("GET returns the effective prompt view (no hash/secret fields)", async () => {
+      compsPrompt.getView.mockResolvedValue(promptView() as never);
+      const res = await asAdmin(request(app).get("/api/admin/comps-prompt"));
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        prompt: "COMPS PROMPT",
+        isDefault: false,
+        updatedAt: "2026-07-03T00:00:00.000Z",
+        updatedBy: "admin-id",
+      });
+    });
+
+    it("PUT saves a non-empty prompt with the editing admin id", async () => {
+      compsPrompt.setPrompt.mockResolvedValue(promptView({ prompt: "Terse" }) as never);
+      const res = await asAdmin(
+        request(app).put("/api/admin/comps-prompt").send({ prompt: "  Terse  " })
+      );
+      expect(res.status).toBe(200);
+      expect(compsPrompt.setPrompt).toHaveBeenCalledWith("Terse", "admin-id");
+    });
+
+    it("PUT 400s an empty prompt", async () => {
+      const res = await asAdmin(request(app).put("/api/admin/comps-prompt").send({ prompt: "   " }));
+      expect(res.status).toBe(400);
+      expect(compsPrompt.setPrompt).not.toHaveBeenCalled();
+    });
+
+    it("reset reverts to the default", async () => {
+      compsPrompt.resetPrompt.mockResolvedValue(promptView({ isDefault: true }) as never);
+      const res = await asAdmin(request(app).post("/api/admin/comps-prompt/reset"));
+      expect(res.status).toBe(200);
+      expect(res.body.isDefault).toBe(true);
+      expect(compsPrompt.resetPrompt).toHaveBeenCalled();
+    });
+  });
+
+  // --- Comps credit cost (JAK-137) ------------------------------------------
+
+  describe("comps-cost", () => {
+    const costView = (over: Record<string, unknown> = {}) => ({
+      value: 3,
+      isDefault: false,
+      updatedAt: new Date("2026-07-03T00:00:00Z"),
+      updatedBy: "admin-id",
+      ...over,
+    });
+
+    it("is behind the auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app).get("/api/admin/comps-cost");
+      expect(res.status).toBe(401);
+      expect(compsSettings.getCostView).not.toHaveBeenCalled();
+    });
+
+    it("GET returns the effective cost view", async () => {
+      compsSettings.getCostView.mockResolvedValue(costView() as never);
+      const res = await asAdmin(request(app).get("/api/admin/comps-cost"));
+      expect(res.status).toBe(200);
+      expect(res.body.value).toBe(3);
+    });
+
+    it("PUT saves a positive-integer cost with the editing admin id", async () => {
+      compsSettings.setCost.mockResolvedValue(costView({ value: 5 }) as never);
+      const res = await asAdmin(request(app).put("/api/admin/comps-cost").send({ credits: 5 }));
+      expect(res.status).toBe(200);
+      expect(compsSettings.setCost).toHaveBeenCalledWith(5, "admin-id");
+    });
+
+    it("PUT 400s a zero / non-integer cost (a paid call can never be free)", async () => {
+      expect((await asAdmin(request(app).put("/api/admin/comps-cost").send({ credits: 0 }))).status).toBe(400);
+      expect((await asAdmin(request(app).put("/api/admin/comps-cost").send({ credits: 2.5 }))).status).toBe(400);
+      expect((await asAdmin(request(app).put("/api/admin/comps-cost").send({ credits: -1 }))).status).toBe(400);
+      expect(compsSettings.setCost).not.toHaveBeenCalled();
+    });
+
+    it("reset reverts to the default", async () => {
+      compsSettings.resetCost.mockResolvedValue(costView({ isDefault: true }) as never);
+      const res = await asAdmin(request(app).post("/api/admin/comps-cost/reset"));
+      expect(res.status).toBe(200);
+      expect(res.body.isDefault).toBe(true);
+      expect(compsSettings.resetCost).toHaveBeenCalled();
+    });
+  });
+
+  // --- Comps default parameters (JAK-137) -----------------------------------
+
+  describe("comps-params", () => {
+    const params = {
+      radiusMiles: 1,
+      count: 5,
+      monthsBack: 12,
+      bedsTolerance: 1,
+      bathsTolerance: 1,
+      sqftTolerancePct: 25,
+    };
+    const paramsView = (over: Record<string, unknown> = {}) => ({
+      params,
+      isDefault: false,
+      updatedAt: new Date("2026-07-03T00:00:00Z"),
+      updatedBy: "admin-id",
+      ...over,
+    });
+
+    it("is behind the auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app).get("/api/admin/comps-params");
+      expect(res.status).toBe(401);
+      expect(compsSettings.getParamsView).not.toHaveBeenCalled();
+    });
+
+    it("GET returns the effective parameters view", async () => {
+      compsSettings.getParamsView.mockResolvedValue(paramsView() as never);
+      const res = await asAdmin(request(app).get("/api/admin/comps-params"));
+      expect(res.status).toBe(200);
+      expect(res.body.params.count).toBe(5);
+    });
+
+    it("PUT saves the full parameter-set with the editing admin id", async () => {
+      compsSettings.setParams.mockResolvedValue(paramsView({ params: { ...params, count: 3 } }) as never);
+      const res = await asAdmin(
+        request(app).put("/api/admin/comps-params").send({ ...params, count: 3 })
+      );
+      expect(res.status).toBe(200);
+      expect(compsSettings.setParams).toHaveBeenCalledWith({ ...params, count: 3 }, "admin-id");
+    });
+
+    it("PUT 400s when a parameter is not a number", async () => {
+      const res = await asAdmin(
+        request(app).put("/api/admin/comps-params").send({ ...params, count: "lots" })
+      );
+      expect(res.status).toBe(400);
+      expect(compsSettings.setParams).not.toHaveBeenCalled();
+    });
+
+    it("reset reverts to the default", async () => {
+      compsSettings.resetParams.mockResolvedValue(paramsView({ isDefault: true }) as never);
+      const res = await asAdmin(request(app).post("/api/admin/comps-params/reset"));
+      expect(res.status).toBe(200);
+      expect(res.body.isDefault).toBe(true);
+      expect(compsSettings.resetParams).toHaveBeenCalled();
     });
   });
 

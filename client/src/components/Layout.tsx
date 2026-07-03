@@ -19,6 +19,7 @@ import SmsIcon from "@mui/icons-material/Sms";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import CallSplitIcon from "@mui/icons-material/CallSplit";
 import PersonSearchIcon from "@mui/icons-material/PersonSearch";
+import HomeWorkIcon from "@mui/icons-material/HomeWork";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import LogoutIcon from "@mui/icons-material/Logout";
 import { useAuth } from "../auth";
@@ -46,6 +47,8 @@ export function Layout() {
     { label: "Router Prompt", to: "/router-settings", icon: <CallSplitIcon />, show: true },
     // Skip-Trace (JAK-136) — every logged-in admin can tune the reply + credit cost.
     { label: "Skip-Trace", to: "/skiptrace-settings", icon: <PersonSearchIcon />, show: true },
+    // Comps (JAK-137) — every logged-in admin can tune the reply, cost + parameters.
+    { label: "Comps", to: "/comps-settings", icon: <HomeWorkIcon />, show: true },
     {
       label: "Admins",
       to: "/admins",

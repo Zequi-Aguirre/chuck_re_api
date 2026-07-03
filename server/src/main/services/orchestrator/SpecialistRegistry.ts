@@ -60,13 +60,15 @@ export class SpecialistRegistry {
       estimatedCredits: 3,
       available: true,
     });
-    // Comps (JAK-137): recognized but NOT built yet. Confirm-before-spend when it
-    // lands; for now the router replies "coming soon" and spends nothing.
+    // Comps (JAK-137): BUILT. Runs the /v3/PropertyComps comparables lookup — a paid
+    // call that costs more than a report — so it is confirm-before-spend.
+    // `estimatedCredits` mirrors the CompsSettingsService default (3); the assistant
+    // charges the live admin-configured cost at execution time.
     this.register({
       name: SpecialistRegistry.COMPS,
       needsConfirmation: true,
-      estimatedCredits: 2,
-      available: false,
+      estimatedCredits: 3,
+      available: true,
     });
   }
 

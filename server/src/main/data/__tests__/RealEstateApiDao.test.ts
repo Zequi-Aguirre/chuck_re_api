@@ -62,6 +62,14 @@ describe("RealEstateApiDao — paid-lookup dev safety (JAK-110)", () => {
       expect(await dao.skipTraceByAddress(ADDRESS)).toBeNull();
       expect(post).not.toHaveBeenCalled();
     });
+
+    it("mocks a PropertyComps lookup with a deterministic EMPTY result (no transport, no spend)", async () => {
+      const dao = daoFor(false);
+      // JAK-137: dev NEVER hits the paid /v3/PropertyComps — returns no comps.
+      const result = await dao.getCompsByAddress(ADDRESS, { radiusMiles: 1, count: 5, monthsBack: 12 });
+      expect(result).toEqual({ comps: [] });
+      expect(post).not.toHaveBeenCalled();
+    });
   });
 
   describe("prod / staging (real actions ON)", () => {
@@ -107,6 +115,25 @@ describe("RealEstateApiDao — paid-lookup dev safety (JAK-110)", () => {
         zip: "31047",
       });
       expect(result?.output?.identity?.name).toBe("Owner One");
+    });
+
+    it("hits the real /v3/PropertyComps endpoint in prod with the mapped parameters", async () => {
+      post.mockResolvedValue({
+        data: { comps: [{ id: 1, lastSaleAmount: 400000 }], reapiAvm: 410000 },
+      });
+      const dao = daoFor(true);
+
+      const result = await dao.getCompsByAddress(ADDRESS, { radiusMiles: 2, count: 4, monthsBack: 6 });
+
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(post.mock.calls[0][0]).toBe("/v3/PropertyComps");
+      // radius → max_radius_miles, count → max_results, months → max_days_back (×30).
+      expect(post.mock.calls[0][1]).toMatchObject({
+        max_radius_miles: 2,
+        max_results: 4,
+        max_days_back: 180,
+      });
+      expect(result?.reapiAvm).toBe(410000);
     });
   });
 });

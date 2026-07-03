@@ -6,7 +6,7 @@ import { SpecialistRegistry } from "../SpecialistRegistry";
  * capability to "available" (or override its cost) WITHOUT the router changing.
  */
 describe("SpecialistRegistry (JAK-135)", () => {
-  it("seeds report + skip_trace as BUILT, and comps as coming soon", () => {
+  it("seeds report, skip_trace, and comps as BUILT", () => {
     const registry = new SpecialistRegistry();
 
     expect(registry.get(SpecialistRegistry.REPORT)).toEqual({
@@ -26,9 +26,14 @@ describe("SpecialistRegistry (JAK-135)", () => {
     });
     expect(registry.isAvailable(SpecialistRegistry.SKIP_TRACE)).toBe(true);
 
-    // Comps (JAK-137) is still coming soon.
-    expect(registry.get(SpecialistRegistry.COMPS)).toMatchObject({ needsConfirmation: true, available: false });
-    expect(registry.isAvailable(SpecialistRegistry.COMPS)).toBe(false);
+    // JAK-137: comps is now BUILT + confirm-before-spend (costs more than a report).
+    expect(registry.get(SpecialistRegistry.COMPS)).toEqual({
+      name: "comps",
+      needsConfirmation: true,
+      estimatedCredits: 3,
+      available: true,
+    });
+    expect(registry.isAvailable(SpecialistRegistry.COMPS)).toBe(true);
   });
 
   it("returns null for an unknown specialist name", () => {

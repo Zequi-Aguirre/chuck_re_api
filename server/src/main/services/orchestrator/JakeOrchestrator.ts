@@ -80,17 +80,20 @@ export class JakeOrchestrator {
       targetEntity,
       specialists: this.specialistsFor(intent),
       userFacingNote: classification.userFacingNote ?? "",
+      // Carry the texter's comp parameter overrides through for the comps intent
+      // only (JAK-137); other intents never read them.
+      compParams: intent === "comps" ? classification.compParams ?? null : null,
     };
   }
 
   /**
-   * Resolve the concrete entity the plan acts on. property_report AND skip_trace
-   * (JAK-136) both act on an address: prefer a fresh explicit address, else an
-   * ordinal reference into the resolved-address list (out-of-range → null so the
-   * assistant can clarify), else the deterministically-parsed address. When none
-   * resolves here, the assistant falls back to the last resolved address at
-   * execution time (e.g. a bare "skip trace it"). report_refresh's target is the
-   * last address, also resolved by the assistant. comps/chitchat carry no target.
+   * Resolve the concrete entity the plan acts on. property_report, skip_trace
+   * (JAK-136), AND comps (JAK-137) all act on an address: prefer a fresh explicit
+   * address, else an ordinal reference into the resolved-address list (out-of-range
+   * → null so the assistant can clarify), else the deterministically-parsed address.
+   * When none resolves here, the assistant falls back to the last resolved address
+   * at execution time (e.g. a bare "pull comps"). report_refresh's target is the
+   * last address, also resolved by the assistant. chitchat carries no target.
    */
   private resolveTarget(
     intent: JakeIntent,
@@ -98,7 +101,7 @@ export class JakeOrchestrator {
     resolvedAddresses: string[],
     input: OrchestratorInput
   ): string | null {
-    if (intent !== "property_report" && intent !== "skip_trace") return null;
+    if (intent !== "property_report" && intent !== "skip_trace" && intent !== "comps") return null;
 
     if (classification.targetAddress) return classification.targetAddress;
 
@@ -112,8 +115,8 @@ export class JakeOrchestrator {
 
   /**
    * The specialist(s) an intent runs, with confirm-before-spend metadata from the
-   * registry. Report intents run the Report specialist; skip-trace / comps run
-   * their (coming-soon) specialist; chitchat runs none.
+   * registry. Report intents run the Report specialist; skip-trace (JAK-136) and
+   * comps (JAK-137) run their built specialist; chitchat runs none.
    */
   private specialistsFor(intent: JakeIntent): SpecialistPlan[] {
     switch (intent) {

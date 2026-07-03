@@ -150,18 +150,58 @@ describe("JakeOrchestrator (JAK-135 router)", () => {
       expect(plan.targetEntity).toBe("2 Second Ave, Town, CA 90000");
     });
 
-    it("comps → confirm-before-spend metadata from the registry (coming soon)", async () => {
-      llm.classify.mockResolvedValue(classification({ intent: "comps" }));
+    it("comps → BUILT (JAK-137) confirm-before-spend metadata + resolves a target address", async () => {
+      llm.classify.mockResolvedValue(
+        classification({ intent: "comps", targetAddress: "9 New St, Town, CA 90000" })
+      );
 
       const plan = await orchestrator.plan({
         phone: "+15559990000",
-        message: "comps please",
-        parsedAddress: null,
+        message: "comps for 9 New St",
+        parsedAddress: "9 New St, Town, CA 90000",
         isAffirmative: false,
       });
 
       expect(plan.intent).toBe("comps");
-      expect(plan.specialists).toEqual([{ name: "comps", needsConfirmation: true, estimatedCredits: 2 }]);
+      expect(plan.specialists).toEqual([{ name: "comps", needsConfirmation: true, estimatedCredits: 3 }]);
+      // JAK-137 flipped this on: comps is now a real, runnable specialist.
+      expect(registry.isAvailable("comps")).toBe(true);
+      // Unlike the old coming-soon stub, comps now carries a resolved target.
+      expect(plan.targetEntity).toBe("9 New St, Town, CA 90000");
+    });
+
+    it("comps carries the texter's parameter overrides through to the plan (JAK-137)", async () => {
+      llm.classify.mockResolvedValue(
+        classification({
+          intent: "comps",
+          targetAddress: "9 New St, Town, CA 90000",
+          compParams: { radiusMiles: 1, monthsBack: 6, count: 3 },
+        })
+      );
+
+      const plan = await orchestrator.plan({
+        phone: "+15559990000",
+        message: "comps within 1 mile, last 6 months, 3 similar homes for 9 New St",
+        parsedAddress: "9 New St, Town, CA 90000",
+        isAffirmative: false,
+      });
+
+      expect(plan.compParams).toEqual({ radiusMiles: 1, monthsBack: 6, count: 3 });
+    });
+
+    it("does not carry comp params for non-comps intents", async () => {
+      llm.classify.mockResolvedValue(
+        classification({ intent: "property_report", targetAddress: "9 New St, Town, CA 90000", compParams: { count: 3 } })
+      );
+
+      const plan = await orchestrator.plan({
+        phone: "+15559990000",
+        message: "9 New St, Town, CA 90000",
+        parsedAddress: "9 New St, Town, CA 90000",
+        isAffirmative: false,
+      });
+
+      expect(plan.compParams).toBeNull();
     });
 
     it("chitchat → no specialists, no target", async () => {

@@ -25,6 +25,10 @@ import { SkipTracePromptService } from "../../services/skiptrace/SkipTracePrompt
 import { SkipTraceSettingsService } from "../../services/skiptrace/SkipTraceSettingsService";
 import { SkipTraceStore } from "../../services/skiptrace/SkipTraceStore";
 import { SkipTraceMemoryService } from "../../services/skiptrace/SkipTraceMemoryService";
+import { CompsPromptService } from "../../services/comps/CompsPromptService";
+import { CompsSettingsService } from "../../services/comps/CompsSettingsService";
+import { CompsStore } from "../../services/comps/CompsStore";
+import { CompsMemoryService } from "../../services/comps/CompsMemoryService";
 import { GhlCustomFieldStore } from "../lifecycle/GhlCustomFieldStore";
 import { GhlInstallLifecycleService } from "../lifecycle/GhlInstallLifecycleService";
 import { LeadEnrichmentQueueService } from "../../services/LeadEnrichmentQueueService";
@@ -272,6 +276,28 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   }
   if (!c.isRegistered(SkipTraceMemoryService)) {
     c.registerSingleton(SkipTraceMemoryService);
+  }
+
+  // JAK-137 — comps specialist: the second real specialist behind the JAK-135
+  // registry seam. The prompt service fronts the admin-editable comps_prompt, and
+  // the settings service the admin-editable comps credit cost AND the admin-editable
+  // DEFAULT comp parameters (all the SAME app_settings pattern as JAK-131/135/136);
+  // the store persists the comps cache (keyed per target + parameter-set) + the ONE
+  // pending confirm-before-spend offer per phone; the memory service is the
+  // free-re-serve business surface (reusing the JAK-134 free_reserve window).
+  // SINGLETONS so an admin edit busts the same cache the specialist reads; share the
+  // one Postgres pool. The DAO method + writer are auto-resolved like the report writer.
+  if (!c.isRegistered(CompsPromptService)) {
+    c.registerSingleton(CompsPromptService);
+  }
+  if (!c.isRegistered(CompsSettingsService)) {
+    c.registerSingleton(CompsSettingsService);
+  }
+  if (!c.isRegistered(CompsStore)) {
+    c.registerSingleton(CompsStore);
+  }
+  if (!c.isRegistered(CompsMemoryService)) {
+    c.registerSingleton(CompsMemoryService);
   }
 
   if (!c.isRegistered(AdminResource)) {

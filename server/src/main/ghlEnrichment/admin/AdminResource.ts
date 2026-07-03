@@ -10,6 +10,9 @@ import { PropertyReportPromptService } from "../../services/PropertyReportPrompt
 import { OrchestratorPromptService } from "../../services/orchestrator/OrchestratorPromptService";
 import { SkipTracePromptService } from "../../services/skiptrace/SkipTracePromptService";
 import { SkipTraceSettingsService } from "../../services/skiptrace/SkipTraceSettingsService";
+import { CompsPromptService } from "../../services/comps/CompsPromptService";
+import { CompsSettingsService } from "../../services/comps/CompsSettingsService";
+import { CompParams } from "../../services/comps/CompsTypes";
 
 /**
  * The admin dashboard's data API (JAK-113) — CRUD over connected sub-accounts,
@@ -56,7 +59,9 @@ export class AdminResource {
     @inject(PropertyReportPromptService) private readonly reportPrompt: PropertyReportPromptService,
     @inject(OrchestratorPromptService) private readonly orchestratorPrompt: OrchestratorPromptService,
     @inject(SkipTracePromptService) private readonly skipTracePrompt: SkipTracePromptService,
-    @inject(SkipTraceSettingsService) private readonly skipTraceSettings: SkipTraceSettingsService
+    @inject(SkipTraceSettingsService) private readonly skipTraceSettings: SkipTraceSettingsService,
+    @inject(CompsPromptService) private readonly compsPrompt: CompsPromptService,
+    @inject(CompsSettingsService) private readonly compsSettings: CompsSettingsService
   ) {
     this.router = Router();
     this.configureRoutes();
@@ -110,6 +115,22 @@ export class AdminResource {
     this.router.get("/skiptrace-cost", this.getSkipTraceCost.bind(this));
     this.router.put("/skiptrace-cost", this.updateSkipTraceCost.bind(this));
     this.router.post("/skiptrace-cost/reset", this.resetSkipTraceCost.bind(this));
+
+    // Comps specialist (JAK-137): the admin-editable STYLE prompt, the
+    // admin-editable credit cost, AND the admin-editable DEFAULT comp parameters
+    // (radius, count, timeframe, bed/bath/sqft tolerance) — all the SAME editable
+    // pattern as above. Available to ANY logged-in admin (requireAuth only). The
+    // HARD guardrails (no emojis / only-provided-values / GoTextJake.com footer) are
+    // enforced by the specialist writer and are NOT editable here.
+    this.router.get("/comps-prompt", this.getCompsPrompt.bind(this));
+    this.router.put("/comps-prompt", this.updateCompsPrompt.bind(this));
+    this.router.post("/comps-prompt/reset", this.resetCompsPrompt.bind(this));
+    this.router.get("/comps-cost", this.getCompsCost.bind(this));
+    this.router.put("/comps-cost", this.updateCompsCost.bind(this));
+    this.router.post("/comps-cost/reset", this.resetCompsCost.bind(this));
+    this.router.get("/comps-params", this.getCompsParams.bind(this));
+    this.router.put("/comps-params", this.updateCompsParams.bind(this));
+    this.router.post("/comps-params/reset", this.resetCompsParams.bind(this));
 
     // Admin management (JAK-124, restricted in JAK-125): ONLY a superadmin may
     // manage other admins. requireSuperadmin runs after the router-level
@@ -542,6 +563,138 @@ export class AdminResource {
   private async resetSkipTraceCost(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     try {
       const view = await this.skipTraceSettings.resetCost();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  // --- Comps specialist prompt + cost + parameters (JAK-137) ----------------
+
+  /** Return the effective editable comps prompt + whether it is still the default. */
+  private async getCompsPrompt(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.compsPrompt.getView();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /**
+   * Save an admin-edited comps STYLE prompt. The body's `prompt` is the style text
+   * ONLY — the hard guardrails (no emojis, only-provided-values, footer) are enforced
+   * by the specialist writer regardless, so there is nothing dangerous to reject
+   * beyond an empty value. Records the editing admin for the audit stamp.
+   */
+  private async updateCompsPrompt(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const prompt = typeof req.body?.prompt === "string" ? req.body.prompt.trim() : "";
+      if (!prompt) {
+        return res.status(400).json({ error: "prompt is required" });
+      }
+      if (prompt.length > MAX_PROMPT_LENGTH) {
+        return res.status(400).json({ error: `prompt must be at most ${MAX_PROMPT_LENGTH} characters` });
+      }
+      const view = await this.compsPrompt.setPrompt(prompt, req.admin?.sub ?? null);
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /** Revert the comps prompt to the code default (clears the stored value). */
+  private async resetCompsPrompt(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.compsPrompt.resetPrompt();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /** Return the effective comps credit cost + whether it is still the default. */
+  private async getCompsCost(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.compsSettings.getCostView();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /**
+   * Save an admin-edited comps credit cost. `credits` must be a positive integer —
+   * a comps pull is a PAID call, so it can never be set to 0/free. Records the
+   * editing admin for the audit stamp.
+   */
+  private async updateCompsCost(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const credits = Number(req.body?.credits);
+      if (!Number.isInteger(credits) || credits <= 0) {
+        return res.status(400).json({ error: "credits must be a positive integer" });
+      }
+      const view = await this.compsSettings.setCost(credits, req.admin?.sub ?? null);
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /** Revert the comps credit cost to the code default (clears the stored value). */
+  private async resetCompsCost(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.compsSettings.resetCost();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /** Return the effective DEFAULT comp parameters + whether they are still the default. */
+  private async getCompsParams(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.compsSettings.getParamsView();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /**
+   * Save admin-edited DEFAULT comp parameters. Every field must be a finite number;
+   * the service clamps them to sane bounds before persisting, so an out-of-range
+   * entry is corrected rather than rejected. Records the editing admin for the stamp.
+   */
+  private async updateCompsParams(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const keys: (keyof CompParams)[] = [
+        "radiusMiles",
+        "count",
+        "monthsBack",
+        "bedsTolerance",
+        "bathsTolerance",
+        "sqftTolerancePct",
+      ];
+      const params = {} as CompParams;
+      for (const key of keys) {
+        const value = Number(req.body?.[key]);
+        if (!Number.isFinite(value)) {
+          return res.status(400).json({ error: `${key} must be a number` });
+        }
+        params[key] = value;
+      }
+      const view = await this.compsSettings.setParams(params, req.admin?.sub ?? null);
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /** Revert the default comp parameters to the code default (clears the stored value). */
+  private async resetCompsParams(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.compsSettings.resetParams();
       return res.status(200).json(view);
     } catch (err) {
       return next(err);

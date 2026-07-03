@@ -146,3 +146,55 @@ export interface SkipTraceCostView {
   updatedAt: string | null;
   updatedBy: string | null;
 }
+
+/**
+ * The editable STYLE prompt for the text-Jake comps specialist (JAK-137).
+ * `prompt` is the effective value (the stored edit, or the code default when
+ * `isDefault`). The hard guardrails (no emojis / only-provided-values /
+ * GoTextJake.com footer) are NOT part of this — the specialist writer enforces
+ * them, so an edit here can never make Jake invent a comp or drop the footer.
+ */
+export interface CompsPromptView {
+  prompt: string;
+  isDefault: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+/**
+ * The editable CREDIT COST of one text-Jake comps pull (JAK-137). `value` is the
+ * effective cost in credits (the stored edit, or the code default when
+ * `isDefault`). A comps pull is a paid call, so the cost is always a positive
+ * integer — it can never be set to free.
+ */
+export interface CompsCostView {
+  value: number;
+  isDefault: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+/**
+ * The comp PARAMETERS that shape a comps pull (JAK-137): search radius, number of
+ * comps, timeframe (months), and bed/bath/sqft tolerance. Admins set the defaults;
+ * a texter can override them in the message. Server-clamped to sane bounds.
+ */
+export interface CompParams {
+  radiusMiles: number;
+  count: number;
+  monthsBack: number;
+  bedsTolerance: number;
+  bathsTolerance: number;
+  sqftTolerancePct: number;
+}
+
+/**
+ * The editable DEFAULT comp parameters (JAK-137). `params` is the effective set
+ * (the stored edit, or the code default when `isDefault`).
+ */
+export interface CompsParamsView {
+  params: CompParams;
+  isDefault: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}

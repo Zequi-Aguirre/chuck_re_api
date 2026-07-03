@@ -10,6 +10,7 @@ import { TextCustomersPage } from "./pages/TextCustomersPage";
 import { ReportSettingsPage } from "./pages/ReportSettingsPage";
 import { OrchestratorSettingsPage } from "./pages/OrchestratorSettingsPage";
 import { SkipTraceSettingsPage } from "./pages/SkipTraceSettingsPage";
+import { CompsSettingsPage } from "./pages/CompsSettingsPage";
 import { AdminsPage } from "./pages/AdminsPage";
 import { ReactNode } from "react";
 
@@ -66,6 +67,8 @@ export function App() {
         <Route path="/router-settings" element={<OrchestratorSettingsPage />} />
         {/* Skip-Trace (JAK-136) — available to ANY logged-in admin, not gated. */}
         <Route path="/skiptrace-settings" element={<SkipTraceSettingsPage />} />
+        {/* Comps (JAK-137) — available to ANY logged-in admin, not gated. */}
+        <Route path="/comps-settings" element={<CompsSettingsPage />} />
         <Route
           path="/admins"
           element={
