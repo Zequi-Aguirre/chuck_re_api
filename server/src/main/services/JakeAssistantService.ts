@@ -489,9 +489,10 @@ export class JakeAssistantService {
             if (personHandled) return personHandled;
         }
 
-        // Resolve the address to trace, or ASK when the reference is ambiguous /
-        // out of range (JAK-138) instead of silently guessing.
-        const resolution = await this.resolveAddressTarget(plan, phone);
+        // Resolve the address to trace, or ASK when an EXPLICIT ordinal is out of
+        // range (JAK-138). A BARE trace defaults to the MOST RECENT address (JAK-154)
+        // — the last property the texter got a report on — never an older one.
+        const resolution = await this.resolveAddressTarget(plan, phone, "most_recent");
         if (resolution.kind === "ask") {
             return this.askWhichAddress({
                 input,
@@ -1125,9 +1126,10 @@ export class JakeAssistantService {
     }): Promise<JakeInboundResult> {
         const { input, route, customer, accountId, phone, plan } = ctx;
 
-        // Resolve the address, or ASK when the reference is ambiguous / out of range
-        // (JAK-138) rather than silently running comps on a guessed address.
-        const resolution = await this.resolveAddressTarget(plan, phone);
+        // Resolve the address, or ASK when an EXPLICIT ordinal is out of range
+        // (JAK-138). A BARE comps request defaults to the MOST RECENT address
+        // (JAK-154) — the last property the texter got a report on.
+        const resolution = await this.resolveAddressTarget(plan, phone, "most_recent");
         if (resolution.kind === "ask") {
             return this.askWhichAddress({
                 input,
@@ -1359,26 +1361,65 @@ export class JakeAssistantService {
     /**
      * Resolve the concrete address an address-based intent acts on, or decide Jake
      * must ASK (JAK-138). Returns:
-     *   - `resolved` when the router already pinned a target;
-     *   - `ask` when the reference is AMBIGUOUS (2+ addresses on file, no clear pick)
-     *     or OUT OF RANGE (an ordinal past the list) — Jake lists them and asks;
-     *   - `none` when there's nothing to disambiguate (0–1 addresses, no bad ordinal),
-     *     so the caller uses its own single-address fallback or guidance.
+     *   - `resolved` when the router pinned a target, an in-range ordinal resolves,
+     *     or (bare skip-trace / comps) we default to the MOST RECENT address;
+     *   - `ask` when the reference is OUT OF RANGE (an ordinal past the list), or —
+     *     for `bareFallback: "ask"` (property reports) — a bare command is AMBIGUOUS
+     *     (2+ addresses on file, no clear pick). Jake lists them and asks.
+     *   - `none` when there's nothing to act on (no addresses at all), so the caller
+     *     falls through to guidance.
+     *
+     * `bareFallback` decides the NO-REFERENCE (bare) case (JAK-154): a bare
+     * "skip trace" / "pull comps" carries no address AND no ordinal, so it defaults
+     * to `"most_recent"` — the LAST address the texter engaged with (their most
+     * recent property report / lookup) — NOT the first-in-list and NOT a prior
+     * disambiguation ask. Property reports keep `"ask"` so a bare report across 2+
+     * addresses still disambiguates. EXPLICIT references (a fresh address, "the 2nd
+     * address", "the last one", a named person) are unaffected — they resolve or ask
+     * exactly as before.
      */
     private async resolveAddressTarget(
         plan: DispatchPlan,
-        phone: string
+        phone: string,
+        bareFallback: "most_recent" | "ask" = "ask"
     ): Promise<
         | { kind: "resolved"; target: string }
         | { kind: "ask"; addresses: string[]; outOfRange: boolean; requested: number | null }
         | { kind: "none" }
     > {
         if (plan.targetEntity) return { kind: "resolved", target: plan.targetEntity };
-        const addresses = (await this.memory.resolvedAddressList(phone)) ?? [];
+
         const ordinal = plan.addressOrdinal ?? null;
-        const outOfRange = ordinal != null && ordinal > addresses.length;
-        if (addresses.length >= 2 || (outOfRange && addresses.length >= 1)) {
-            return { kind: "ask", addresses, outOfRange, requested: ordinal };
+
+        // An EXPLICIT ordinal reference ("the 2nd address", "the last one"). In-range
+        // ordinals are normally resolved to targetEntity upstream (JAK-135); resolve
+        // here too defensively. Out of range → list what's on file and ASK (JAK-138).
+        if (ordinal != null) {
+            const addresses = (await this.memory.resolvedAddressList(phone)) ?? [];
+            if (ordinal >= 1 && ordinal <= addresses.length) {
+                return { kind: "resolved", target: addresses[ordinal - 1] };
+            }
+            if (addresses.length >= 1) {
+                return { kind: "ask", addresses, outOfRange: true, requested: ordinal };
+            }
+            return { kind: "none" };
+        }
+
+        // JAK-154: a BARE skip-trace / comps (no explicit address, no ordinal) targets
+        // the MOST RECENT address the texter engaged with — the last property they got
+        // a report on — so a bare "skip trace" hits the newest property, never an older
+        // one it already handled.
+        if (bareFallback === "most_recent") {
+            const mostRecent = await this.memory.lastResolvedAddress(phone);
+            if (mostRecent) return { kind: "resolved", target: mostRecent };
+            return { kind: "none" };
+        }
+
+        // Property reports (JAK-138): a bare command with 2+ addresses on file is
+        // AMBIGUOUS → ask which one; 0–1 addresses → let the caller fall back.
+        const addresses = (await this.memory.resolvedAddressList(phone)) ?? [];
+        if (addresses.length >= 2) {
+            return { kind: "ask", addresses, outOfRange: false, requested: null };
         }
         return { kind: "none" };
     }

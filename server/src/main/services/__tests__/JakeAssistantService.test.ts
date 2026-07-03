@@ -1467,31 +1467,31 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     const A2 = "742 Evergreen Terrace, Springfield, IL 62704";
     const sent = () => (gateway.sendSms.mock.calls.at(-1)![0] as { message: string }).message;
 
-    it("ambiguous comps target (2+ addresses, no clear pick) → numbered list + ask, NO spend, parks the question", async () => {
+    it("ambiguous bare property_report (2+ addresses, no clear pick) → numbered list + ask, NO spend, parks the question", async () => {
+      // JAK-154 narrowed the bare-ambiguity ask to PROPERTY REPORTS — a bare skip-trace
+      // / comps now defaults to the most recent address (see the JAK-154 block below).
       memory.resolvedAddressList.mockResolvedValue([A1, A2]);
       orchestrator.plan.mockResolvedValue({
-        intent: "comps",
+        intent: "property_report",
         targetEntity: null,
-        specialists: compsSpecialist(),
+        specialists: reportSpecialist(),
         userFacingNote: "",
-        compParams: null,
       });
 
       const result = await service.handleInboundMessage({
         contactId: "ct_1",
         senderPhone: "+15559990000",
-        message: "run comps",
+        message: "pull the report",
       });
 
       expect(result.charged).toBe(0);
-      // No paid API, no comps quote parked — we asked which address first.
-      expect(realEstate.getCompsByAddress).not.toHaveBeenCalled();
-      expect(comps.setPending).not.toHaveBeenCalled();
+      // No paid API, no report run — we asked which address first.
+      expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
       // The pending QUESTION remembers the waiting intent for the number follow-up.
       expect(disambiguation.setPending).toHaveBeenCalledWith({
         phone: "+15559990000",
         customerId: "cust_+15559990000",
-        intent: "comps",
+        intent: "property_report",
         compParams: null,
       });
       expect(sent()).toContain(`1. ${A1}`);
@@ -1636,6 +1636,139 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       // JAK-144: free re-serve, no pending offer, no OK prompt.
       expect(skipTrace.setPending).not.toHaveBeenCalled();
       expect(sent().toLowerCase()).not.toContain("reply ok");
+    });
+  });
+
+  // JAK-154 — a BARE skip-trace / comps (no explicit address, no ordinal, no named
+  // person) must default to the MOST RECENT address the texter engaged with — the
+  // last property they got a report on — NOT the first-in-list and NOT an older
+  // one it already handled. This fixes the live report: "it's not skipping the last
+  // address, it's like going back and doing one it already did."
+  describe("JAK-154 bare skip-trace / comps default to the MOST RECENT address", () => {
+    const A = "111 First Ave, Springfield, IL 62701";
+    const B = "222 Second St, Springfield, IL 62702";
+    const C = "333 Third Blvd, Springfield, IL 62703";
+
+    // A contact match at the top-level persons[] shape (fictional persona, no live call).
+    const personsHit = {
+      match: true,
+      persons: [
+        { fullName: "Homer Simpson", phones: [{ phone: "+15550101" }], emails: ["homer@example.com"] },
+      ],
+    };
+    const compsHit = {
+      comps: [{ address: "123 Nearby St", lastSaleAmount: 400000, bedrooms: 3, bathrooms: 2, squareFeet: 1500 }],
+      subject: { bedrooms: 3, bathrooms: 2, squareFeet: 1500 },
+    };
+    // A bare skip-trace plan: the router named no address, ordinal, or person.
+    const bareSkipTrace: DispatchPlan = {
+      intent: "skip_trace",
+      targetEntity: null,
+      specialists: skipTraceSpecialist(),
+      userFacingNote: "",
+    };
+    const bareComps: DispatchPlan = {
+      intent: "comps",
+      targetEntity: null,
+      specialists: compsSpecialist(),
+      userFacingNote: "",
+      compParams: null,
+    };
+
+    it("after A, B, C reports, a bare 'skip trace' targets the MOST RECENT (C) — never an older one", async () => {
+      // Every address is on file, oldest-first, and C is the last one they engaged with.
+      memory.resolvedAddressList.mockResolvedValue([A, B, C]);
+      memory.lastResolvedAddress.mockResolvedValue(C);
+      orchestrator.plan.mockResolvedValue(bareSkipTrace);
+      realEstate.skipTraceByAddress.mockResolvedValue(personsHit as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "skip trace",
+      });
+
+      // Traced C — the newest — and NEVER re-ran the older A or B.
+      expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith(C);
+      expect(realEstate.skipTraceByAddress).not.toHaveBeenCalledWith(A);
+      expect(realEstate.skipTraceByAddress).not.toHaveBeenCalledWith(B);
+      expect(skipTrace.checkCache).toHaveBeenCalledWith("+15559990000", C, "");
+      // Did NOT stop to ask which address — a bare trace is no longer ambiguous.
+      expect(disambiguation.setPending).not.toHaveBeenCalled();
+      expect(result.charged).toBe(3);
+    });
+
+    it("reporting a NEW address then a bare 'skip trace' targets the NEW one (recency wins)", async () => {
+      orchestrator.plan.mockResolvedValue(bareSkipTrace);
+      realEstate.skipTraceByAddress.mockResolvedValue(personsHit as never);
+
+      // First the newest report on file is A → a bare trace hits A.
+      memory.resolvedAddressList.mockResolvedValue([A]);
+      memory.lastResolvedAddress.mockResolvedValue(A);
+      await service.handleInboundMessage({ contactId: "ct_1", senderPhone: "+15559990000", message: "skip trace" });
+      expect(realEstate.skipTraceByAddress).toHaveBeenLastCalledWith(A);
+
+      // Then they report B; now the newest is B → the following bare trace hits B, not A.
+      memory.resolvedAddressList.mockResolvedValue([A, B]);
+      memory.lastResolvedAddress.mockResolvedValue(B);
+      await service.handleInboundMessage({ contactId: "ct_1", senderPhone: "+15559990000", message: "skip trace" });
+      expect(realEstate.skipTraceByAddress).toHaveBeenLastCalledWith(B);
+    });
+
+    it("a bare 'run comps' targets the MOST RECENT address, same as skip-trace", async () => {
+      memory.resolvedAddressList.mockResolvedValue([A, B, C]);
+      memory.lastResolvedAddress.mockResolvedValue(C);
+      orchestrator.plan.mockResolvedValue(bareComps);
+      realEstate.getCompsByAddress.mockResolvedValue(compsHit as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "run comps",
+      });
+
+      expect(realEstate.getCompsByAddress).toHaveBeenCalledWith(C, DEFAULT_COMP_PARAMS);
+      expect(realEstate.getCompsByAddress).not.toHaveBeenCalledWith(A, expect.anything());
+      expect(disambiguation.setPending).not.toHaveBeenCalled();
+      expect(result.charged).toBe(3);
+    });
+
+    it("an EXPLICIT reference still wins over most-recent — 'the first one' traces A, not C", async () => {
+      // The router resolves an in-range ordinal to a concrete targetEntity upstream;
+      // the bare-default never overrides an explicitly named address.
+      memory.resolvedAddressList.mockResolvedValue([A, B, C]);
+      memory.lastResolvedAddress.mockResolvedValue(C);
+      orchestrator.plan.mockResolvedValue({ ...bareSkipTrace, targetEntity: A, addressOrdinal: 1 });
+      realEstate.skipTraceByAddress.mockResolvedValue(personsHit as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "skip trace the first one",
+      });
+
+      expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith(A);
+      expect(realEstate.skipTraceByAddress).not.toHaveBeenCalledWith(C);
+    });
+
+    it("a NAMED person on a bare trace uses that person AT the most-recent address", async () => {
+      memory.resolvedAddressList.mockResolvedValue([A, B, C]);
+      memory.lastResolvedAddress.mockResolvedValue(C);
+      orchestrator.plan.mockResolvedValue({ ...bareSkipTrace, personNames: ["Georgina Rey"] });
+      realEstate.skipTraceByAddress.mockResolvedValue(personsHit as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "skip trace Georgina Rey",
+      });
+
+      // Traced the NAMED person against the newest address (C), keyed per-person (JAK-145).
+      expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith(C, {
+        firstName: "Georgina",
+        lastName: "Rey",
+      });
+      expect(skipTrace.checkCache).toHaveBeenCalledWith("+15559990000", C, "georgina rey");
     });
   });
 
