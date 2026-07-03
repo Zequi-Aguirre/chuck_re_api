@@ -75,6 +75,16 @@ export interface SkipTraceSubject {
   firstName?: string | null;
   /** The primary person's last name passed to the provider, when known. */
   lastName?: string | null;
+  /**
+   * The address to actually query /v2/SkipTrace with (JAK-145), when it differs
+   * from the property address. /v2/SkipTrace is ADDRESS-DOMINANT — it returns the
+   * current residents of whatever address we pass, ignoring the owner name — so for
+   * an ABSENTEE property the property address returns tenants, never the owner. When
+   * set (the owner's tax MAILING address for an absentee owner), the trace runs on
+   * this address instead; the property address stays the report header + cache key.
+   * Unset for owner-occupants, where the property address is traced as before.
+   */
+  traceAddress?: string | null;
 }
 
 /**
