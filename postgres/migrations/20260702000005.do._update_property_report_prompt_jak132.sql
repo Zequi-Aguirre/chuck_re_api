@@ -2,19 +2,21 @@
 -- surfaces the money + distress signals now fed to it (mortgage balance/payment,
 -- estimated equity, foreclosure/pre-foreclosure/REO/auction, tax lien, judgment).
 --
--- The full /v2/PropertySearch record is now handed to the writer, so the prompt
--- gains a Financials section and a Distress / Liens section, plus explicit rules
--- that liens are Yes/No FLAGS (never a dollar amount) and that false/absent
--- distress flags must be omitted or shown as one reassuring line — never printed
--- as "false"/raw field names.
+-- WHY THIS MIGRATION EXISTS: PropertyReportPromptService.getEffectivePrompt()
+-- returns the STORED app_settings row and only falls back to the code default
+-- when NO row exists. Staging/prod already ran create_app_settings, so a row
+-- holding the OLD default is present — changing the code constant alone would
+-- NOT change what text-Jake sends live. This migration rewrites that row.
 --
--- This MIRRORS PropertyReportPromptService.DEFAULT_STYLE_PROMPT (the code default,
--- still the single source of truth). We update ONLY the untouched seed
--- (updated_by IS NULL) so an admin's customized prompt is never clobbered. No
--- credential lives in this migration.
+-- SAFE, VALUE-GUARDED UPDATE: we set the row to the new default ONLY WHERE its
+-- current value still equals the ORIGINAL seeded default (i.e. untouched). If an
+-- admin has customized the prompt, the value won't match and their edit is left
+-- exactly as-is — we never clobber a human edit. The new value MIRRORS
+-- PropertyReportPromptService.DEFAULT_STYLE_PROMPT (the single source of truth).
+-- No credential lives in this migration.
 
 update app_settings
-set value = $prompt$Write a "Jake Property Report" as a clean, scannable plain-text SMS.
+set value = $new$Write a "Jake Property Report" as a clean, scannable plain-text SMS.
 
 You receive the full verified property record plus a block of derived highlights. Use whichever fields are useful; you do not have to include every field.
 
@@ -40,6 +42,23 @@ Formatting:
 - Put each section's label on its own line, then list that section's facts as "- " bullets on the lines below it.
 - Leave exactly one blank line between sections.
 - Format numbers with thousands separators and prices with a leading $.
-- Keep the tone warm but concise - this is a text message, not a brochure.$prompt$
+- Keep the tone warm but concise - this is a text message, not a brochure.$new$
 where key = 'property_report_prompt'
-  and updated_by is null;
+  -- Only reseed the UNTOUCHED original default; never clobber an admin edit.
+  and value = $old$Write a "Jake Property Report" as a clean, scannable plain-text SMS.
+
+Lay it out as grouped sections separated by a single blank line. Include a section ONLY when the data has at least one of its fields; silently drop any section or field that has no data.
+
+1. A headline line: Jake Property Report
+2. The property address (street on its own line; the city, state and ZIP on the next line when provided).
+3. Property - property type, beds and baths (for example "4 Beds | 2 Baths"), square footage, lot size, year built.
+4. Estimated Market Value - the estimated market value.
+5. Ownership - owner name(s), equity (percent and whether it is free and clear), equity level, occupancy, absentee status, years owned.
+6. History - last sold date and sale price.
+7. Additional Information - FEMA flood zone, MLS listing status, and any other useful provided facts.
+
+Formatting:
+- Put each section's label on its own line, then list that section's facts as "- " bullets on the lines below it.
+- Leave exactly one blank line between sections.
+- Format numbers with thousands separators and prices with a leading $.
+- Keep the tone warm but concise - this is a text message, not a brochure.$old$;
