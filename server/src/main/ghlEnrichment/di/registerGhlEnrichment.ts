@@ -4,6 +4,13 @@ import { ExternalActionGuard } from "../../safety/ExternalActionGuard";
 import { PostgresDatabase } from "../../data/PostgresDatabase";
 import { AppSettingsStore } from "../../data/AppSettingsStore";
 import { PropertyReportPromptService } from "../../services/PropertyReportPromptService";
+import { OrchestratorPromptService } from "../../services/orchestrator/OrchestratorPromptService";
+import { SpecialistRegistry } from "../../services/orchestrator/SpecialistRegistry";
+import { JakeOrchestrator } from "../../services/orchestrator/JakeOrchestrator";
+import {
+  ROUTER_LLM_CLIENT,
+  AnthropicRouterLlmClient,
+} from "../../services/orchestrator/RouterLlmClient";
 import { CredentialCipher } from "../connections/CredentialCipher";
 import { GhlConnectionStore } from "../connections/GhlConnectionStore";
 import { GhlConnectionService } from "../connections/GhlConnectionService";
@@ -218,6 +225,27 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   }
   if (!c.isRegistered(ConversationMemoryService)) {
     c.registerSingleton(ConversationMemoryService);
+  }
+
+  // JAK-135 — orchestrator / router AI: the brain that classifies EVERY inbound
+  // message + resolves references into a typed dispatch plan, replacing the
+  // single-path lookup with orchestrated dispatch. The prompt service fronts the
+  // admin-editable orchestrator_prompt (same app_settings pattern as JAK-131);
+  // the specialist registry is the name→descriptor seam JAK-136/137 register into
+  // without rewriting the router; the router LLM client is injected behind a
+  // token so tests mock it and never hit the network (dev/no-key falls back to a
+  // deterministic, no-spend classification). All singletons; share the one pool.
+  if (!c.isRegistered(OrchestratorPromptService)) {
+    c.registerSingleton(OrchestratorPromptService);
+  }
+  if (!c.isRegistered(SpecialistRegistry)) {
+    c.registerSingleton(SpecialistRegistry);
+  }
+  if (!c.isRegistered(ROUTER_LLM_CLIENT)) {
+    c.registerSingleton(ROUTER_LLM_CLIENT, AnthropicRouterLlmClient);
+  }
+  if (!c.isRegistered(JakeOrchestrator)) {
+    c.registerSingleton(JakeOrchestrator);
   }
 
   if (!c.isRegistered(AdminResource)) {

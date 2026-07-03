@@ -12,6 +12,8 @@ import { ConversationMemoryService } from "../../ghlEnrichment/conversation/Conv
 import { LookupRow } from "../../ghlEnrichment/conversation/ConversationTypes";
 import { PropertyReportWriter } from "../PropertyReportWriter";
 import { PropertyReportData } from "../../types/PropertyReport";
+import { JakeOrchestrator } from "../orchestrator/JakeOrchestrator";
+import { DispatchPlan } from "../orchestrator/OrchestratorTypes";
 
 /**
  * JakeAssistantService is mode-aware (JAK-115). These tests pin the two text
@@ -32,7 +34,10 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
   let credits: MockProxy<CreditService>;
   let reportWriter: MockProxy<PropertyReportWriter>;
   let memory: MockProxy<ConversationMemoryService>;
+  let orchestrator: MockProxy<JakeOrchestrator>;
   let service: JakeAssistantService;
+
+  const reportSpecialist = () => [{ name: "report", needsConfirmation: false, estimatedCredits: 1 }];
 
   const lookupRow = (over: Partial<LookupRow> = {}): LookupRow => ({
     id: "lk_1",
@@ -82,6 +87,28 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     credits = mock<CreditService>();
     reportWriter = mock<PropertyReportWriter>();
     memory = mock<ConversationMemoryService>();
+    orchestrator = mock<JakeOrchestrator>();
+
+    // The router is exercised in its own suite (JakeOrchestrator.test.ts); here it
+    // defaults to the deterministic classification the pre-router single path used
+    // — a parseable address → property_report on it, a bare "OK" → report_refresh,
+    // everything else → chitchat — so the JAK-115/130/134 behaviors below are
+    // pinned exactly as shipped. Individual tests override plan() when they need a
+    // specific intent (e.g. reference resolution, skip-trace, comps).
+    orchestrator.plan.mockImplementation(async ({ parsedAddress, isAffirmative }): Promise<DispatchPlan> => {
+      if (parsedAddress) {
+        return {
+          intent: "property_report",
+          targetEntity: parsedAddress,
+          specialists: reportSpecialist(),
+          userFacingNote: "",
+        };
+      }
+      if (isAffirmative) {
+        return { intent: "report_refresh", targetEntity: null, specialists: reportSpecialist(), userFacingNote: "" };
+      }
+      return { intent: "chitchat", targetEntity: null, specialists: [], userFacingNote: "" };
+    });
 
     // Memory is exercised in its own suites; here it defaults to a "no cache,
     // no prior address" world so the classic single-path tests keep their shape.
@@ -115,7 +142,8 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       customers,
       credits,
       reportWriter,
-      memory
+      memory,
+      orchestrator
     );
   });
 
@@ -615,6 +643,140 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(result.charged).toBe(0);
       expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
       expect(credits.chargeForTextLookup).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── JAK-135: orchestrated dispatch (router → plan → specialist) ─────────────
+  describe("orchestrated dispatch (JAK-135)", () => {
+    it("routes every inbound through the orchestrator and surfaces the intent", async () => {
+      realEstate.searchPropertyByAddress.mockResolvedValue({ address: "1 A St" } as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "123 Main St, Springfield, IL 62704",
+      });
+
+      expect(orchestrator.plan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          phone: "+15559990000",
+          message: "123 Main St, Springfield, IL 62704",
+          parsedAddress: "123 Main St, Springfield, IL 62704",
+          isAffirmative: false,
+        })
+      );
+      expect(result.intent).toBe("property_report");
+    });
+
+    it("reference-resolved report: runs the Report specialist on the RESOLVED target address", async () => {
+      // The router resolved "the owner for the 2nd address I sent" to a concrete
+      // address that never appears in this message — the executor must look up THAT.
+      orchestrator.plan.mockResolvedValue({
+        intent: "property_report",
+        targetEntity: "742 Evergreen Terrace, Springfield, IL 62704",
+        specialists: reportSpecialist(),
+        userFacingNote: "Looking up the 2nd address you sent.",
+      });
+      realEstate.searchPropertyByAddress.mockResolvedValue({ id: 7, address: "742 Evergreen Terrace" } as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "who owns the 2nd address I sent?",
+      });
+
+      expect(memory.checkCache).toHaveBeenCalledWith("+15559990000", "742 Evergreen Terrace, Springfield, IL 62704");
+      expect(realEstate.searchPropertyByAddress).toHaveBeenCalledWith("742 Evergreen Terrace, Springfield, IL 62704");
+      expect(result.intent).toBe("property_report");
+      expect(result.charged).toBe(1);
+    });
+
+    it("property_report with an UNRESOLVABLE reference (null target) → guidance, no spend", async () => {
+      orchestrator.plan.mockResolvedValue({
+        intent: "property_report",
+        targetEntity: null,
+        specialists: reportSpecialist(),
+        userFacingNote: "",
+      });
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "the 9th one",
+      });
+
+      expect(result.address).toBeNull();
+      expect(result.charged).toBe(0);
+      expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
+      expect(credits.chargeForTextLookup).not.toHaveBeenCalled();
+    });
+
+    it("skip-trace intent → 'coming soon' reply, NO spend, NO paid API, NO fake result", async () => {
+      orchestrator.plan.mockResolvedValue({
+        intent: "skip_trace",
+        targetEntity: "742 Evergreen Terrace, Springfield, IL 62704",
+        specialists: [{ name: "skip_trace", needsConfirmation: true, estimatedCredits: 2 }],
+        userFacingNote: "",
+      });
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "find the owner for that one",
+      });
+
+      expect(result.intent).toBe("skip_trace");
+      expect(result.charged).toBe(0);
+      expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
+      expect(credits.chargeForTextLookup).not.toHaveBeenCalled();
+      const sent = (gateway.sendSms.mock.calls[0]![0] as { message: string }).message;
+      expect(sent.toLowerCase()).toContain("coming soon");
+      expect(sent).toContain("742 Evergreen Terrace");
+      expect(sent.endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+      expect(sent).not.toMatch(/\p{Extended_Pictographic}/u);
+    });
+
+    it("comps intent → 'coming soon' reply, NO spend", async () => {
+      orchestrator.plan.mockResolvedValue({
+        intent: "comps",
+        targetEntity: null,
+        specialists: [{ name: "comps", needsConfirmation: true, estimatedCredits: 2 }],
+        userFacingNote: "",
+      });
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "what did nearby homes sell for?",
+      });
+
+      expect(result.intent).toBe("comps");
+      expect(result.charged).toBe(0);
+      expect(credits.chargeForTextLookup).not.toHaveBeenCalled();
+      const sent = (gateway.sendSms.mock.calls[0]![0] as { message: string }).message;
+      expect(sent.toLowerCase()).toContain("coming soon");
+    });
+
+    it("chitchat intent → guidance reply, emoji-free with the footer, no spend", async () => {
+      orchestrator.plan.mockResolvedValue({
+        intent: "chitchat",
+        targetEntity: null,
+        specialists: [],
+        userFacingNote: "",
+      });
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "hey jake, how's it going?",
+      });
+
+      expect(result.intent).toBe("chitchat");
+      expect(result.charged).toBe(0);
+      expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
+      const sent = (gateway.sendSms.mock.calls[0]![0] as { message: string }).message;
+      expect(sent.endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+      expect(sent).not.toMatch(/\p{Extended_Pictographic}/u);
     });
   });
 });

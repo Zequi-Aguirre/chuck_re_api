@@ -53,4 +53,10 @@ export type JakeInboundResult = {
    * to a cached re-serve (JAK-134).
    */
   refreshed?: boolean;
+  /**
+   * The intent the JAK-135 orchestrator classified this message as
+   * (property_report | report_refresh | skip_trace | comps | chitchat). Present
+   * once routing runs; useful for telemetry + assertions.
+   */
+  intent?: string;
 };
