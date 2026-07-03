@@ -66,6 +66,23 @@ export class SkipTraceStore {
   }
 
   /**
+   * The most recent cached trace for a phone across ALL targets, newest first — the
+   * backing for the JAK-138 person reference ("the 3rd person / that owner"), which
+   * resolves against the entities of whatever trace the texter last ran. Null when
+   * this phone has never traced anything.
+   */
+  async latestTraceForPhone(phone: string): Promise<SkipTraceRow | null> {
+    const result = await this.db.query<SkipTraceRow>(
+      `SELECT * FROM text_jake_skip_traces
+       WHERE phone = $1
+       ORDER BY fetched_at DESC, id DESC
+       LIMIT 1`,
+      [phone]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  /**
    * Record (upsert) the ONE outstanding skip-trace offer for a phone. A new offer
    * replaces any prior one, so "reply OK" always resolves to the most recent quote.
    */

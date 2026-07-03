@@ -74,6 +74,14 @@ export interface DispatchPlan {
   /** The model's short, human-readable note about what it's doing (telemetry). */
   userFacingNote: string;
   /**
+   * The raw 1-based ordinal the router read from a prior-address reference ("the
+   * 5th address"), passed straight through for the JAK-138 disambiguation polish:
+   * when it points PAST the resolved-address list the target can't resolve, and the
+   * assistant tells the texter how many they've actually sent instead of failing
+   * silently. Null when the message referenced no ordinal.
+   */
+  addressOrdinal?: number | null;
+  /**
    * Texter-supplied comp parameter overrides pulled from the message ("comps within
    * 1 mile, last 6 months, 3 similar homes"), for the comps intent only (JAK-137).
    * Null/absent when the texter didn't specify any — the comps specialist then uses

@@ -83,6 +83,10 @@ export class JakeOrchestrator {
       // Carry the texter's comp parameter overrides through for the comps intent
       // only (JAK-137); other intents never read them.
       compParams: intent === "comps" ? classification.compParams ?? null : null,
+      // Pass the raw referenced ordinal through so the assistant can tell an
+      // out-of-range reference ("the 5th address") apart from no reference at all
+      // (JAK-138 disambiguation).
+      addressOrdinal: classification.addressOrdinal ?? null,
     };
   }
 

@@ -21,7 +21,14 @@ import {
 } from "../types/RealEstateApi.ts";
 import { PropertyReportWriter } from "./PropertyReportWriter.ts";
 import { JakeOrchestrator } from "./orchestrator/JakeOrchestrator.ts";
-import { DispatchPlan } from "./orchestrator/OrchestratorTypes.ts";
+import { DispatchPlan, JakeIntent } from "./orchestrator/OrchestratorTypes.ts";
+import {
+    OrdinalSelection,
+    parseOrdinalSelection,
+    parsePersonReference,
+} from "./orchestrator/references.ts";
+import { DisambiguationMemoryService } from "./disambiguation/DisambiguationMemoryService.ts";
+import { DisambiguationPendingRow } from "./disambiguation/DisambiguationTypes.ts";
 import { SkipTraceReportWriter } from "./skiptrace/SkipTraceReportWriter.ts";
 import { SkipTraceMemoryService } from "./skiptrace/SkipTraceMemoryService.ts";
 import { SkipTraceSettingsService } from "./skiptrace/SkipTraceSettingsService.ts";
@@ -30,6 +37,7 @@ import { CompsReportWriter } from "./comps/CompsReportWriter.ts";
 import { CompsMemoryService } from "./comps/CompsMemoryService.ts";
 import { CompsSettingsService } from "./comps/CompsSettingsService.ts";
 import {
+    CompParamOverrides,
     CompParams,
     CompsRow,
     assembleCompsData,
@@ -59,18 +67,30 @@ interface TextRoute {
     note(contactId: string, body: string): Promise<unknown>;
 }
 
-const GUIDANCE_REPLY = [
-    "Hi! I'm Jake. Text me a full property address (e.g. \"123 Main St, Springfield, IL 62704\") " +
-        "and I'll pull up a property report — owner, value, equity, and distress signals.",
-    "You can also refer back to an address you already sent (\"the 2nd one\", \"the last address\").",
-    PropertyReportWriter.FOOTER,
-].join("\n\n");
-
 const OUT_OF_CREDITS_REPLY =
     "You're out of Jake credits, so I couldn't run that lookup. Top up and text the address again.";
 
+/**
+ * The brief ACK Jake sends before a confirmed paid specialist (skip-trace / comps)
+ * that hits a paid API + the LLM writer, so the texter isn't left waiting in
+ * silence; the result follows in a second message (JAK-138 latency polish).
+ */
+const ACK_REPLY = "Working on it, one moment.";
+
 @injectable()
 export class JakeAssistantService {
+    /** The bare tokens that count as a spend confirmation (JAK-138 unified confirm). */
+    private static readonly AFFIRMATIVES = new Set([
+        "ok",
+        "okay",
+        "yes",
+        "yeah",
+        "yep",
+        "yup",
+        "y",
+        "sure",
+    ]);
+
     constructor(
         private readonly realEstateDao: RealEstateApiDao,
         private readonly ghlClient: GhlApiClient,
@@ -86,7 +106,8 @@ export class JakeAssistantService {
         private readonly skipTraceSettings: SkipTraceSettingsService,
         private readonly compsWriter: CompsReportWriter,
         private readonly comps: CompsMemoryService,
-        private readonly compsSettings: CompsSettingsService
+        private readonly compsSettings: CompsSettingsService,
+        private readonly disambiguation: DisambiguationMemoryService
     ) {}
 
     /**
@@ -163,6 +184,28 @@ export class JakeAssistantService {
     ): Promise<JakeInboundResult> {
         const { input, route, customer, accountId, phone, requestingMessageId } = ctx;
 
+        // Disambiguation follow-up (JAK-138): a bare number/ordinal ("2", "the last
+        // one") right after Jake listed addresses and asked WHICH one — resolve it
+        // against the stable per-phone resolved-address list and run the intent that
+        // was waiting on the pick. Checked FIRST, and gated on a FRESH pending
+        // question, so a stray number never fires an action on its own.
+        const selection = parseOrdinalSelection(input.message);
+        if (selection != null) {
+            const pendingAsk = await this.disambiguation.freshPending(phone);
+            if (pendingAsk) {
+                return this.runDisambiguated({
+                    input,
+                    route,
+                    customer,
+                    accountId,
+                    phone,
+                    requestingMessageId,
+                    pending: pendingAsk,
+                    selection,
+                });
+            }
+        }
+
         // Confirm-before-spend (JAK-136/137): a bare "OK"/"YES" right after a
         // skip-trace or comps QUOTE (or a free re-serve of one) runs that PAID
         // action. Checked BEFORE the switch so it takes precedence over
@@ -226,14 +269,32 @@ export class JakeAssistantService {
             // rule: a hit within the free window re-serves for FREE; a miss is a
             // normal paid lookup, charged on match and snapshotted.
             case "property_report": {
-                const target = plan.targetEntity;
-                if (!target) {
+                // Resolve the address, or ASK when the reference is ambiguous /
+                // out of range (JAK-138) instead of silently falling to guidance.
+                const resolution = await this.resolveAddressTarget(plan, phone);
+                if (resolution.kind === "ask") {
+                    return this.askWhichAddress({
+                        input,
+                        route,
+                        customer,
+                        phone,
+                        intent: "property_report",
+                        compParams: null,
+                        addresses: resolution.addresses,
+                        outOfRange: resolution.outOfRange,
+                        requested: resolution.requested,
+                    });
+                }
+                if (resolution.kind !== "resolved") {
                     return this.sendGuidance(input, route, customer, phone);
                 }
+                const target = resolution.target;
                 // Moving on to a report cancels any outstanding skip-trace or comps
-                // quote so a later bare "OK" can't fire a stale (paid) action.
+                // quote (and any pending address question) so a later bare "OK" or
+                // number can't fire a stale (paid) action.
                 await this.clearSkipTracePending(phone);
                 await this.clearCompsPending(phone);
+                await this.clearDisambiguationPending(phone);
                 const cached = await this.memory.checkCache(phone, target);
                 if (cached) {
                     return this.reserveFromCache({ input, route, customer, phone, address: target, cached });
@@ -276,9 +337,14 @@ export class JakeAssistantService {
                     requestingMessageId,
                 });
 
-            // Greeting / unrecognized — helpful guidance, no lookup, no charge.
+            // Greeting / unrecognized / "help" — the capability menu, no lookup, no
+            // charge. A non-affirmative reply here also CANCELS any outstanding paid
+            // quote or pending question cleanly, so nothing is left stuck (JAK-138).
             case "chitchat":
             default:
+                await this.clearSkipTracePending(phone);
+                await this.clearCompsPending(phone);
+                await this.clearDisambiguationPending(phone);
                 return this.sendGuidance(input, route, customer, phone);
         }
     }
@@ -412,7 +478,33 @@ export class JakeAssistantService {
     }): Promise<JakeInboundResult> {
         const { input, route, customer, accountId, phone, plan } = ctx;
 
-        const target = plan.targetEntity ?? (await this.memory.lastResolvedAddress(phone));
+        // Explicit person reference into a prior trace ("the 3rd person / that
+        // owner"): resolve against the last skip-trace's entities BEFORE any address
+        // handling (JAK-138). Only when the router didn't already resolve a concrete
+        // address in this message.
+        if (!plan.targetEntity) {
+            const personHandled = await this.resolveSkipTracePerson(ctx);
+            if (personHandled) return personHandled;
+        }
+
+        // Resolve the address to trace, or ASK when the reference is ambiguous /
+        // out of range (JAK-138) instead of silently guessing.
+        const resolution = await this.resolveAddressTarget(plan, phone);
+        if (resolution.kind === "ask") {
+            return this.askWhichAddress({
+                input,
+                route,
+                customer,
+                phone,
+                intent: "skip_trace",
+                compParams: null,
+                addresses: resolution.addresses,
+                outOfRange: resolution.outOfRange,
+                requested: resolution.requested,
+            });
+        }
+        const target =
+            resolution.kind === "resolved" ? resolution.target : await this.memory.lastResolvedAddress(phone);
         if (!target) {
             const reply = [
                 "Text me a property address first, then I can skip-trace the owner and pull their contact info.",
@@ -539,6 +631,10 @@ export class JakeAssistantService {
             );
             return { ok: false, address: target, reply, mode: route.mode, charged: 0, outOfCredits: true };
         }
+
+        // The paid trace + the LLM writer can take a moment; ack now and deliver the
+        // result in a follow-up so the texter isn't left waiting silently (JAK-138).
+        await this.sendAck(route, input.contactId);
 
         let record: RealEstateApiSkipTraceResult | null;
         try {
@@ -756,7 +852,24 @@ export class JakeAssistantService {
     }): Promise<JakeInboundResult> {
         const { input, route, customer, accountId, phone, plan } = ctx;
 
-        const target = plan.targetEntity ?? (await this.memory.lastResolvedAddress(phone));
+        // Resolve the address, or ASK when the reference is ambiguous / out of range
+        // (JAK-138) rather than silently running comps on a guessed address.
+        const resolution = await this.resolveAddressTarget(plan, phone);
+        if (resolution.kind === "ask") {
+            return this.askWhichAddress({
+                input,
+                route,
+                customer,
+                phone,
+                intent: "comps",
+                compParams: plan.compParams ?? null,
+                addresses: resolution.addresses,
+                outOfRange: resolution.outOfRange,
+                requested: resolution.requested,
+            });
+        }
+        const target =
+            resolution.kind === "resolved" ? resolution.target : await this.memory.lastResolvedAddress(phone);
         if (!target) {
             const reply = [
                 "Text me a property address first, then I can pull comparable sales for it.",
@@ -889,6 +1002,10 @@ export class JakeAssistantService {
             return { ok: false, address: target, reply, mode: route.mode, charged: 0, outOfCredits: true };
         }
 
+        // The paid comps pull + the LLM writer can take a moment; ack now and deliver
+        // the result in a follow-up so the texter isn't left waiting silently (JAK-138).
+        await this.sendAck(route, input.contactId);
+
         let response: RealEstateApiPropertyCompsResponse | null;
         try {
             response = await this.realEstateDao.getCompsByAddress(target, params);
@@ -991,20 +1108,328 @@ export class JakeAssistantService {
         }
     }
 
-    /** Usage guidance for a message with no parseable address. No lookup, no charge. */
+    // ── Disambiguation (JAK-138) ─────────────────────────────────────────────
+
+    /**
+     * Resolve the concrete address an address-based intent acts on, or decide Jake
+     * must ASK (JAK-138). Returns:
+     *   - `resolved` when the router already pinned a target;
+     *   - `ask` when the reference is AMBIGUOUS (2+ addresses on file, no clear pick)
+     *     or OUT OF RANGE (an ordinal past the list) — Jake lists them and asks;
+     *   - `none` when there's nothing to disambiguate (0–1 addresses, no bad ordinal),
+     *     so the caller uses its own single-address fallback or guidance.
+     */
+    private async resolveAddressTarget(
+        plan: DispatchPlan,
+        phone: string
+    ): Promise<
+        | { kind: "resolved"; target: string }
+        | { kind: "ask"; addresses: string[]; outOfRange: boolean; requested: number | null }
+        | { kind: "none" }
+    > {
+        if (plan.targetEntity) return { kind: "resolved", target: plan.targetEntity };
+        const addresses = (await this.memory.resolvedAddressList(phone)) ?? [];
+        const ordinal = plan.addressOrdinal ?? null;
+        const outOfRange = ordinal != null && ordinal > addresses.length;
+        if (addresses.length >= 2 || (outOfRange && addresses.length >= 1)) {
+            return { kind: "ask", addresses, outOfRange, requested: ordinal };
+        }
+        return { kind: "none" };
+    }
+
+    /**
+     * Ask WHICH address the texter meant (JAK-138): reply with a short NUMBERED list
+     * and park a pending question so a following bare number/ordinal runs `intent` on
+     * the pick. Clears any outstanding paid quote first — we're asking a question,
+     * not confirming a spend — so a later "OK" can't fire a stale action. Emoji-free,
+     * footer last. No charge.
+     */
+    private async askWhichAddress(ctx: {
+        input: JakeInboundMessage;
+        route: TextRoute;
+        customer: TextJakeCustomer;
+        phone: string;
+        intent: JakeIntent;
+        compParams: CompParamOverrides | null;
+        addresses: string[];
+        outOfRange: boolean;
+        requested: number | null;
+    }): Promise<JakeInboundResult> {
+        const { input, route, customer, phone, intent, compParams, addresses, outOfRange, requested } = ctx;
+        await this.clearSkipTracePending(phone);
+        await this.clearCompsPending(phone);
+        await this.setDisambiguationPending(phone, customer.id, intent, compParams);
+
+        const numbered = addresses.map((a, i) => `${i + 1}. ${a}`).join("\n");
+        const lead =
+            outOfRange && requested != null
+                ? `You've sent me ${addresses.length} address${addresses.length === 1 ? "" : "es"} so far, not ${requested}. Here ${
+                      addresses.length === 1 ? "it is" : "they are"
+                  }:`
+                : "I've got a few addresses on file — which one did you mean?";
+        const reply = [`${lead}\n${numbered}`, "Reply with the number.", PropertyReportWriter.FOOTER].join("\n\n");
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        await this.writeStatusNote(
+            route,
+            input.contactId,
+            `Jake (text): asked to disambiguate ${intent} across ${addresses.length} address(es) — no charge.`
+        );
+        return { ok: true, address: null, reply, mode: route.mode, charged: 0 };
+    }
+
+    /**
+     * Run the intent that was waiting on an address pick (JAK-138). Re-derives the
+     * address from the CURRENT resolved-address list (stable + ordered) so the ordinal
+     * still points where it did when the list was shown; a pick that's STILL out of
+     * range re-asks. On a valid pick it clears the question and dispatches the stored
+     * intent on the chosen address.
+     */
+    private async runDisambiguated(ctx: {
+        input: JakeInboundMessage;
+        route: TextRoute;
+        customer: TextJakeCustomer;
+        accountId: string;
+        phone: string;
+        requestingMessageId: string | null;
+        pending: DisambiguationPendingRow;
+        selection: OrdinalSelection;
+    }): Promise<JakeInboundResult> {
+        const { input, route, customer, accountId, phone, requestingMessageId, pending, selection } = ctx;
+        const addresses = (await this.memory.resolvedAddressList(phone)) ?? [];
+        const index = selection === "last" ? addresses.length : selection;
+
+        if (index < 1 || index > addresses.length) {
+            // The pick still points past the list — ask again, keeping the question.
+            return this.askWhichAddress({
+                input,
+                route,
+                customer,
+                phone,
+                intent: pending.intent,
+                compParams: pending.comp_params,
+                addresses,
+                outOfRange: true,
+                requested: typeof selection === "number" ? selection : null,
+            });
+        }
+
+        const target = addresses[index - 1];
+        await this.clearDisambiguationPending(phone);
+        const resolvedPlan: DispatchPlan = {
+            intent: pending.intent,
+            targetEntity: target,
+            specialists: [],
+            userFacingNote: "",
+            compParams: pending.comp_params,
+            addressOrdinal: null,
+        };
+
+        if (pending.intent === "skip_trace") {
+            return this.handleSkipTrace({ input, route, customer, accountId, phone, plan: resolvedPlan, requestingMessageId });
+        }
+        if (pending.intent === "comps") {
+            return this.handleComps({ input, route, customer, accountId, phone, plan: resolvedPlan, requestingMessageId });
+        }
+        // property_report (and any other address intent): run the JAK-134 report path.
+        await this.clearSkipTracePending(phone);
+        await this.clearCompsPending(phone);
+        const cached = await this.memory.checkCache(phone, target);
+        if (cached) {
+            return this.reserveFromCache({ input, route, customer, phone, address: target, cached });
+        }
+        return this.freshLookup({
+            input,
+            route,
+            customer,
+            accountId,
+            phone,
+            address: target,
+            requestingMessageId,
+            onOkRefresh: false,
+        });
+    }
+
+    /**
+     * Resolve an explicit PERSON reference into the last skip-trace result (JAK-138):
+     * "the 3rd person", "that owner". Returns a handled result, or null to fall
+     * through to normal address handling when the message isn't a person pick or
+     * there's no prior trace with entities. An ambiguous pick (several people, no
+     * clear index) lists them and asks; an unambiguous one re-serves that trace's
+     * stored contact info for free.
+     */
+    private async resolveSkipTracePerson(ctx: {
+        input: JakeInboundMessage;
+        route: TextRoute;
+        customer: TextJakeCustomer;
+        phone: string;
+    }): Promise<JakeInboundResult | null> {
+        const { input, route, customer, phone } = ctx;
+        const ref = parsePersonReference(input.message);
+        if (!ref.matched) return null;
+
+        const last = await this.skipTrace.latestTraceForPhone(phone);
+        if (!last) return null;
+        const people = this.skipTracePeople(last.trace_record);
+        if (people.length === 0) return null;
+
+        const inRange = ref.ordinal != null && ref.ordinal >= 1 && ref.ordinal <= people.length;
+        const unambiguous = inRange || (ref.ordinal == null && people.length === 1);
+        if (!unambiguous) {
+            return this.askWhichPerson({ input, route, customer, phone, people, requested: ref.ordinal });
+        }
+
+        // Resolves to one person → re-serve that trace's stored contact info FREE
+        // (already on record), parking a pending offer so an OK runs a fresh trace.
+        const cost = await this.skipTraceSettings.costOfSkipTrace();
+        return this.reserveSkipTraceFromCache({
+            input,
+            route,
+            customer,
+            phone,
+            target: last.normalized_target,
+            cached: last,
+            cost,
+        });
+    }
+
+    /**
+     * Ask WHICH person the texter meant from a prior skip-trace (JAK-138): list the
+     * people that trace turned up and ask them to reply with the name or the property
+     * address. A person pick isn't an address pick, so any pending address question is
+     * cleared. Emoji-free, footer last. No charge.
+     */
+    private async askWhichPerson(ctx: {
+        input: JakeInboundMessage;
+        route: TextRoute;
+        customer: TextJakeCustomer;
+        phone: string;
+        people: string[];
+        requested: number | null;
+    }): Promise<JakeInboundResult> {
+        const { input, route, customer, phone, people, requested } = ctx;
+        await this.clearDisambiguationPending(phone);
+        const numbered = people.map((p, i) => `${i + 1}. ${p}`).join("\n");
+        const lead =
+            requested != null
+                ? `That trace turned up ${people.length} ${people.length === 1 ? "name" : "names"}, not ${requested}. Here ${
+                      people.length === 1 ? "it is" : "they are"
+                  }:`
+                : "That trace turned up more than one person — who did you mean?";
+        const reply = [
+            `${lead}\n${numbered}`,
+            "Reply with the name or the property address.",
+            PropertyReportWriter.FOOTER,
+        ].join("\n\n");
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        await this.writeStatusNote(
+            route,
+            input.contactId,
+            `Jake (text): asked to disambiguate a person reference (${people.length} on record) — no charge.`
+        );
+        return { ok: true, address: null, reply, mode: route.mode, charged: 0 };
+    }
+
+    /**
+     * The distinct person names a stored skip-trace result turned up — the primary
+     * owner plus any additional identity names — for a JAK-138 person reference.
+     * De-duplicated; never fabricates a name.
+     */
+    private skipTracePeople(record: unknown): string[] {
+        const rec = (record ?? null) as RealEstateApiSkipTraceResult | null;
+        if (!rec) return [];
+        const identity = rec.output?.identity ?? null;
+        const names: string[] = [];
+        const primary = this.skipTraceOwnerName(rec, identity);
+        if (primary) names.push(primary);
+        for (const n of identity?.names ?? []) {
+            if (typeof n === "string") {
+                const t = this.text(n);
+                if (t) names.push(t);
+            } else if (n && typeof n === "object") {
+                const full = this.text(n.fullName) ?? [n.firstName, n.lastName].filter(Boolean).join(" ").trim();
+                if (full) names.push(full);
+            }
+        }
+        return this.dedupe(names);
+    }
+
+    /** Park the ONE outstanding disambiguation question for a phone (best-effort). */
+    private async setDisambiguationPending(
+        phone: string,
+        customerId: string,
+        intent: JakeIntent,
+        compParams: CompParamOverrides | null
+    ): Promise<void> {
+        try {
+            await this.disambiguation.setPending({ phone, customerId, intent, compParams });
+        } catch (err) {
+            console.error("⚠️ Jake disambiguation pending set failed:", this.errorSummary(err));
+        }
+    }
+
+    /** Clear a phone's outstanding disambiguation question (best-effort; never blocks). */
+    private async clearDisambiguationPending(phone: string): Promise<void> {
+        try {
+            await this.disambiguation.clearPending(phone);
+        } catch (err) {
+            console.error("⚠️ Jake disambiguation pending clear failed:", this.errorSummary(err));
+        }
+    }
+
+    /** Send the brief "working on it" ack before a slow paid run (best-effort; never blocks). */
+    private async sendAck(route: TextRoute, contactId: string): Promise<void> {
+        try {
+            await route.send(contactId, ACK_REPLY);
+        } catch (err) {
+            console.error("⚠️ Jake ack send failed:", this.errorSummary(err));
+        }
+    }
+
+    /**
+     * The help / capability menu (JAK-138) — sent for a greeting, an unrecognized
+     * message, or an explicit "help". It plainly lists what Jake can do WITH each
+     * action's live credit cost pulled from the current admin settings (never
+     * hardcoded), so the numbers always match what the specialists actually charge.
+     * Emoji-free, GoTextJake.com footer last. No lookup, no charge.
+     */
     private async sendGuidance(
         input: JakeInboundMessage,
         route: TextRoute,
         customer: TextJakeCustomer,
         phone: string
     ): Promise<JakeInboundResult> {
-        await this.sendAndRemember(route, input.contactId, customer, phone, GUIDANCE_REPLY);
+        const reply = await this.buildHelpReply();
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
         await this.writeStatusNote(
             route,
             input.contactId,
-            "Jake (text): message had no address — sent usage guidance."
+            "Jake (text): sent the help / capability menu — no lookup, no charge."
         );
-        return { ok: true, address: null, reply: GUIDANCE_REPLY, mode: route.mode, charged: 0 };
+        return { ok: true, address: null, reply, mode: route.mode, charged: 0 };
+    }
+
+    /**
+     * Compose the capability menu with LIVE costs read from the admin settings
+     * (report = text-lookup cost, skip-trace = its cost knob, comps = its cost knob).
+     * Costs are fetched fresh here so an admin retune shows up immediately.
+     */
+    private async buildHelpReply(): Promise<string> {
+        const [skipCost, compsCost] = await Promise.all([
+            this.skipTraceSettings.costOfSkipTrace(),
+            this.compsSettings.costOfComps(),
+        ]);
+        const reportCost = this.credits.costOfTextLookup();
+        const credit = (n: number) => `${n} credit${n === 1 ? "" : "s"}`;
+        return [
+            "Hi! I'm Jake. Here's what I can do — just text a full property address to start:",
+            [
+                `- Property report (${credit(reportCost)}) — owner, value, equity, and distress signals.`,
+                `- Find the owner / skip trace (${credit(skipCost)}) — their phone and contact info.`,
+                `- Comparable sales / comps (${credit(compsCost)}) — recent nearby sales for a property.`,
+            ].join("\n"),
+            'You can refer back to an address you already sent ("the 2nd one", "the last address").',
+            PropertyReportWriter.FOOTER,
+        ].join("\n\n");
     }
 
     /** Send a reply and record it as an outbound message (best-effort memory). */
@@ -1099,13 +1524,15 @@ export class JakeAssistantService {
     }
 
     /**
-     * Whether a message is a bare affirmative ("OK"/"okay"/"yes") — the reply that
-     * asks Jake to fetch a FRESH paid copy of the last address. Kept tight so a
-     * real address or question is never mistaken for a refresh.
+     * Whether a message is a bare affirmative — the reply that CONFIRMS the last
+     * pending paid quote (skip-trace / comps), or a fresh paid copy of the last
+     * address. Unified across specialists (JAK-138): a bare OK / OKAY / YES / YEAH /
+     * YEP / Y / SURE (case-insensitive) confirms; anything else cancels. Kept tight
+     * (a single bare token) so a real address or question is never mistaken for one.
      */
     private isAffirmativeOk(message: string): boolean {
         const compact = String(message).trim().toLowerCase().replace(/[^a-z]/g, "");
-        return compact === "ok" || compact === "okay" || compact === "yes";
+        return JakeAssistantService.AFFIRMATIVES.has(compact);
     }
 
     /** The provider's record id as a string, or null when absent. */

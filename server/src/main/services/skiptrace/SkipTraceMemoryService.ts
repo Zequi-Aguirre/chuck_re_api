@@ -61,6 +61,15 @@ export class SkipTraceMemoryService {
     return latest.fetched_at.getTime() > cutoff ? latest : null;
   }
 
+  /**
+   * The most recent trace for a phone across ALL targets — the entities the JAK-138
+   * person reference ("the 3rd person / that owner") resolves against. Null when
+   * this phone has never traced anything.
+   */
+  async latestTraceForPhone(phone: string): Promise<SkipTraceRow | null> {
+    return this.store.latestTraceForPhone(phone);
+  }
+
   /** Record the outstanding "reply OK" skip-trace offer for a phone. */
   async setPending(input: {
     phone: string;
