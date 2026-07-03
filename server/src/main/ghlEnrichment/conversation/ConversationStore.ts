@@ -90,7 +90,7 @@ export class ConversationStore {
          FROM text_jake_conversation_messages
         WHERE phone = $1 AND direction = 'inbound' AND resolved_address IS NOT NULL
         GROUP BY resolved_address
-        ORDER BY MIN(created_at) ASC, MIN(id) ASC`,
+        ORDER BY MIN(created_at) ASC, resolved_address ASC`,
       [phone]
     );
     return result.rows.map((r) => r.resolved_address);
