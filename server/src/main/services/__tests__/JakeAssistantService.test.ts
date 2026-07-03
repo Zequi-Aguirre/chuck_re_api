@@ -22,6 +22,8 @@ import { CompsReportWriter } from "../comps/CompsReportWriter";
 import { CompsMemoryService } from "../comps/CompsMemoryService";
 import { CompsSettingsService } from "../comps/CompsSettingsService";
 import { CompsPendingRow, CompsRow, DEFAULT_COMP_PARAMS } from "../comps/CompsTypes";
+import { DisambiguationMemoryService } from "../disambiguation/DisambiguationMemoryService";
+import { DisambiguationPendingRow } from "../disambiguation/DisambiguationTypes";
 
 /**
  * JakeAssistantService is mode-aware (JAK-115). These tests pin the two text
@@ -49,6 +51,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
   let compsWriter: MockProxy<CompsReportWriter>;
   let comps: MockProxy<CompsMemoryService>;
   let compsSettings: MockProxy<CompsSettingsService>;
+  let disambiguation: MockProxy<DisambiguationMemoryService>;
   let service: JakeAssistantService;
 
   const reportSpecialist = () => [{ name: "report", needsConfirmation: false, estimatedCredits: 1 }];
@@ -101,6 +104,15 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     customer_id: "cust_+15559990000",
     target: "742 Evergreen Terrace, Springfield, IL 62704",
     credits: 3,
+    created_at: new Date("2026-07-01T00:00:00Z"),
+    ...over,
+  });
+
+  const disambigRow = (over: Partial<DisambiguationPendingRow> = {}): DisambiguationPendingRow => ({
+    phone: "+15559990000",
+    customer_id: "cust_+15559990000",
+    intent: "comps",
+    comp_params: null,
     created_at: new Date("2026-07-01T00:00:00Z"),
     ...over,
   });
@@ -160,6 +172,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     compsWriter = mock<CompsReportWriter>();
     comps = mock<CompsMemoryService>();
     compsSettings = mock<CompsSettingsService>();
+    disambiguation = mock<DisambiguationMemoryService>();
 
     // The router is exercised in its own suite (JakeOrchestrator.test.ts); here it
     // defaults to the deterministic classification the pre-router single path used
@@ -189,6 +202,15 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     memory.recordLookup.mockResolvedValue({ id: "lk_1" } as never);
     memory.checkCache.mockResolvedValue(null);
     memory.lastResolvedAddress.mockResolvedValue(null);
+    memory.resolvedAddressList.mockResolvedValue([]);
+
+    // Disambiguation (JAK-138) defaults: no pending question. Individual tests
+    // override to exercise the numbered-selection follow-up.
+    disambiguation.freshPending.mockResolvedValue(null);
+    disambiguation.setPending.mockResolvedValue(disambigRow());
+    disambiguation.clearPending.mockResolvedValue(undefined);
+    // Skip-trace person reference (JAK-138): no prior trace on record by default.
+    skipTrace.latestTraceForPhone.mockResolvedValue(null);
 
     // The writer is exercised in its own suite; here it just echoes enough of the
     // assembled data back so the flow assertions (message contains the address)
@@ -251,7 +273,8 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       skipTraceSettings,
       compsWriter,
       comps,
-      compsSettings
+      compsSettings,
+      disambiguation
     );
   });
 
@@ -851,7 +874,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       specialists: skipTraceSpecialist(),
       userFacingNote: "",
     });
-    const sent = () => (gateway.sendSms.mock.calls[0]![0] as { message: string }).message;
+    // The RESULT is the LAST message sent — a confirmed paid run sends a brief ack
+    // first (JAK-138), so read the tail rather than call[0].
+    const sent = () => (gateway.sendSms.mock.calls.at(-1)![0] as { message: string }).message;
 
     it("first request QUOTES the cost + parks a pending offer — NO spend, NO paid API", async () => {
       orchestrator.plan.mockResolvedValue(skipTracePlan());
@@ -1013,7 +1038,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       compParams: null,
       ...over,
     });
-    const sent = () => (gateway.sendSms.mock.calls[0]![0] as { message: string }).message;
+    // The RESULT is the LAST message sent — a confirmed paid run sends a brief ack
+    // first (JAK-138), so read the tail rather than call[0].
+    const sent = () => (gateway.sendSms.mock.calls.at(-1)![0] as { message: string }).message;
 
     it("first request QUOTES the cost + parameters + parks a pending offer — NO spend, NO paid API", async () => {
       orchestrator.plan.mockResolvedValue(compsPlan());
@@ -1175,6 +1202,304 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(realEstate.getCompsByAddress).not.toHaveBeenCalled();
       expect(comps.setPending).not.toHaveBeenCalled();
       expect(comps.checkCache).not.toHaveBeenCalled();
+    });
+  });
+
+  // ── JAK-138: conversational UX polish ──────────────────────────────────────
+  describe("JAK-138 disambiguation (ask instead of guess)", () => {
+    const A1 = "123 Main St, Springfield, IL 62704";
+    const A2 = "742 Evergreen Terrace, Springfield, IL 62704";
+    const sent = () => (gateway.sendSms.mock.calls.at(-1)![0] as { message: string }).message;
+
+    it("ambiguous comps target (2+ addresses, no clear pick) → numbered list + ask, NO spend, parks the question", async () => {
+      memory.resolvedAddressList.mockResolvedValue([A1, A2]);
+      orchestrator.plan.mockResolvedValue({
+        intent: "comps",
+        targetEntity: null,
+        specialists: compsSpecialist(),
+        userFacingNote: "",
+        compParams: null,
+      });
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "run comps",
+      });
+
+      expect(result.charged).toBe(0);
+      // No paid API, no comps quote parked — we asked which address first.
+      expect(realEstate.getCompsByAddress).not.toHaveBeenCalled();
+      expect(comps.setPending).not.toHaveBeenCalled();
+      // The pending QUESTION remembers the waiting intent for the number follow-up.
+      expect(disambiguation.setPending).toHaveBeenCalledWith({
+        phone: "+15559990000",
+        customerId: "cust_+15559990000",
+        intent: "comps",
+        compParams: null,
+      });
+      expect(sent()).toContain(`1. ${A1}`);
+      expect(sent()).toContain(`2. ${A2}`);
+      expect(sent().toLowerCase()).toContain("which one");
+      expect(sent().endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+      expect(sent()).not.toMatch(/\p{Extended_Pictographic}/u);
+    });
+
+    it("out-of-range ordinal → says how many exist and lists them", async () => {
+      memory.resolvedAddressList.mockResolvedValue([A1, A2]);
+      orchestrator.plan.mockResolvedValue({
+        intent: "property_report",
+        targetEntity: null,
+        specialists: reportSpecialist(),
+        userFacingNote: "",
+        addressOrdinal: 5,
+      });
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "the 5th address",
+      });
+
+      expect(result.charged).toBe(0);
+      expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
+      expect(sent()).toContain("2 addresses");
+      expect(sent()).toContain("not 5");
+      expect(sent()).toContain(`1. ${A1}`);
+      expect(disambiguation.setPending).toHaveBeenCalledWith(
+        expect.objectContaining({ intent: "property_report" })
+      );
+    });
+
+    it("a bare NUMBER after the ask runs the stored intent on the picked address", async () => {
+      memory.resolvedAddressList.mockResolvedValue([A1, A2]);
+      disambiguation.freshPending.mockResolvedValue(disambigRow({ intent: "comps", comp_params: null }));
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "2",
+      });
+
+      // Address 2 selected → the question is consumed and comps is quoted on A2.
+      expect(disambiguation.clearPending).toHaveBeenCalledWith("+15559990000");
+      expect(comps.setPending).toHaveBeenCalledWith(expect.objectContaining({ target: A2, credits: 3 }));
+      // Still just a QUOTE — confirm-before-spend, no paid API yet.
+      expect(realEstate.getCompsByAddress).not.toHaveBeenCalled();
+      expect(sent()).toContain("3 credits");
+    });
+
+    it("'the last one' selects the final address for the stored intent", async () => {
+      memory.resolvedAddressList.mockResolvedValue([A1, A2]);
+      disambiguation.freshPending.mockResolvedValue(disambigRow({ intent: "skip_trace", comp_params: null }));
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "the last one",
+      });
+
+      expect(skipTrace.setPending).toHaveBeenCalledWith(expect.objectContaining({ target: A2 }));
+    });
+
+    it("a still-out-of-range pick re-asks and keeps the question", async () => {
+      memory.resolvedAddressList.mockResolvedValue([A1, A2]);
+      disambiguation.freshPending.mockResolvedValue(disambigRow({ intent: "comps", comp_params: null }));
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "7",
+      });
+
+      expect(result.charged).toBe(0);
+      expect(comps.setPending).not.toHaveBeenCalled();
+      // Re-asks (parks the question again) rather than running anything.
+      expect(disambiguation.setPending).toHaveBeenCalledWith(expect.objectContaining({ intent: "comps" }));
+      expect(sent()).toContain("not 7");
+    });
+
+    it("ambiguous PERSON reference lists the people from the last trace and asks", async () => {
+      skipTrace.latestTraceForPhone.mockResolvedValue(
+        skipTraceRow({
+          normalized_target: A2,
+          trace_record: {
+            output: { identity: { names: [{ fullName: "Homer Simpson" }, { fullName: "Marge Simpson" }] } },
+          },
+        })
+      );
+      orchestrator.plan.mockResolvedValue({
+        intent: "skip_trace",
+        targetEntity: null,
+        specialists: skipTraceSpecialist(),
+        userFacingNote: "",
+      });
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "skip trace that owner",
+      });
+
+      expect(result.charged).toBe(0);
+      expect(realEstate.skipTraceByAddress).not.toHaveBeenCalled();
+      expect(skipTrace.setPending).not.toHaveBeenCalled();
+      expect(sent()).toContain("Homer Simpson");
+      expect(sent()).toContain("Marge Simpson");
+      expect(sent().toLowerCase()).toContain("who did you mean");
+    });
+
+    it("PERSON reference that resolves to one person re-serves that trace for FREE", async () => {
+      skipTrace.latestTraceForPhone.mockResolvedValue(
+        skipTraceRow({ normalized_target: A2, trace_record: { name: "Homer Simpson" } })
+      );
+      orchestrator.plan.mockResolvedValue({
+        intent: "skip_trace",
+        targetEntity: null,
+        specialists: skipTraceSpecialist(),
+        userFacingNote: "",
+      });
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "skip trace that owner",
+      });
+
+      expect(result.reserved).toBe(true);
+      expect(result.charged).toBe(0);
+      expect(realEstate.skipTraceByAddress).not.toHaveBeenCalled();
+      expect(sent()).toContain("Homer Simpson");
+      // Parks an OK-for-fresh offer so the texter can pay for a fresh trace.
+      expect(skipTrace.setPending).toHaveBeenCalled();
+    });
+  });
+
+  describe("JAK-138 unified confirm-before-spend", () => {
+    it("a bare 'Y' (case-insensitive) confirms the LAST pending skip-trace quote", async () => {
+      skipTrace.freshPending.mockResolvedValue(pendingRow({ credits: 3 }));
+      realEstate.skipTraceByAddress.mockResolvedValue({
+        match: true,
+        output: { identity: { name: "Homer Simpson", phones: [{ phone: "+15550101" }] } },
+      } as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "Y",
+      });
+
+      expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith(
+        "742 Evergreen Terrace, Springfield, IL 62704"
+      );
+      expect(result.charged).toBe(3);
+    });
+
+    it("a non-affirmative reply CANCELS any pending quote/question cleanly — no charge, nothing stuck", async () => {
+      orchestrator.plan.mockResolvedValue({
+        intent: "chitchat",
+        targetEntity: null,
+        specialists: [],
+        userFacingNote: "",
+      });
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "actually never mind",
+      });
+
+      expect(result.charged).toBe(0);
+      expect(skipTrace.clearPending).toHaveBeenCalledWith("+15559990000");
+      expect(comps.clearPending).toHaveBeenCalledWith("+15559990000");
+      expect(disambiguation.clearPending).toHaveBeenCalledWith("+15559990000");
+      expect(realEstate.skipTraceByAddress).not.toHaveBeenCalled();
+      expect(realEstate.getCompsByAddress).not.toHaveBeenCalled();
+    });
+
+    it("no cross-intent leak: quoting comps clears an outstanding skip-trace quote", async () => {
+      orchestrator.plan.mockResolvedValue({
+        intent: "comps",
+        targetEntity: "742 Evergreen Terrace, Springfield, IL 62704",
+        specialists: compsSpecialist(),
+        userFacingNote: "",
+        compParams: null,
+      });
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "comps for 742 Evergreen Terrace",
+      });
+
+      expect(skipTrace.clearPending).toHaveBeenCalledWith("+15559990000");
+      expect(comps.setPending).toHaveBeenCalled();
+    });
+  });
+
+  describe("JAK-138 help / capability menu", () => {
+    const sent = () => (gateway.sendSms.mock.calls.at(-1)![0] as { message: string }).message;
+
+    it("lists the capabilities with LIVE credit costs pulled from settings (not hardcoded)", async () => {
+      orchestrator.plan.mockResolvedValue({
+        intent: "chitchat",
+        targetEntity: null,
+        specialists: [],
+        userFacingNote: "",
+      });
+      credits.costOfTextLookup.mockReturnValue(2);
+      skipTraceSettings.costOfSkipTrace.mockResolvedValue(4);
+      compsSettings.costOfComps.mockResolvedValue(6);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "help",
+      });
+
+      expect(sent()).toContain("Property report (2 credits)");
+      expect(sent()).toContain("skip trace (4 credits)");
+      expect(sent()).toContain("comps (6 credits)");
+      expect(sent().endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+      expect(sent()).not.toMatch(/\p{Extended_Pictographic}/u);
+    });
+
+    it("uses the singular 'credit' when a cost is exactly 1", async () => {
+      orchestrator.plan.mockResolvedValue({
+        intent: "chitchat",
+        targetEntity: null,
+        specialists: [],
+        userFacingNote: "",
+      });
+      credits.costOfTextLookup.mockReturnValue(1);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "what can you do?",
+      });
+
+      expect(sent()).toContain("Property report (1 credit)");
+    });
+  });
+
+  describe("JAK-138 latency ack", () => {
+    it("a confirmed comps run sends a brief ack FIRST, then delivers the result", async () => {
+      comps.freshPending.mockResolvedValue(compsPendingRow({ credits: 3 }));
+      realEstate.getCompsByAddress.mockResolvedValue({
+        comps: [{ address: "123 Nearby St", lastSaleAmount: 400000, bedrooms: 3, bathrooms: 2, squareFeet: 1500 }],
+      } as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "ok",
+      });
+
+      const messages = gateway.sendSms.mock.calls.map((c) => (c[0] as { message: string }).message);
+      expect(messages[0]).toBe("Working on it, one moment.");
+      expect(messages.length).toBeGreaterThanOrEqual(2);
+      expect(messages.at(-1)).toContain("Comparable sales");
     });
   });
 });
