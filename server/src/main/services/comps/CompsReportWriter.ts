@@ -1,30 +1,29 @@
-import { injectable } from "tsyringe";
-import OpenAI from "openai";
-import { EnvConfig } from "../../config/envConfig";
+import { inject, injectable } from "tsyringe";
+import { LlmClient, LLM_CLIENT } from "../llm/LlmClient";
 import { CompSaleData, CompsData } from "./CompsTypes";
 import { CompsPromptService } from "./CompsPromptService";
 
 /**
  * Writes the text-Jake COMPS reply SMS (JAK-137) — the comparable-sales summary a
  * comps pull produces. The exact analog of {@link
- * import("../skiptrace/SkipTraceReportWriter").SkipTraceReportWriter}: an LLM
- * (OpenAI Chat Completions) phrases the reply from VERIFIED comps data, with the
- * STYLE half of the system prompt admin-editable ({@link CompsPromptService}).
+ * import("../skiptrace/SkipTraceReportWriter").SkipTraceReportWriter}: an LLM —
+ * through the provider-agnostic {@link LlmClient} layer (JAK-141: OpenAI/gpt-4o by
+ * default, Anthropic optional) — phrases the reply from VERIFIED comps data, with
+ * the STYLE half of the system prompt admin-editable ({@link CompsPromptService}).
  * Around it the code ALWAYS enforces the SAME HARD GUARDRAILS an admin can never
  * edit away: plain text with NO EMOJIS, use ONLY the exact values we provide (never
  * invent a comp, address, or price), state the parameters used, and end with the
  * GoTextJake.com footer.
  *
  * RELIABILITY mirrors the report/skip-trace writers: Jake must ALWAYS reply, so if
- * OpenAI errors/times out (~8s) — or no OPENAI_API_KEY is configured — we fall back
- * to a deterministic, emoji-free reply built from the SAME data. Even on the LLM
- * path we strip stray emoji and force the exact footer, so the guardrails hold on
- * the OUTPUT too. The OpenAI key is an app-level Doppler secret ({@link
- * EnvConfig.openAiApiKey}) — NEVER hardcoded — and is never logged.
+ * the LLM errors/times out (~8s) — or the selected provider has no key — we fall
+ * back to a deterministic, emoji-free reply built from the SAME data. Even on the
+ * LLM path we strip stray emoji and force the exact footer, so the guardrails hold
+ * on the OUTPUT too. The provider key is an app-level Doppler secret held inside
+ * the injected {@link LlmClient} — NEVER hardcoded — and is never logged.
  */
 @injectable()
 export class CompsReportWriter {
-  private static readonly TIMEOUT_MS = 8_000;
   private static readonly MAX_TOKENS = 500;
 
   /** Footer the reply always ends with (two lines). Same canonical footer. */
@@ -50,11 +49,8 @@ export class CompsReportWriter {
     "GoTextJake.com",
   ].join("\n");
 
-  /** Lazily-built OpenAI client (cached). Protected so tests can substitute it. */
-  private openai?: OpenAI;
-
   constructor(
-    private readonly env: EnvConfig,
+    @inject(LLM_CLIENT) private readonly llm: LlmClient,
     private readonly promptService: CompsPromptService
   ) {}
 
@@ -65,33 +61,34 @@ export class CompsReportWriter {
    * GoTextJake.com footer.
    */
   async write(data: CompsData): Promise<string> {
-    try {
-      const style = await this.promptService.getEffectivePrompt();
-      const raw = await this.generateWithLlm(data, style);
-      const clean = this.stripEmojis(raw).trim();
-      if (clean) return this.enforceFooter(clean);
-      console.warn("⚠️ CompsReportWriter: empty LLM output — using deterministic fallback.");
-    } catch (err) {
-      console.error(
-        "⚠️ CompsReportWriter: OpenAI call failed — using deterministic fallback:",
-        err instanceof Error ? err.message : "unknown error"
-      );
+    // No key for the selected provider → straight to the deterministic fallback
+    // (no network, no spend).
+    if (this.llm.isAvailable) {
+      try {
+        const style = await this.promptService.getEffectivePrompt();
+        const raw = await this.generateWithLlm(data, style);
+        const clean = this.stripEmojis(raw).trim();
+        if (clean) return this.enforceFooter(clean);
+        console.warn("⚠️ CompsReportWriter: empty LLM output — using deterministic fallback.");
+      } catch (err) {
+        console.error(
+          "⚠️ CompsReportWriter: LLM call failed — using deterministic fallback:",
+          err instanceof Error ? err.message : "unknown error"
+        );
+      }
     }
     return this.renderFallback(data);
   }
 
-  /** Call OpenAI with the verified data. Throws on error/timeout (caught by {@link write}). */
+  /** Generate via the LLM layer with the verified data. Throws on error/timeout (caught by {@link write}). */
   protected async generateWithLlm(data: CompsData, style: string): Promise<string> {
-    const completion = await this.client().chat.completions.create(
-      {
-        model: this.env.openAiModel,
-        temperature: 0.2,
-        max_tokens: CompsReportWriter.MAX_TOKENS,
-        messages: this.buildMessages(data, style),
-      },
-      { timeout: CompsReportWriter.TIMEOUT_MS }
-    );
-    return completion.choices?.[0]?.message?.content ?? "";
+    const [system, user] = this.buildMessages(data, style);
+    return this.llm.generateText({
+      system: system.content,
+      user: user.content,
+      maxTokens: CompsReportWriter.MAX_TOKENS,
+      temperature: 0.2,
+    });
   }
 
   /**
@@ -217,18 +214,5 @@ export class CompsReportWriter {
       )
       .replace(/[ \t]{2,}/g, " ")
       .replace(/ +\n/g, "\n");
-  }
-
-  /** Build (and cache) the OpenAI client. Protected so tests can substitute it. */
-  protected client(): OpenAI {
-    if (this.openai) return this.openai;
-    if (!this.env.openAiApiKey) {
-      throw new Error("OPENAI_API_KEY is not configured");
-    }
-    this.openai = new OpenAI({
-      apiKey: this.env.openAiApiKey,
-      timeout: CompsReportWriter.TIMEOUT_MS,
-    });
-    return this.openai;
   }
 }

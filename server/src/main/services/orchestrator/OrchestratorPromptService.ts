@@ -23,8 +23,8 @@ export interface OrchestratorPromptView {
  * This is the STYLE layer ONLY — how to read intent and references. The HARD
  * classification rules (the fixed intent set, the JSON-only output, the
  * never-invent-an-address rule) are appended in code by
- * {@link import("./RouterLlmClient").AnthropicRouterLlmClient}, so an admin
- * editing this prompt can never break routing.
+ * {@link import("./RouterLlmClient").LlmRouterClient}, so an admin editing this
+ * prompt can never break routing.
  *
  * A short-TTL cache keeps the hot text path from re-querying Postgres on every
  * inbound; an edit busts the cache immediately.

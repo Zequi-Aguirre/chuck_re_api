@@ -1,4 +1,7 @@
-import { DependencyContainer } from "tsyringe";
+import { DependencyContainer, instanceCachingFactory } from "tsyringe";
+import { EnvConfig } from "../../config/envConfig";
+import { LLM_CLIENT } from "../../services/llm/LlmClient";
+import { LlmClientFactory } from "../../services/llm/LlmClientFactory";
 import { GhlEnrichmentConfig } from "../config/GhlEnrichmentConfig";
 import { ExternalActionGuard } from "../../safety/ExternalActionGuard";
 import { PostgresDatabase } from "../../data/PostgresDatabase";
@@ -9,7 +12,7 @@ import { SpecialistRegistry } from "../../services/orchestrator/SpecialistRegist
 import { JakeOrchestrator } from "../../services/orchestrator/JakeOrchestrator";
 import {
   ROUTER_LLM_CLIENT,
-  AnthropicRouterLlmClient,
+  LlmRouterClient,
 } from "../../services/orchestrator/RouterLlmClient";
 import { CredentialCipher } from "../connections/CredentialCipher";
 import { GhlConnectionStore } from "../connections/GhlConnectionStore";
@@ -243,6 +246,19 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   // without rewriting the router; the router LLM client is injected behind a
   // token so tests mock it and never hit the network (dev/no-key falls back to a
   // deterministic, no-spend classification). All singletons; share the one pool.
+  // JAK-141 — provider-agnostic LLM layer. ONE LlmClient (OpenAI by default,
+  // Anthropic optional) shared by the router (structured classification) and every
+  // specialist writer (text generation). Registered as a caching factory so the
+  // whole app shares one client; the provider + models + keys all come from Doppler
+  // via EnvConfig (LLM_PROVIDER / OPENAI_* / ANTHROPIC_*) — never the DB, never a UI.
+  // When the selected provider's key is unset, callers use their deterministic
+  // fallbacks (router → rule-based; specialists → plain-text renderers).
+  if (!c.isRegistered(LLM_CLIENT)) {
+    c.register(LLM_CLIENT, {
+      useFactory: instanceCachingFactory((dep) => LlmClientFactory.create(dep.resolve(EnvConfig))),
+    });
+  }
+
   if (!c.isRegistered(OrchestratorPromptService)) {
     c.registerSingleton(OrchestratorPromptService);
   }
@@ -250,7 +266,7 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
     c.registerSingleton(SpecialistRegistry);
   }
   if (!c.isRegistered(ROUTER_LLM_CLIENT)) {
-    c.registerSingleton(ROUTER_LLM_CLIENT, AnthropicRouterLlmClient);
+    c.registerSingleton(ROUTER_LLM_CLIENT, LlmRouterClient);
   }
   if (!c.isRegistered(JakeOrchestrator)) {
     c.registerSingleton(JakeOrchestrator);

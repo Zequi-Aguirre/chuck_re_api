@@ -114,6 +114,9 @@ Known, fixed, or generated values — set once and move on.
 | `CREDIT_COST_ENRICHMENT` | *(optional)* Credits per enriched record. Default `1`. |
 | `CREDIT_COST_SKIP_TRACE` | *(optional)* Extra credits per skip-trace. Default `2`. |
 | `ADMIN_SESSION_TTL_HOURS` | *(optional)* Admin JWT lifetime in hours. Default `12`. |
+| `LLM_PROVIDER` | *(optional)* Which provider backs Jake's router + specialist writers (JAK-141). `openai` (default) or `anthropic`. Change without redeploy. |
+| `OPENAI_MODEL` | *(optional)* OpenAI model when `LLM_PROVIDER=openai`. Default `gpt-4o`. |
+| `ANTHROPIC_MODEL` | *(optional)* Anthropic model when `LLM_PROVIDER=anthropic`. Default `claude-opus-4-8`. |
 | `REDIS_PROVIDER` | *(optional)* Default `upstash`. Leave unset. |
 | `REDIS_URL` | *(optional)* Local Redis URL, default `redis://localhost:6379`. Not used with Upstash. |
 | `ENRICH_QUEUE_NAME` | *(optional)* BullMQ queue name, default `lead-enrichment`. |
@@ -126,6 +129,8 @@ No default exists — get each from the source noted.
 
 | Var | What it is + where to get it |
 |---|---|
+| `OPENAI_API_KEY` | **Primary LLM key (JAK-141).** Powers Jake's router (intent classification) AND every specialist writer (property report / skip-trace / comps) on the default provider `openai` / model `gpt-4o`. From platform.openai.com → API keys. App-level Doppler secret, **never** stored in the DB, never in a UI. Unset → the router + writers use their deterministic fallbacks (no AI-written replies, no spend) — Jake still runs. |
+| `ANTHROPIC_API_KEY` | *(optional — only when `LLM_PROVIDER=anthropic`)* Runs the SAME router + writers on Claude instead. From console.anthropic.com. App-level Doppler secret, **never** in the DB. Leave unset when using OpenAI. |
 | `JAKE_GATEWAY_GHL_API_KEY` | **Private Integration token of your Jake GHL sub-account** — the one shared "Jake" sub-account that fronts tier-1 / trial texting. In that GHL sub-account: Settings → Private Integrations → create one, copy the token. App-level only, **never** stored in the DB. |
 | `JAKE_GATEWAY_LOCATION_ID` | **That same sub-account's Location ID.** GHL → Settings → Business Profile (or the `location/` segment in the dashboard URL). |
 | `UPSTASH_REDIS_REST_URL` | REST endpoint of an **Upstash Redis** database. Upstash console → your DB → REST API. **Needed for enrichment**; text-Jake works without it. |
@@ -143,8 +148,10 @@ Not needed for staging bring-up — wire later when GHL Marketplace OAuth lands.
 | `GHL_CLIENT_SECRET` | GHL Marketplace OAuth app client secret (JAK-150, later). |
 
 > **Minimum for a text-Jake-only staging boot:** group A + the two
-> `JAKE_GATEWAY_*` values from group B. Add the Upstash trio + `GHL_WEBHOOK_SECRET`
-> only when you want lead enrichment.
+> `JAKE_GATEWAY_*` values from group B. Add `OPENAI_API_KEY` so the router +
+> specialist writers use gpt-4o (without it they fall back to deterministic,
+> non-AI replies). Add the Upstash trio + `GHL_WEBHOOK_SECRET` only when you want
+> lead enrichment.
 
 ---
 

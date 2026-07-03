@@ -1,6 +1,5 @@
-import { injectable } from "tsyringe";
-import Anthropic from "@anthropic-ai/sdk";
-import { EnvConfig } from "../../config/envConfig.ts";
+import { inject, injectable } from "tsyringe";
+import { LlmClient, LLM_CLIENT } from "../llm/LlmClient.ts";
 import { JakeIntent, JAKE_INTENTS } from "./OrchestratorTypes.ts";
 import { CompParamOverrides } from "../comps/CompsTypes.ts";
 
@@ -44,9 +43,9 @@ export interface RouterClassification {
 
 /**
  * The router's LLM seam. Injected so tests mock it and never hit the network —
- * the router LLM call is Anthropic tokens (not a buyer/credit spend), but it
- * must still be gated out of the unit suite. {@link AnthropicRouterLlmClient} is
- * the production implementation; a mock stands in for tests.
+ * the router LLM call is model tokens (not a buyer/credit spend), but it must
+ * still be gated out of the unit suite. {@link LlmRouterClient} is the production
+ * implementation; a mock stands in for tests.
  */
 export interface RouterLlmClient {
   classify(req: RouterClassifyRequest): Promise<RouterClassification>;
@@ -59,6 +58,14 @@ export const ROUTER_LLM_CLIENT = "RouterLlmClient";
  * The JSON-Schema the model's structured output must satisfy — constrains the
  * classification to a known intent and the reference fields, so the router never
  * has to parse free-form prose.
+ *
+ * Written STRICT-compliant (every property listed in `required`, optionals
+ * expressed as nullable types, `additionalProperties: false` on every object) so
+ * it is accepted verbatim by BOTH providers (JAK-141): OpenAI's `json_schema`
+ * strict mode and Anthropic's `output_config.format`. The router's own
+ * {@link LlmRouterClient.parse} still validates/sanitizes the result, so a
+ * `null` compParams (non-comps message) collapses to an absent key exactly as
+ * before.
  */
 const CLASSIFICATION_SCHEMA = {
   type: "object",
@@ -82,37 +89,48 @@ const CLASSIFICATION_SCHEMA = {
       type: ["object", "null"],
       additionalProperties: false,
       description:
-        "For a comps request, ONLY the comp parameters the user explicitly named in this message (else null). Omit any field they did not mention.",
+        "For a comps request, ONLY the comp parameters the user explicitly named in this message (else null). Use null for any field they did not mention.",
       properties: {
-        radiusMiles: { type: "number", description: "Search radius in miles, if the user gave one." },
-        count: { type: "integer", description: "How many comparable homes the user asked for." },
-        monthsBack: { type: "integer", description: "Recency window in months, if the user gave one." },
-        bedsTolerance: { type: "integer", description: "Bedroom tolerance (+/-), if the user gave one." },
-        bathsTolerance: { type: "integer", description: "Bathroom tolerance (+/-), if the user gave one." },
-        sqftTolerancePct: { type: "integer", description: "Square-foot tolerance percent, if the user gave one." },
+        radiusMiles: { type: ["number", "null"], description: "Search radius in miles, if the user gave one." },
+        count: { type: ["integer", "null"], description: "How many comparable homes the user asked for." },
+        monthsBack: { type: ["integer", "null"], description: "Recency window in months, if the user gave one." },
+        bedsTolerance: { type: ["integer", "null"], description: "Bedroom tolerance (+/-), if the user gave one." },
+        bathsTolerance: { type: ["integer", "null"], description: "Bathroom tolerance (+/-), if the user gave one." },
+        sqftTolerancePct: { type: ["integer", "null"], description: "Square-foot tolerance percent, if the user gave one." },
       },
+      required: [
+        "radiusMiles",
+        "count",
+        "monthsBack",
+        "bedsTolerance",
+        "bathsTolerance",
+        "sqftTolerancePct",
+      ],
     },
   },
-  required: ["intent", "targetAddress", "addressOrdinal", "userFacingNote"],
+  required: ["intent", "targetAddress", "addressOrdinal", "userFacingNote", "compParams"],
 } as const;
 
 /**
- * Production router LLM: Claude via the Anthropic SDK with STRUCTURED OUTPUT
- * (JAK-135). The admin-editable orchestrator prompt is the STYLE half of the
- * system message; the HARD schema/behavior rules are appended in code (like the
- * JAK-131 report guardrails) so an admin edit can never break classification.
+ * Production router LLM (JAK-135, provider-agnostic since JAK-141): classifies via
+ * the shared {@link LlmClient} STRUCTURED-OUTPUT seam — OpenAI (default, gpt-4o) or
+ * Anthropic (Claude), whichever LLM_PROVIDER selects — so the same typed plan comes
+ * back regardless of provider. The admin-editable orchestrator prompt is the STYLE
+ * half of the system message; the HARD schema/behavior rules are appended in code
+ * (like the JAK-131 report guardrails) so an admin edit can never break
+ * classification.
  *
  * Reliability mirrors {@link import("../PropertyReportWriter").PropertyReportWriter}:
- * Jake must ALWAYS route, so if the key is unset or the call errors/times out we
- * fall back to a deterministic classification (address → report, "OK" → refresh,
- * else chitchat). That fallback is also the offline/dev path — it makes NO
- * network call and NO paid spend. The API key is an app-level Doppler secret
- * ({@link EnvConfig.anthropicApiKey}) — NEVER hardcoded, never logged.
+ * Jake must ALWAYS route, so if the selected provider's key is unset or the call
+ * errors/times out we fall back to a deterministic classification (address →
+ * report, "OK" → refresh, else chitchat). That fallback is also the offline/dev
+ * path — it makes NO network call and NO paid spend. Keys are app-level Doppler
+ * secrets held inside the injected {@link LlmClient} — NEVER hardcoded, never logged.
  */
 @injectable()
-export class AnthropicRouterLlmClient implements RouterLlmClient {
-  private static readonly TIMEOUT_MS = 8_000;
+export class LlmRouterClient implements RouterLlmClient {
   private static readonly MAX_TOKENS = 1_024;
+  private static readonly SCHEMA_NAME = "router_classification";
 
   /** The always-on hard rules, appended AFTER the admin prompt (uneditable). */
   private static readonly HARD_RULES = [
@@ -122,7 +140,7 @@ export class AnthropicRouterLlmClient implements RouterLlmClient {
     "- report_refresh: a bare affirmative (OK / yes / yeah / sure) confirming a fresh paid copy of the last address.",
     "- skip_trace: the user wants owner contact info / to skip-trace an owner.",
     "- comps: the user wants comparable sales / a CMA / comps.",
-    "- For a comps request, extract into compParams ONLY the search parameters the user explicitly named — radius (miles), number of comps, timeframe (months), bed/bath/sqft tolerance. Omit anything they did not say; use null when they named none. Never guess parameter values.",
+    "- For a comps request, extract into compParams ONLY the search parameters the user explicitly named — radius (miles), number of comps, timeframe (months), bed/bath/sqft tolerance. Use null for anything they did not say. Never guess parameter values.",
     "- chitchat: a greeting, thanks, or anything unrecognized.",
     "- If the user referenced a PRIOR address (e.g. 'the 2nd address I sent', 'the last one', 'that one'), set addressOrdinal to its 1-based position in the resolved-address list and leave targetAddress null.",
     "- If the user typed a NEW explicit address in this message, set targetAddress to it and leave addressOrdinal null.",
@@ -130,41 +148,36 @@ export class AnthropicRouterLlmClient implements RouterLlmClient {
     "- Reply ONLY with the JSON object. No emojis, no prose outside the JSON.",
   ].join("\n");
 
-  /** Lazily-built Anthropic client (cached). Protected so tests can substitute it. */
-  private anthropic?: Anthropic;
-
-  constructor(private readonly env: EnvConfig) {}
+  constructor(@inject(LLM_CLIENT) private readonly llm: LlmClient) {}
 
   async classify(req: RouterClassifyRequest): Promise<RouterClassification> {
-    try {
-      const raw = await this.generateWithLlm(req);
-      const parsed = this.parse(raw);
-      if (parsed) return parsed;
-      console.warn("⚠️ AnthropicRouterLlmClient: unusable output — using deterministic fallback.");
-    } catch (err) {
-      console.error(
-        "⚠️ AnthropicRouterLlmClient: classification failed — using deterministic fallback:",
-        err instanceof Error ? err.message : "unknown error"
-      );
+    // No key for the selected provider → skip the call entirely and route
+    // deterministically (no network, no spend).
+    if (this.llm.isAvailable) {
+      try {
+        const raw = await this.generateWithLlm(req);
+        const parsed = this.parse(raw);
+        if (parsed) return parsed;
+        console.warn("⚠️ LlmRouterClient: unusable output — using deterministic fallback.");
+      } catch (err) {
+        console.error(
+          "⚠️ LlmRouterClient: classification failed — using deterministic fallback:",
+          err instanceof Error ? err.message : "unknown error"
+        );
+      }
     }
     return this.deterministicFallback(req);
   }
 
-  /** Call Claude with structured output. Throws on error/timeout (caught by {@link classify}). */
+  /** Call the LLM with structured output. Throws on error/timeout (caught by {@link classify}). */
   protected async generateWithLlm(req: RouterClassifyRequest): Promise<string> {
-    const response = await this.client().messages.create(
-      {
-        model: this.env.anthropicModel,
-        max_tokens: AnthropicRouterLlmClient.MAX_TOKENS,
-        thinking: { type: "adaptive" },
-        system: this.composeSystemPrompt(req.systemPrompt),
-        output_config: { format: { type: "json_schema", schema: CLASSIFICATION_SCHEMA } },
-        messages: [{ role: "user", content: this.buildUserPayload(req) }],
-      } as Anthropic.MessageCreateParamsNonStreaming,
-      { timeout: AnthropicRouterLlmClient.TIMEOUT_MS }
-    );
-    const block = response.content.find((b) => b.type === "text");
-    return block && block.type === "text" ? block.text : "";
+    return this.llm.generateStructured({
+      system: this.composeSystemPrompt(req.systemPrompt),
+      user: this.buildUserPayload(req),
+      maxTokens: LlmRouterClient.MAX_TOKENS,
+      schema: CLASSIFICATION_SCHEMA as unknown as Record<string, unknown>,
+      schemaName: LlmRouterClient.SCHEMA_NAME,
+    });
   }
 
   /** Persona + admin STYLE prompt + always-on hard rules (rules LAST, controlling). */
@@ -175,7 +188,7 @@ export class AnthropicRouterLlmClient implements RouterLlmClient {
       "=== STYLE (admin-configurable) ===",
       style.trim(),
       "",
-      AnthropicRouterLlmClient.HARD_RULES,
+      LlmRouterClient.HARD_RULES,
     ].join("\n");
   }
 
@@ -275,18 +288,5 @@ export class AnthropicRouterLlmClient implements RouterLlmClient {
       return { intent: "report_refresh", targetAddress: null, addressOrdinal: null, userFacingNote: "" };
     }
     return { intent: "chitchat", targetAddress: null, addressOrdinal: null, userFacingNote: "" };
-  }
-
-  /** Build (and cache) the Anthropic client. Protected so tests can substitute it. */
-  protected client(): Anthropic {
-    if (this.anthropic) return this.anthropic;
-    if (!this.env.anthropicApiKey) {
-      throw new Error("ANTHROPIC_API_KEY is not configured");
-    }
-    this.anthropic = new Anthropic({
-      apiKey: this.env.anthropicApiKey,
-      timeout: AnthropicRouterLlmClient.TIMEOUT_MS,
-    });
-    return this.anthropic;
   }
 }
