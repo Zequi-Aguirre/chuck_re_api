@@ -7,7 +7,7 @@
 
 Epic: `ghl-enrichment`
 
-## In progress (13)
+## In progress (14)
 - [ ] **JAK-115** (P0) Master GHL gateway key + mode-aware text-Jake (gateway vs own_number) — depends: JAK-102, JAK-109, JAK-114
 - [ ] **JAK-118** (P2) Remove dead scaffold-clone env vars (VITE_ASKZACK_CLIENT_URL/SERVER_URL, VITE_ASKZOE_SERVER_URL, LOCAL_NGROK_URL)
 - [ ] **JAK-120** (P1) Comprehensive DEPLOY.md refresh: single up-to-date staging setup doc — depends: JAK-116, JAK-117, JAK-118, JAK-119
@@ -21,6 +21,7 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-129** (P0) Admin can grant credits to a text-Jake customer by phone — depends: JAK-115, JAK-109, JAK-113
 - [ ] **JAK-130** (P0) Reformat text-Jake reply into structured 'Jake Property Report' — depends: JAK-115, JAK-128
 - [ ] **JAK-131** (P1) Admin-editable AI prompt for the Jake Property Report — depends: JAK-130
+- [ ] **JAK-132** (P1) Feed FULL PropertySearch response to AI report writer; guarantee mortgage/foreclosure/lien flags surface — depends: JAK-130, JAK-131
 
 ## Open (4)
 - [ ] **JAK-103** (P0) Token refresh service — depends: JAK-102

@@ -2,6 +2,7 @@ import { PropertyReportWriter } from "../PropertyReportWriter";
 import { PropertyReportPromptService } from "../PropertyReportPromptService";
 import { EnvConfig } from "../../config/envConfig";
 import { PropertyReportData } from "../../types/PropertyReport";
+import { RealEstateApiPropertySearchResult } from "../../types/RealEstateApi";
 
 /**
  * JAK-130/131 — the LLM writes the "Jake Property Report" SMS, with a
@@ -62,6 +63,44 @@ const fullData: PropertyReportData = {
     mlsListed: false,
 };
 
+/**
+ * The COMPLETE PropertySearch record (JAK-132). The writer feeds this WHOLE
+ * object to the LLM — including money + distress fields the curated
+ * PropertyReportData subset never carried — so the model can surface them.
+ */
+const fullRecord: RealEstateApiPropertySearchResult = {
+    id: "prop_42",
+    address: "742 Evergreen Terrace, Springfield, IL 62704",
+    propertyType: "Single Family",
+    bedrooms: 4,
+    bathrooms: 2,
+    estimatedValue: 325000,
+    owner1FullName: "Homer Simpson",
+    openMortgageBalance: 148000,
+    estimatedMortgagePayment: 1350,
+    estimatedEquity: 177000,
+    foreclosure: false,
+    preForeclosure: true,
+    reo: false,
+    auction: false,
+    taxLien: true,
+    judgment: false,
+};
+
+/** Curated data carrying the JAK-132 financial + distress fields (for fallback). */
+const distressData: PropertyReportData = {
+    addressLine1: "742 Evergreen Terrace",
+    addressLine2: "Springfield, IL 62704",
+    owner1: "Homer Simpson",
+    estimatedMortgageBalance: 148000,
+    estimatedMortgagePayment: 1350,
+    estimatedEquity: 177000,
+    preForeclosure: true,
+    taxLien: true,
+    foreclosure: false,
+    judgment: false,
+};
+
 describe("PropertyReportWriter (JAK-130/131)", () => {
     describe("prompt composition", () => {
         it("carries the verified data + the guardrails + the editable style", () => {
@@ -83,6 +122,36 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
             expect(user.content).toContain(JSON.stringify(fullData, null, 2));
             expect(user.content).toContain("742 Evergreen Terrace");
             expect(user.content).toContain("Homer Simpson");
+        });
+
+        it("feeds the WHOLE PropertySearch record to the LLM, not just the curated subset (JAK-132)", () => {
+            const [system, user] = makeWriter(DEFAULT_STYLE).buildMessages(
+                fullData,
+                DEFAULT_STYLE,
+                fullRecord
+            );
+
+            expect(system.role).toBe("system");
+            expect(user.role).toBe("user");
+
+            // The COMPLETE record rides along as JSON — including the money +
+            // distress fields the curated subset never carried.
+            expect(user.content).toContain(JSON.stringify(fullRecord, null, 2));
+            expect(user.content).toContain("openMortgageBalance");
+            expect(user.content).toContain("148000");
+            expect(user.content).toContain("estimatedMortgagePayment");
+            expect(user.content).toContain("estimatedEquity");
+            expect(user.content).toContain("preForeclosure");
+            expect(user.content).toContain("taxLien");
+
+            // The derived highlights still ride along beside the raw record so the
+            // friendly labels aren't lost.
+            expect(user.content).toContain(JSON.stringify(fullData, null, 2));
+            expect(user.content).toContain("Out-of-State Absentee Owner");
+
+            // Guardrails unchanged with a full record present.
+            expect(system.content).toMatch(/NO EMOJIS/);
+            expect(system.content).toMatch(/only the exact values/i);
         });
 
         it("keeps the HARD guardrails even when the stored style prompt omits/contradicts them", () => {
@@ -229,6 +298,63 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
             expect(out).toContain("Ownership\n• Jane Doe");
             expect(out.endsWith("Get more property info\nGoTextJake.com")).toBe(true);
             expect(out).not.toMatch(EMOJI);
+        });
+
+        it("includes Financials + true distress/lien flags when present (JAK-132)", async () => {
+            const w = makeWriter(DEFAULT_STYLE);
+            w.create.mockRejectedValue(new Error("down"));
+
+            const out = await w.write(distressData);
+
+            // Financials — estimated dollar figures from the SAME lookup.
+            expect(out).toContain("Financials");
+            expect(out).toContain("• Estimated Mortgage Balance: $148,000");
+            expect(out).toContain("• Estimated Mortgage Payment: $1,350");
+            expect(out).toContain("• Estimated Equity: $177,000");
+
+            // Distress / Liens — ONLY the true flags surface (Yes/No, never dollars).
+            expect(out).toContain("Distress / Liens");
+            expect(out).toContain("• Pre-Foreclosure");
+            expect(out).toContain("• Tax Lien");
+
+            // False flags are never printed, and no raw field names / booleans leak.
+            expect(out).not.toMatch(/^• Foreclosure$/m); // foreclosure:false -> no bare bullet
+            expect(out).not.toMatch(/Judgment/); // judgment:false -> absent
+            expect(out).not.toMatch(/\bfalse\b|\btrue\b|null|undefined/);
+            expect(out).not.toMatch(EMOJI);
+            expect(out.endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+        });
+
+        it("shows one reassuring line when every distress/lien flag is a known false (JAK-132)", async () => {
+            const w = makeWriter(DEFAULT_STYLE);
+            w.create.mockRejectedValue(new Error("down"));
+            const clean: PropertyReportData = {
+                addressLine1: "1 Clean St",
+                foreclosure: false,
+                preForeclosure: false,
+                taxLien: false,
+                judgment: false,
+            };
+
+            const out = await w.write(clean);
+
+            expect(out).toContain("Distress / Liens\n• No liens or foreclosure on record");
+            expect(out).not.toMatch(/\bfalse\b|null|undefined/);
+        });
+
+        it("omits Financials + Distress entirely when those fields are absent (JAK-132)", async () => {
+            const w = makeWriter(DEFAULT_STYLE);
+            w.create.mockRejectedValue(new Error("down"));
+            const sparse: PropertyReportData = {
+                addressLine1: "9 Sparse Ln",
+                owner1: "Jane Doe",
+            };
+
+            const out = await w.write(sparse);
+
+            expect(out).not.toContain("Financials");
+            expect(out).not.toContain("Distress / Liens");
+            expect(out).not.toMatch(/null|undefined/);
         });
     });
 });

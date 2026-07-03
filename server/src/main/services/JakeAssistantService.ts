@@ -241,7 +241,10 @@ export class JakeAssistantService {
         if (!property) {
             return `I couldn't find property info for "${address}". Double-check the address and try again.`;
         }
-        return this.reportWriter.write(this.assembleReportData(property, address));
+        // The LLM path gets the COMPLETE PropertySearch record (raw `property`) so
+        // it can dynamically surface money + distress signals we don't curate; the
+        // deterministic fallback still runs off the assembled, verified subset.
+        return this.reportWriter.write(this.assembleReportData(property, address), property);
     }
 
     /**
@@ -288,6 +291,23 @@ export class JakeAssistantService {
         if (absentee) data.absenteeStatus = absentee;
         const yearsOwned = this.yearsOwned(property);
         if (yearsOwned != null) data.yearsOwned = yearsOwned;
+
+        // Financials (JAK-132): estimated dollar figures from the SAME call.
+        if (property.openMortgageBalance != null) data.estimatedMortgageBalance = property.openMortgageBalance;
+        if (property.estimatedMortgagePayment != null) data.estimatedMortgagePayment = property.estimatedMortgagePayment;
+        if (property.estimatedEquity != null) data.estimatedEquity = property.estimatedEquity;
+
+        // Distress / liens (JAK-132): Yes/No flags only. Copy the boolean when the
+        // API actually returned one (true OR false) so the fallback can tell
+        // "checked, none on record" from "unknown". Never a dollar amount.
+        if (typeof property.foreclosure === "boolean") data.foreclosure = property.foreclosure;
+        if (typeof property.preForeclosure === "boolean") data.preForeclosure = property.preForeclosure;
+        if (typeof property.reo === "boolean") data.reo = property.reo;
+        if (typeof property.auction === "boolean") data.auction = property.auction;
+        const auctionDate = this.text(property.auctionDate);
+        if (auctionDate) data.auctionDate = this.formatDate(auctionDate);
+        if (typeof property.taxLien === "boolean") data.taxLien = property.taxLien;
+        if (typeof property.judgment === "boolean") data.judgment = property.judgment;
 
         if (property.lastSaleDate) data.lastSoldDate = this.formatDate(property.lastSaleDate);
         if (property.lastSaleAmount != null) data.salePrice = property.lastSaleAmount;
