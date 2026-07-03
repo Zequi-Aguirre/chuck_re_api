@@ -255,6 +255,73 @@ export type RealEstateApiPropertyDetailResponse = {
     data: RealEstateApiPropertyDetail;
 };
 
+/**
+ * One comparable-sale record on a /v3/PropertyComps result (JAK-137). Field
+ * locations/casing vary by provider account, so everything is optional and an
+ * index signature keeps the mapping forward-compatible; the specialist reads
+ * address/price/beds/baths/sqft/distance/date defensively and NEVER fabricates a
+ * value that isn't present. `squareFeet` is the comp's living area; `distance` is
+ * miles from the subject; `lastSaleAmount`/`lastSaleDate` are the sold price/date.
+ */
+export type RealEstateApiCompRecord = {
+    id?: string | number;
+    address?: RealEstateApiAddress | string | null;
+    distance?: number | null; // miles from the subject property
+    bedrooms?: number | null;
+    bathrooms?: number | null;
+    squareFeet?: number | null; // living area
+    lotSquareFeet?: number | null;
+    yearBuilt?: number | null;
+    propertyType?: string | null;
+    lastSaleAmount?: number | null;
+    lastSaleDate?: string | null;
+    mlsSoldPrice?: number | null;
+    mlsLastStatusDate?: string | null;
+    estimatedValue?: number | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    [key: string]: unknown;
+};
+
+/**
+ * The SUBJECT property echoed back by /v3/PropertyComps (JAK-137). Used to apply
+ * the bed/bath/sqft tolerance filters against each comp; every field is optional
+ * and an index signature keeps it null-safe.
+ */
+export type RealEstateApiCompsSubject = {
+    id?: string | number;
+    address?: RealEstateApiAddress | string | null;
+    bedrooms?: number | null;
+    bathrooms?: number | null;
+    squareFeet?: number | null;
+    livingSquareFeet?: number | null;
+    lotSquareFeet?: number | null;
+    yearBuilt?: number | null;
+    lastSaleAmount?: number | null;
+    lastSaleDate?: string | null;
+    estimatedValue?: number | null;
+    [key: string]: unknown;
+};
+
+/**
+ * A /v3/PropertyComps response (JAK-137) — comparable sales for a subject
+ * property. The provider ships the comps under `comps` or `data` depending on the
+ * account/version, the subject under `subject`, and an AVM point estimate + range
+ * under `reapiAvm`/`reapiAvmLow`/`reapiAvmHigh`; everything is optional and an
+ * index signature keeps the mapping forward-compatible. (v2/PropertyComps was
+ * deprecated 2026-01-01, so this integrates the current v3 endpoint.)
+ */
+export type RealEstateApiPropertyCompsResponse = {
+    comps?: RealEstateApiCompRecord[] | null;
+    data?: RealEstateApiCompRecord[] | null;
+    subject?: RealEstateApiCompsSubject | null;
+    reapiAvm?: number | null;
+    reapiAvmLow?: number | null;
+    reapiAvmHigh?: number | null;
+    recordCount?: number | null;
+    [key: string]: unknown;
+};
+
 export type MailerEnrichmentResponse = {
     propertyAddress: {
         label: string | null;

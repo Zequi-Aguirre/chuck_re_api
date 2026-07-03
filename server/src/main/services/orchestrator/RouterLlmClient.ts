@@ -2,6 +2,7 @@ import { injectable } from "tsyringe";
 import Anthropic from "@anthropic-ai/sdk";
 import { EnvConfig } from "../../config/envConfig.ts";
 import { JakeIntent, JAKE_INTENTS } from "./OrchestratorTypes.ts";
+import { CompParamOverrides } from "../comps/CompsTypes.ts";
 
 /** The context the router LLM classifies one inbound message against. */
 export interface RouterClassifyRequest {
@@ -32,6 +33,13 @@ export interface RouterClassification {
   targetAddress: string | null;
   addressOrdinal: number | null;
   userFacingNote: string;
+  /**
+   * For a comps request (JAK-137), any comp parameters the texter named in the
+   * message ("comps within 1 mile, last 6 months, 3 similar homes"). Only the
+   * fields they specified are set; omitted/absent when none were given (the comps
+   * specialist then uses the admin defaults). Clamped downstream.
+   */
+  compParams?: CompParamOverrides | null;
 }
 
 /**
@@ -70,6 +78,20 @@ const CLASSIFICATION_SCHEMA = {
       type: "string",
       description: "A short, plain, emoji-free note describing what you're doing.",
     },
+    compParams: {
+      type: ["object", "null"],
+      additionalProperties: false,
+      description:
+        "For a comps request, ONLY the comp parameters the user explicitly named in this message (else null). Omit any field they did not mention.",
+      properties: {
+        radiusMiles: { type: "number", description: "Search radius in miles, if the user gave one." },
+        count: { type: "integer", description: "How many comparable homes the user asked for." },
+        monthsBack: { type: "integer", description: "Recency window in months, if the user gave one." },
+        bedsTolerance: { type: "integer", description: "Bedroom tolerance (+/-), if the user gave one." },
+        bathsTolerance: { type: "integer", description: "Bathroom tolerance (+/-), if the user gave one." },
+        sqftTolerancePct: { type: "integer", description: "Square-foot tolerance percent, if the user gave one." },
+      },
+    },
   },
   required: ["intent", "targetAddress", "addressOrdinal", "userFacingNote"],
 } as const;
@@ -100,6 +122,7 @@ export class AnthropicRouterLlmClient implements RouterLlmClient {
     "- report_refresh: a bare affirmative (OK / yes / yeah / sure) confirming a fresh paid copy of the last address.",
     "- skip_trace: the user wants owner contact info / to skip-trace an owner.",
     "- comps: the user wants comparable sales / a CMA / comps.",
+    "- For a comps request, extract into compParams ONLY the search parameters the user explicitly named — radius (miles), number of comps, timeframe (months), bed/bath/sqft tolerance. Omit anything they did not say; use null when they named none. Never guess parameter values.",
     "- chitchat: a greeting, thanks, or anything unrecognized.",
     "- If the user referenced a PRIOR address (e.g. 'the 2nd address I sent', 'the last one', 'that one'), set addressOrdinal to its 1-based position in the resolved-address list and leave targetAddress null.",
     "- If the user typed a NEW explicit address in this message, set targetAddress to it and leave addressOrdinal null.",
@@ -197,7 +220,40 @@ export class AnthropicRouterLlmClient implements RouterLlmClient {
         ? ordinalRaw
         : null;
     const userFacingNote = typeof obj.userFacingNote === "string" ? obj.userFacingNote : "";
-    return { intent: intent as JakeIntent, targetAddress, addressOrdinal, userFacingNote };
+    const classification: RouterClassification = {
+      intent: intent as JakeIntent,
+      targetAddress,
+      addressOrdinal,
+      userFacingNote,
+    };
+    const compParams = this.parseCompParams(obj.compParams);
+    if (compParams) classification.compParams = compParams;
+    return classification;
+  }
+
+  /**
+   * Pull the texter-named comp parameters (JAK-137) out of the model's object,
+   * keeping ONLY finite-number fields we recognize — so a stray/garbage value never
+   * reaches the specialist. Returns null when nothing usable was provided; the key
+   * is then omitted so non-comps classifications stay exactly as before.
+   */
+  private parseCompParams(raw: unknown): CompParamOverrides | null {
+    if (!raw || typeof raw !== "object") return null;
+    const src = raw as Record<string, unknown>;
+    const keys: (keyof CompParamOverrides)[] = [
+      "radiusMiles",
+      "count",
+      "monthsBack",
+      "bedsTolerance",
+      "bathsTolerance",
+      "sqftTolerancePct",
+    ];
+    const out: CompParamOverrides = {};
+    for (const key of keys) {
+      const value = src[key];
+      if (typeof value === "number" && Number.isFinite(value)) out[key] = value;
+    }
+    return Object.keys(out).length ? out : null;
   }
 
   /**

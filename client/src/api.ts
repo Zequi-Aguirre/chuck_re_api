@@ -4,6 +4,10 @@ import {
   AdminUserView,
   LedgerEntryView,
   LocationStatusDetail,
+  CompParams,
+  CompsCostView,
+  CompsParamsView,
+  CompsPromptView,
   LocationStatusSummary,
   OrchestratorPromptView,
   ReportPromptView,
@@ -187,6 +191,44 @@ export const api = {
   },
   async resetSkipTraceCost(): Promise<SkipTraceCostView> {
     return request<SkipTraceCostView>("/skiptrace-cost/reset", { method: "POST" });
+  },
+
+  // --- Comps specialist (JAK-137) ---
+  async getCompsPrompt(): Promise<CompsPromptView> {
+    return request<CompsPromptView>("/comps-prompt");
+  },
+  async updateCompsPrompt(prompt: string): Promise<CompsPromptView> {
+    return request<CompsPromptView>("/comps-prompt", {
+      method: "PUT",
+      body: JSON.stringify({ prompt }),
+    });
+  },
+  async resetCompsPrompt(): Promise<CompsPromptView> {
+    return request<CompsPromptView>("/comps-prompt/reset", { method: "POST" });
+  },
+  async getCompsCost(): Promise<CompsCostView> {
+    return request<CompsCostView>("/comps-cost");
+  },
+  async updateCompsCost(credits: number): Promise<CompsCostView> {
+    return request<CompsCostView>("/comps-cost", {
+      method: "PUT",
+      body: JSON.stringify({ credits }),
+    });
+  },
+  async resetCompsCost(): Promise<CompsCostView> {
+    return request<CompsCostView>("/comps-cost/reset", { method: "POST" });
+  },
+  async getCompsParams(): Promise<CompsParamsView> {
+    return request<CompsParamsView>("/comps-params");
+  },
+  async updateCompsParams(params: CompParams): Promise<CompsParamsView> {
+    return request<CompsParamsView>("/comps-params", {
+      method: "PUT",
+      body: JSON.stringify(params),
+    });
+  },
+  async resetCompsParams(): Promise<CompsParamsView> {
+    return request<CompsParamsView>("/comps-params/reset", { method: "POST" });
   },
 
   // --- admins (JAK-124) ---

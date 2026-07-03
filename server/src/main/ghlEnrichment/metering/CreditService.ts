@@ -163,6 +163,38 @@ export class CreditService {
     });
   }
 
+  // ── Text-Jake comps (JAK-137) ──────────────────────────────────────────────
+  // A comps pull hits the paid /v3/PropertyComps endpoint and costs MORE than a
+  // report, so its price is a distinct, ADMIN-editable knob (CompsSettingsService)
+  // rather than a config constant — the caller passes the resolved cost in. Like
+  // the skip-trace path it bills the texting CUSTOMER's credit account (by phone),
+  // with no per-contact idempotency: each confirmed comps pull is its own billed
+  // action.
+
+  /** True if a customer's credit account can afford a comps pull at `credits`. */
+  async hasCreditsForComps(accountId: string, credits: number): Promise<boolean> {
+    if (credits <= 0) return true;
+    return (await this.ledger.getBalance(accountId)) >= credits;
+  }
+
+  /**
+   * Charge a customer's credit account for one delivered comps pull, atomically.
+   * `credits` is the admin-configured comps cost, recorded as a single `comps`
+   * ledger line. Returns the store's {@link ChargeResult} — `ok:false` if the
+   * balance can't cover it (never a partial charge). No contact id, so repeat
+   * comps pulls each bill independently.
+   */
+  async chargeForComps(input: { accountId: string; credits: number }): Promise<ChargeResult> {
+    if (input.credits <= 0) {
+      return { ok: true, balanceAfter: await this.ledger.getBalance(input.accountId), entries: [] };
+    }
+    return this.ledger.charge({
+      locationId: input.accountId,
+      contactId: null,
+      lines: [{ reason: "comps", amount: input.credits }],
+    });
+  }
+
   /**
    * Grant credits to a location (beta: manual top-up; also refunds/adjustments).
    * Atomic; returns the created ledger entry. Billing automation is deferred.

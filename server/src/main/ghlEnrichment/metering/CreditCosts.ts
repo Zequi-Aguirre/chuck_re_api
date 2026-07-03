@@ -38,6 +38,8 @@ export type CreditLedgerReason =
   | "skip_trace"
   // JAK-115: a tier-1 text-Jake property lookup, billed to the texting customer.
   | "text_lookup"
+  // JAK-137: a tier-1 text-Jake comps (comparable sales) pull, billed to the texter.
+  | "comps"
   | "manual_grant"
   | "adjustment"
   // JAK-111: a compensating entry that reverses an enrichment charge when the

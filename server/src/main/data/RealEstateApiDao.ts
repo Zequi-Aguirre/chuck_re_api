@@ -7,6 +7,7 @@ import { ExternalActionGuard } from "../safety/ExternalActionGuard.ts";
 import { EnrichmentResult } from "../types/LeadEnrichment.ts";
 import {
   MailerEnrichmentResponse,
+  RealEstateApiPropertyCompsResponse,
   RealEstateApiPropertyDetail,
   RealEstateApiPropertyDetailResponse,
   RealEstateApiPropertySearchResponse,
@@ -15,6 +16,22 @@ import {
   RealEstateApiSkipTraceResult,
   RealEstateApiAddress,
 } from "../types/RealEstateApi.ts";
+
+/**
+ * The API-facing comps parameters the DAO passes through to /v3/PropertyComps
+ * (JAK-137). The caller (the comps specialist) resolves + clamps these from the
+ * admin defaults and any texter overrides; the bed/bath/sqft tolerance filters are
+ * applied downstream against the returned subject, so only the three query knobs
+ * the endpoint takes pre-lookup live here.
+ */
+export interface RealEstateApiCompsParams {
+  /** Search radius in miles → max_radius_miles. */
+  radiusMiles: number;
+  /** Max number of comps to return → max_results. */
+  count: number;
+  /** Recency window in months → max_days_back (≈ months * 30). */
+  monthsBack: number;
+}
 
 @injectable()
 export class RealEstateApiDao {
@@ -36,6 +53,13 @@ export class RealEstateApiDao {
    * and no credit is spent — the SAME dev-safety boundary as the property lookups.
    */
   private static readonly DEV_MOCK_SKIPTRACE: RealEstateApiSkipTraceResponse = { data: null };
+  /**
+   * Comps dev mock (JAK-137): a deterministic EMPTY result (never fabricated
+   * comparable sales), so off-prod comps flows resolve to "no comparable sales
+   * found" and no credit is spent — the SAME dev-safety boundary as the property
+   * and skip-trace lookups.
+   */
+  private static readonly DEV_MOCK_COMPS: RealEstateApiPropertyCompsResponse = { comps: [] };
 
   constructor(
     private readonly env: EnvConfig,
@@ -152,6 +176,47 @@ export class RealEstateApiDao {
       return data.data ?? null;
     } catch (err: any) {
       console.error(`❌ SkipTrace error: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Pull COMPARABLE SALES for a property address (JAK-137) — the /v3/PropertyComps
+   * comparables/CMA lookup that backs the text-Jake comps specialist. Returns the
+   * raw response (comps + subject + AVM range) or null on failure. The three query
+   * knobs map to the endpoint's documented params: radius → max_radius_miles,
+   * count → max_results, timeframe → max_days_back (months × 30). The bed/bath/sqft
+   * tolerance filters are applied downstream against the returned subject.
+   *
+   * v2/PropertyComps was deprecated 2026-01-01, so this uses the current
+   * /v3/PropertyComps endpoint. It is a PAID, READ-ONLY lookup, so it funnels
+   * through the SAME {@link paidPost} chokepoint as PropertySearch/PropertyDetail/
+   * SkipTrace: off prod/staging it NEVER spends — the call is echoed and the
+   * deterministic empty dev mock is returned instead of hitting the provider.
+   */
+  public async getCompsByAddress(
+    addressString: string,
+    params: RealEstateApiCompsParams
+  ): Promise<RealEstateApiPropertyCompsResponse | null> {
+    try {
+      const parsed = this.parseAddress(addressString);
+      const address = parsed
+        ? `${parsed.house} ${parsed.street}, ${parsed.city}, ${parsed.state} ${parsed.zip}`.trim()
+        : addressString;
+      const body: Record<string, string | number> = {
+        address,
+        max_radius_miles: params.radiusMiles,
+        max_results: params.count,
+        max_days_back: Math.round(params.monthsBack * 30),
+      };
+
+      return await this.paidPost<RealEstateApiPropertyCompsResponse>(
+        "/v3/PropertyComps",
+        body,
+        RealEstateApiDao.DEV_MOCK_COMPS
+      );
+    } catch (err: any) {
+      console.error(`❌ PropertyComps error: ${err.message}`);
       return null;
     }
   }

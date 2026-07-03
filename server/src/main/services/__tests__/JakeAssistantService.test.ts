@@ -18,6 +18,10 @@ import { SkipTraceReportWriter } from "../skiptrace/SkipTraceReportWriter";
 import { SkipTraceMemoryService } from "../skiptrace/SkipTraceMemoryService";
 import { SkipTraceSettingsService } from "../skiptrace/SkipTraceSettingsService";
 import { SkipTracePendingRow, SkipTraceRow } from "../skiptrace/SkipTraceTypes";
+import { CompsReportWriter } from "../comps/CompsReportWriter";
+import { CompsMemoryService } from "../comps/CompsMemoryService";
+import { CompsSettingsService } from "../comps/CompsSettingsService";
+import { CompsPendingRow, CompsRow, DEFAULT_COMP_PARAMS } from "../comps/CompsTypes";
 
 /**
  * JakeAssistantService is mode-aware (JAK-115). These tests pin the two text
@@ -42,10 +46,40 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
   let skipTraceWriter: MockProxy<SkipTraceReportWriter>;
   let skipTrace: MockProxy<SkipTraceMemoryService>;
   let skipTraceSettings: MockProxy<SkipTraceSettingsService>;
+  let compsWriter: MockProxy<CompsReportWriter>;
+  let comps: MockProxy<CompsMemoryService>;
+  let compsSettings: MockProxy<CompsSettingsService>;
   let service: JakeAssistantService;
 
   const reportSpecialist = () => [{ name: "report", needsConfirmation: false, estimatedCredits: 1 }];
   const skipTraceSpecialist = () => [{ name: "skip_trace", needsConfirmation: true, estimatedCredits: 3 }];
+  const compsSpecialist = () => [{ name: "comps", needsConfirmation: true, estimatedCredits: 3 }];
+
+  const compsRow = (over: Partial<CompsRow> = {}): CompsRow => ({
+    id: "cmp_1",
+    customer_id: "cust_x",
+    phone: "+15559990000",
+    message_id: "msg_1",
+    normalized_target: "742 Evergreen Terrace, Springfield, IL 62704",
+    target_key: "742 evergreen terrace, springfield, il 62704#r1|c5|m12|bd1|ba1|sf25",
+    params: DEFAULT_COMP_PARAMS,
+    comps_record: { comps: [{ lastSaleAmount: 400000 }] },
+    report_text:
+      "Comparable sales for 742 Evergreen Terrace\n123 Nearby St — $400,000\n\nGet more property info\nGoTextJake.com",
+    fetched_at: new Date("2026-07-01T00:00:00Z"),
+    created_at: new Date("2026-07-01T00:00:00Z"),
+    ...over,
+  });
+
+  const compsPendingRow = (over: Partial<CompsPendingRow> = {}): CompsPendingRow => ({
+    phone: "+15559990000",
+    customer_id: "cust_+15559990000",
+    target: "742 Evergreen Terrace, Springfield, IL 62704",
+    params: DEFAULT_COMP_PARAMS,
+    credits: 3,
+    created_at: new Date("2026-07-01T00:00:00Z"),
+    ...over,
+  });
 
   const skipTraceRow = (over: Partial<SkipTraceRow> = {}): SkipTraceRow => ({
     id: "st_1",
@@ -123,6 +157,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     skipTraceWriter = mock<SkipTraceReportWriter>();
     skipTrace = mock<SkipTraceMemoryService>();
     skipTraceSettings = mock<SkipTraceSettingsService>();
+    compsWriter = mock<CompsReportWriter>();
+    comps = mock<CompsMemoryService>();
+    compsSettings = mock<CompsSettingsService>();
 
     // The router is exercised in its own suite (JakeOrchestrator.test.ts); here it
     // defaults to the deterministic classification the pre-router single path used
@@ -175,6 +212,21 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     credits.chargeForSkipTrace.mockResolvedValue({ ok: true, balanceAfter: 7, entries: [] });
     credits.getBalance.mockResolvedValue(10);
 
+    // Comps (JAK-137) defaults: no cache, no pending offer, default params, cost 3,
+    // credits available, writer echoes a clean reply. Individual tests override.
+    comps.checkCache.mockResolvedValue(null);
+    comps.freshPending.mockResolvedValue(null);
+    comps.setPending.mockResolvedValue(compsPendingRow());
+    comps.clearPending.mockResolvedValue(undefined);
+    comps.recordComps.mockResolvedValue(compsRow());
+    compsSettings.defaultParams.mockResolvedValue(DEFAULT_COMP_PARAMS);
+    compsSettings.costOfComps.mockResolvedValue(3);
+    compsWriter.write.mockResolvedValue(
+      "Comparable sales for 742 Evergreen Terrace\n123 Nearby St — $400,000\n\nGet more property info\nGoTextJake.com"
+    );
+    credits.hasCreditsForComps.mockResolvedValue(true);
+    credits.chargeForComps.mockResolvedValue({ ok: true, balanceAfter: 7, entries: [] });
+
     customers.resolveByPhone.mockImplementation(async (phone) => customerFor(phone));
     credits.hasCreditsForTextLookup.mockResolvedValue(true);
     credits.costOfTextLookup.mockReturnValue(1);
@@ -196,7 +248,10 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       orchestrator,
       skipTraceWriter,
       skipTrace,
-      skipTraceSettings
+      skipTraceSettings,
+      compsWriter,
+      comps,
+      compsSettings
     );
   });
 
@@ -764,27 +819,6 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(credits.chargeForTextLookup).not.toHaveBeenCalled();
     });
 
-    it("comps intent → 'coming soon' reply, NO spend", async () => {
-      orchestrator.plan.mockResolvedValue({
-        intent: "comps",
-        targetEntity: null,
-        specialists: [{ name: "comps", needsConfirmation: true, estimatedCredits: 2 }],
-        userFacingNote: "",
-      });
-
-      const result = await service.handleInboundMessage({
-        contactId: "ct_1",
-        senderPhone: "+15559990000",
-        message: "what did nearby homes sell for?",
-      });
-
-      expect(result.intent).toBe("comps");
-      expect(result.charged).toBe(0);
-      expect(credits.chargeForTextLookup).not.toHaveBeenCalled();
-      const sent = (gateway.sendSms.mock.calls[0]![0] as { message: string }).message;
-      expect(sent.toLowerCase()).toContain("coming soon");
-    });
-
     it("chitchat intent → guidance reply, emoji-free with the footer, no spend", async () => {
       orchestrator.plan.mockResolvedValue({
         intent: "chitchat",
@@ -962,6 +996,185 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(skipTrace.setPending).toHaveBeenCalledWith(
         expect.objectContaining({ target: "9 B Rd, Town, CA 90000", credits: 3 })
       );
+    });
+  });
+
+  // ── Comps / CMA (JAK-137): credit-gated, confirm-before-spend, tunable params,
+  //    cache/free-reserve keyed by (phone + address + param-set).
+  describe("comps (JAK-137)", () => {
+    const TARGET = "742 Evergreen Terrace, Springfield, IL 62704";
+    const compsPlan = (
+      over: Partial<DispatchPlan> = {}
+    ): DispatchPlan => ({
+      intent: "comps",
+      targetEntity: TARGET,
+      specialists: compsSpecialist(),
+      userFacingNote: "",
+      compParams: null,
+      ...over,
+    });
+    const sent = () => (gateway.sendSms.mock.calls[0]![0] as { message: string }).message;
+
+    it("first request QUOTES the cost + parameters + parks a pending offer — NO spend, NO paid API", async () => {
+      orchestrator.plan.mockResolvedValue(compsPlan());
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "comps for 742 Evergreen Terrace",
+      });
+
+      expect(result.charged).toBe(0);
+      // Confirm-before-spend: no paid API call, no charge on the first ask.
+      expect(realEstate.getCompsByAddress).not.toHaveBeenCalled();
+      expect(credits.chargeForComps).not.toHaveBeenCalled();
+      expect(comps.setPending).toHaveBeenCalledWith({
+        phone: "+15559990000",
+        customerId: "cust_+15559990000",
+        target: TARGET,
+        params: DEFAULT_COMP_PARAMS,
+        credits: 3,
+      });
+      // The reply states the cost AND the parameters used.
+      expect(sent()).toContain("3 credits");
+      expect(sent().toLowerCase()).toContain("reply ok");
+      expect(sent()).toContain("up to 5 comps");
+      expect(sent()).toContain("radius 1 mi");
+      expect(sent().endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+      expect(sent()).not.toMatch(/\p{Extended_Pictographic}/u);
+    });
+
+    it("applies the texter's parameter overrides (merged onto defaults) and states them", async () => {
+      orchestrator.plan.mockResolvedValue(compsPlan({ compParams: { radiusMiles: 1, monthsBack: 6, count: 3 } }));
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "comps within 1 mile, last 6 months, 3 similar homes",
+      });
+
+      expect(comps.setPending).toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: { radiusMiles: 1, count: 3, monthsBack: 6, bedsTolerance: 1, bathsTolerance: 1, sqftTolerancePct: 25 },
+        })
+      );
+      expect(sent()).toContain("up to 3 comps");
+      expect(sent()).toContain("last 6 months");
+    });
+
+    it("clamps out-of-range texter overrides to sane bounds", async () => {
+      orchestrator.plan.mockResolvedValue(compsPlan({ compParams: { radiusMiles: 500, count: 999 } }));
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "comps within 500 miles, 999 homes",
+      });
+
+      expect(comps.setPending).toHaveBeenCalledWith(
+        expect.objectContaining({ params: expect.objectContaining({ radiusMiles: 10, count: 10 }) })
+      );
+    });
+
+    it("insufficient credits → clear no-charge message, NO pending offer, NO paid API", async () => {
+      orchestrator.plan.mockResolvedValue(compsPlan());
+      credits.hasCreditsForComps.mockResolvedValue(false);
+      credits.getBalance.mockResolvedValue(1);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "comps for 742 Evergreen Terrace",
+      });
+
+      expect(result.charged).toBe(0);
+      expect(result.outOfCredits).toBe(true);
+      expect(comps.setPending).not.toHaveBeenCalled();
+      expect(realEstate.getCompsByAddress).not.toHaveBeenCalled();
+      expect(credits.chargeForComps).not.toHaveBeenCalled();
+      expect(sent()).toContain("3 credit");
+      expect(sent().endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+    });
+
+    it("bare OK after a quote RUNS the paid comps, charges EXACTLY the quoted cost, snapshots", async () => {
+      // The router classifies a bare "OK" as report_refresh; the FRESH pending comps
+      // offer takes precedence, so the OK confirms the comps pull.
+      comps.freshPending.mockResolvedValue(compsPendingRow({ credits: 3 }));
+      realEstate.getCompsByAddress.mockResolvedValue({
+        comps: [{ address: "123 Nearby St", lastSaleAmount: 400000, bedrooms: 3, bathrooms: 2, squareFeet: 1500 }],
+      } as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "OK",
+      });
+
+      // Ran with the QUOTED target + parameters.
+      expect(realEstate.getCompsByAddress).toHaveBeenCalledWith(TARGET, DEFAULT_COMP_PARAMS);
+      // Charged EXACTLY the quoted cost, to the texting customer's account.
+      expect(credits.chargeForComps).toHaveBeenCalledWith({ accountId: "acct_+15559990000", credits: 3 });
+      expect(result.charged).toBe(3);
+      // Offer consumed + result snapshotted for the free re-serve rule.
+      expect(comps.clearPending).toHaveBeenCalledWith("+15559990000");
+      expect(comps.recordComps).toHaveBeenCalled();
+    });
+
+    it("OK'd comps that finds NO comparable sales → no charge, offer consumed", async () => {
+      comps.freshPending.mockResolvedValue(compsPendingRow());
+      realEstate.getCompsByAddress.mockResolvedValue({ comps: [] } as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "yes",
+      });
+
+      expect(realEstate.getCompsByAddress).toHaveBeenCalledWith(TARGET, DEFAULT_COMP_PARAMS);
+      expect(credits.chargeForComps).not.toHaveBeenCalled();
+      expect(result.charged).toBe(0);
+      expect(comps.recordComps).not.toHaveBeenCalled();
+      expect(sent().toLowerCase()).toContain("couldn't find");
+      expect(sent().endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+    });
+
+    it("repeat request (same address + params) within the free window → FREE re-serve, NO paid API, NO charge", async () => {
+      orchestrator.plan.mockResolvedValue(compsPlan());
+      comps.checkCache.mockResolvedValue(compsRow());
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "comps for 742 Evergreen Terrace again",
+      });
+
+      // Cache keyed on (phone, address, resolved params).
+      expect(comps.checkCache).toHaveBeenCalledWith("+15559990000", TARGET, DEFAULT_COMP_PARAMS);
+      expect(result.reserved).toBe(true);
+      expect(result.charged).toBe(0);
+      expect(realEstate.getCompsByAddress).not.toHaveBeenCalled();
+      expect(credits.chargeForComps).not.toHaveBeenCalled();
+      // Free copy re-served verbatim, plus a "reply OK for fresh comps" notice.
+      expect(sent().toLowerCase()).toContain("reply ok for fresh comps");
+      expect(sent().endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+      // Parks a pending offer so a following OK runs a fresh (paid) pull.
+      expect(comps.setPending).toHaveBeenCalled();
+    });
+
+    it("no address to run → guidance, no charge, no pending", async () => {
+      orchestrator.plan.mockResolvedValue(compsPlan({ targetEntity: null }));
+      memory.lastResolvedAddress.mockResolvedValue(null);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "pull comps",
+      });
+
+      expect(result.charged).toBe(0);
+      expect(realEstate.getCompsByAddress).not.toHaveBeenCalled();
+      expect(comps.setPending).not.toHaveBeenCalled();
+      expect(comps.checkCache).not.toHaveBeenCalled();
     });
   });
 });

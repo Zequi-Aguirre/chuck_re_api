@@ -13,6 +13,7 @@ import { normalizeInboundAddress } from "../util/address.ts";
 import { JakeInboundMessage, JakeInboundResult, JakeTextMode } from "../types/Jake.ts";
 import {
     RealEstateApiMailingAddress,
+    RealEstateApiPropertyCompsResponse,
     RealEstateApiPropertySearchResult,
     RealEstateApiSkipTraceEmail,
     RealEstateApiSkipTracePhone,
@@ -25,6 +26,17 @@ import { SkipTraceReportWriter } from "./skiptrace/SkipTraceReportWriter.ts";
 import { SkipTraceMemoryService } from "./skiptrace/SkipTraceMemoryService.ts";
 import { SkipTraceSettingsService } from "./skiptrace/SkipTraceSettingsService.ts";
 import { SkipTraceData, SkipTraceRow, hasContactInfo } from "./skiptrace/SkipTraceTypes.ts";
+import { CompsReportWriter } from "./comps/CompsReportWriter.ts";
+import { CompsMemoryService } from "./comps/CompsMemoryService.ts";
+import { CompsSettingsService } from "./comps/CompsSettingsService.ts";
+import {
+    CompParams,
+    CompsRow,
+    assembleCompsData,
+    formatCompParams,
+    hasComps,
+    resolveCompParams,
+} from "./comps/CompsTypes.ts";
 import {
     AbsenteeStatus,
     EquityLevel,
@@ -71,7 +83,10 @@ export class JakeAssistantService {
         private readonly orchestrator: JakeOrchestrator,
         private readonly skipTraceWriter: SkipTraceReportWriter,
         private readonly skipTrace: SkipTraceMemoryService,
-        private readonly skipTraceSettings: SkipTraceSettingsService
+        private readonly skipTraceSettings: SkipTraceSettingsService,
+        private readonly compsWriter: CompsReportWriter,
+        private readonly comps: CompsMemoryService,
+        private readonly compsSettings: CompsSettingsService
     ) {}
 
     /**
@@ -131,9 +146,9 @@ export class JakeAssistantService {
 
     /**
      * Execute a dispatch plan (JAK-135). Report intents keep the FULL JAK-134
-     * cache-and-free-reserve behavior; skip-trace is built (JAK-136) with its own
-     * confirm-before-spend + cache-and-free-reserve; comps is recognized but not
-     * built (JAK-137) → a no-spend "coming soon" reply; chitchat → guidance.
+     * cache-and-free-reserve behavior; skip-trace (JAK-136) and comps (JAK-137) are
+     * both built with their own confirm-before-spend + cache-and-free-reserve;
+     * chitchat → guidance.
      */
     private async dispatch(
         plan: DispatchPlan,
@@ -148,22 +163,38 @@ export class JakeAssistantService {
     ): Promise<JakeInboundResult> {
         const { input, route, customer, accountId, phone, requestingMessageId } = ctx;
 
-        // Confirm-before-spend (JAK-136): a bare "OK"/"YES" right after a skip-trace
-        // QUOTE (or a free re-serve of one) runs the PAID trace. This is checked
-        // BEFORE the switch so it takes precedence over report_refresh — the router
-        // classifies a bare affirmative as a report refresh, but a fresh pending
-        // skip-trace offer means the OK is confirming that trace, not a report.
+        // Confirm-before-spend (JAK-136/137): a bare "OK"/"YES" right after a
+        // skip-trace or comps QUOTE (or a free re-serve of one) runs that PAID
+        // action. Checked BEFORE the switch so it takes precedence over
+        // report_refresh — the router classifies a bare affirmative as a report
+        // refresh, but a fresh pending specialist offer means the OK is confirming
+        // THAT action. At most one pending exists per phone (quoting one clears the
+        // other), so the order here can't misfire.
         if (this.isAffirmativeOk(input.message)) {
-            const pending = await this.skipTrace.freshPending(phone);
-            if (pending) {
+            const skipPending = await this.skipTrace.freshPending(phone);
+            if (skipPending) {
                 return this.runConfirmedSkipTrace({
                     input,
                     route,
                     customer,
                     accountId,
                     phone,
-                    target: pending.target,
-                    credits: pending.credits,
+                    target: skipPending.target,
+                    credits: skipPending.credits,
+                    requestingMessageId,
+                });
+            }
+            const compsPending = await this.comps.freshPending(phone);
+            if (compsPending) {
+                return this.runConfirmedComps({
+                    input,
+                    route,
+                    customer,
+                    accountId,
+                    phone,
+                    target: compsPending.target,
+                    params: compsPending.params,
+                    credits: compsPending.credits,
                     requestingMessageId,
                 });
             }
@@ -199,9 +230,10 @@ export class JakeAssistantService {
                 if (!target) {
                     return this.sendGuidance(input, route, customer, phone);
                 }
-                // Moving on to a report cancels any outstanding skip-trace quote so
-                // a later bare "OK" can't fire a stale (paid) trace.
+                // Moving on to a report cancels any outstanding skip-trace or comps
+                // quote so a later bare "OK" can't fire a stale (paid) action.
                 await this.clearSkipTracePending(phone);
+                await this.clearCompsPending(phone);
                 const cached = await this.memory.checkCache(phone, target);
                 if (cached) {
                     return this.reserveFromCache({ input, route, customer, phone, address: target, cached });
@@ -231,46 +263,24 @@ export class JakeAssistantService {
                     requestingMessageId,
                 });
 
-            // Recognized but not built yet — reply that it's coming, spend nothing.
+            // Comps / CMA (JAK-137): built + credit-gated + confirm-before-spend,
+            // with texter-tunable parameters and the SAME cache-and-free-reserve rule.
             case "comps":
-                return this.sendComingSoon(input, route, customer, phone, plan);
+                return this.handleComps({
+                    input,
+                    route,
+                    customer,
+                    accountId,
+                    phone,
+                    plan,
+                    requestingMessageId,
+                });
 
             // Greeting / unrecognized — helpful guidance, no lookup, no charge.
             case "chitchat":
             default:
                 return this.sendGuidance(input, route, customer, phone);
         }
-    }
-
-    /**
-     * A no-spend "coming soon" reply for a recognized-but-unbuilt capability
-     * (comps JAK-137). We NEVER fake results and NEVER spend: we name the
-     * capability, note it's on the way, and keep the guardrails (emoji-free,
-     * GoTextJake.com footer). The registration seam means when the specialist ships
-     * this branch is replaced by a real dispatch, not rewritten — exactly as
-     * skip-trace (JAK-136) already was.
-     */
-    private async sendComingSoon(
-        input: JakeInboundMessage,
-        route: TextRoute,
-        customer: TextJakeCustomer,
-        phone: string,
-        plan: DispatchPlan
-    ): Promise<JakeInboundResult> {
-        const capability = "Pulling comparable sales";
-        const forEntity = plan.targetEntity ? ` for ${plan.targetEntity}` : "";
-        const reply = [
-            `${capability}${forEntity} is coming soon. I can't run that yet, so I haven't charged you anything.`,
-            "For now, text me a property address and I'll pull a full report.",
-            PropertyReportWriter.FOOTER,
-        ].join("\n\n");
-        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
-        await this.writeStatusNote(
-            route,
-            input.contactId,
-            `Jake (text): ${plan.intent} requested${forEntity} — not built yet, replied "coming soon", no charge.`
-        );
-        return { ok: true, address: plan.targetEntity, reply, mode: route.mode, charged: 0 };
     }
 
     /**
@@ -443,7 +453,9 @@ export class JakeAssistantService {
             return { ok: false, address: target, reply, mode: route.mode, charged: 0, outOfCredits: true };
         }
 
-        // Sufficient balance → QUOTE the cost + park a pending offer. No spend yet.
+        // Sufficient balance → QUOTE the cost + park a pending offer. Clear any
+        // comps quote so a following bare "OK" is unambiguous. No spend yet.
+        await this.clearCompsPending(phone);
         await this.skipTrace.setPending({ phone, customerId: customer.id, target, credits: cost });
         const reply = [
             `Skip-tracing the owner of ${target} pulls their phone and contact info. ` +
@@ -476,6 +488,7 @@ export class JakeAssistantService {
         cost: number;
     }): Promise<JakeInboundResult> {
         const { input, route, customer, phone, target, cached, cost } = ctx;
+        await this.clearCompsPending(phone);
         await this.skipTrace.setPending({ phone, customerId: customer.id, target, credits: cost });
         const reply = this.withSkipTraceReserveNotice(cached.report_text, cost);
         await this.sendAndRemember(route, input.contactId, customer, phone, reply);
@@ -716,6 +729,266 @@ export class JakeAssistantService {
             out.push(t);
         }
         return out;
+    }
+
+    // ── Comps / CMA (JAK-137) ────────────────────────────────────────────────
+
+    /**
+     * Handle a comps request (JAK-137). Resolves the target address (the router's
+     * resolved entity, else the last address the texter sent) and the effective
+     * parameters (admin defaults overlaid with any texter overrides the router
+     * extracted, then clamped). Then, mirroring skip-trace:
+     *   - a repeat request for the SAME target AND parameter-set within the free
+     *     window → re-serve the stored result FREE, with a "reply OK for fresh
+     *     comps" notice (no spend);
+     *   - a fresh request → CONFIRM-BEFORE-SPEND: check the balance, quote the cost
+     *     AND the parameters, and store a pending offer so a bare "OK" runs it.
+     *     Nothing is spent here. Insufficient balance → a clear no-charge message.
+     */
+    private async handleComps(ctx: {
+        input: JakeInboundMessage;
+        route: TextRoute;
+        customer: TextJakeCustomer;
+        accountId: string;
+        phone: string;
+        plan: DispatchPlan;
+        requestingMessageId: string | null;
+    }): Promise<JakeInboundResult> {
+        const { input, route, customer, accountId, phone, plan } = ctx;
+
+        const target = plan.targetEntity ?? (await this.memory.lastResolvedAddress(phone));
+        if (!target) {
+            const reply = [
+                "Text me a property address first, then I can pull comparable sales for it.",
+                PropertyReportWriter.FOOTER,
+            ].join("\n\n");
+            await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+            await this.writeStatusNote(
+                route,
+                input.contactId,
+                "Jake (text): comps asked with no address to run — sent guidance, no charge."
+            );
+            return { ok: true, address: null, reply, mode: route.mode, charged: 0 };
+        }
+
+        // Resolve parameters: admin defaults overlaid with texter overrides, clamped.
+        const params = resolveCompParams(await this.compsSettings.defaultParams(), plan.compParams);
+        const cost = await this.compsSettings.costOfComps();
+
+        // Free re-serve: a repeat of the same target AND parameter-set in the window.
+        const cached = await this.comps.checkCache(phone, target, params);
+        if (cached) {
+            return this.reserveCompsFromCache({ input, route, customer, phone, target, params, cached, cost });
+        }
+
+        // Fresh request → confirm-before-spend. Credit gate FIRST — never quote a
+        // price the customer can't pay, and never store a pending offer we can't run.
+        if (!(await this.credits.hasCreditsForComps(accountId, cost))) {
+            const balance = await this.credits.getBalance(accountId);
+            const reply = [
+                `Pulling comparable sales for ${target} costs ${cost} credit${cost === 1 ? "" : "s"}, but you have ${balance}. ` +
+                    "Top up and text me again to run it — I haven't charged you anything.",
+                PropertyReportWriter.FOOTER,
+            ].join("\n\n");
+            await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+            await this.writeStatusNote(
+                route,
+                input.contactId,
+                `Jake (text): comps for "${target}" needs ${cost} credit(s), balance ${balance} — declined, no charge.`
+            );
+            return { ok: false, address: target, reply, mode: route.mode, charged: 0, outOfCredits: true };
+        }
+
+        // Sufficient balance → QUOTE the cost + parameters + park a pending offer.
+        // Clear any skip-trace quote so a following bare "OK" is unambiguous. No spend.
+        await this.clearSkipTracePending(phone);
+        await this.comps.setPending({ phone, customerId: customer.id, target, params, credits: cost });
+        const reply = [
+            `Pulling comparable sales for ${target} using ${formatCompParams(params)}. ` +
+                `It costs ${cost} credit${cost === 1 ? "" : "s"}. Reply OK to run it.`,
+            PropertyReportWriter.FOOTER,
+        ].join("\n\n");
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        await this.writeStatusNote(
+            route,
+            input.contactId,
+            `Jake (text): quoted comps for "${target}" at ${cost} credit(s) [${formatCompParams(params)}] — awaiting OK, no charge yet.`
+        );
+        return { ok: true, address: target, reply, mode: route.mode, charged: 0 };
+    }
+
+    /**
+     * Free re-serve (JAK-137) of a comps pull: a repeat of the same target AND
+     * parameter-set within the free window. Return the STORED reply verbatim — no
+     * paid API call, no LLM call, no credit — with an appended line telling the
+     * texter it's on record and to reply OK for FRESH comps. We park a pending offer
+     * so that OK spends. The GoTextJake.com footer stays last.
+     */
+    private async reserveCompsFromCache(ctx: {
+        input: JakeInboundMessage;
+        route: TextRoute;
+        customer: TextJakeCustomer;
+        phone: string;
+        target: string;
+        params: CompParams;
+        cached: CompsRow;
+        cost: number;
+    }): Promise<JakeInboundResult> {
+        const { input, route, customer, phone, target, params, cached, cost } = ctx;
+        await this.clearSkipTracePending(phone);
+        await this.comps.setPending({ phone, customerId: customer.id, target, params, credits: cost });
+        const reply = this.withCompsReserveNotice(cached.report_text, cost);
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        await this.writeStatusNote(
+            route,
+            input.contactId,
+            `Jake (text): re-served cached comps for "${target}" for FREE — no charge, no API call.`
+        );
+        return { ok: true, address: target, reply, mode: route.mode, charged: 0, reserved: true };
+    }
+
+    /**
+     * Run a CONFIRMED comps pull (JAK-137) — reached only after the texter replied
+     * OK to a quote (or a free re-serve). Consumes the pending offer, re-checks the
+     * balance, calls the paid /v3/PropertyComps (mock/no-spend off prod) with the
+     * quoted parameters, and charges the quoted cost ONLY when at least one
+     * comparable sale was delivered — mirroring the report's "no match, no charge"
+     * policy. On a hit it snapshots the result (keyed per target + parameter-set) so
+     * a repeat within the free window re-serves for free.
+     */
+    private async runConfirmedComps(ctx: {
+        input: JakeInboundMessage;
+        route: TextRoute;
+        customer: TextJakeCustomer;
+        accountId: string;
+        phone: string;
+        target: string;
+        params: CompParams;
+        credits: number;
+        requestingMessageId: string | null;
+    }): Promise<JakeInboundResult> {
+        const { input, route, customer, accountId, phone, target, params, credits } = ctx;
+
+        // Consume the offer up front so a duplicate "OK" can't run it twice.
+        await this.clearCompsPending(phone);
+
+        // Re-check the balance — it may have drained between the quote and the OK.
+        if (!(await this.credits.hasCreditsForComps(accountId, credits))) {
+            const balance = await this.credits.getBalance(accountId);
+            const reply = [
+                `Pulling comparable sales for ${target} costs ${credits} credit${credits === 1 ? "" : "s"}, but you have ${balance}. ` +
+                    "Top up and text me again — I haven't charged you anything.",
+                PropertyReportWriter.FOOTER,
+            ].join("\n\n");
+            await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+            await this.writeStatusNote(
+                route,
+                input.contactId,
+                `Jake (text): OK'd comps for "${target}" but balance ${balance} < ${credits} — no charge.`
+            );
+            return { ok: false, address: target, reply, mode: route.mode, charged: 0, outOfCredits: true };
+        }
+
+        let response: RealEstateApiPropertyCompsResponse | null;
+        try {
+            response = await this.realEstateDao.getCompsByAddress(target, params);
+        } catch (err) {
+            const reply = `Sorry — I hit a snag pulling comps for "${target}". Please try again shortly.`;
+            await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+            await this.writeStatusNote(
+                route,
+                input.contactId,
+                `Jake (text): comps FAILED for "${target}" (${this.errorSummary(err)}) — no charge.`
+            );
+            return { ok: false, address: target, reply, mode: route.mode, charged: 0 };
+        }
+
+        const data = assembleCompsData(response, target, params);
+        if (!response || !hasComps(data)) {
+            const reply = [
+                `I couldn't find comparable sales for ${target} using ${formatCompParams(params)}, so I haven't charged you.`,
+                PropertyReportWriter.FOOTER,
+            ].join("\n\n");
+            await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+            await this.writeStatusNote(
+                route,
+                input.contactId,
+                `Jake (text): no comparable sales for "${target}" [${formatCompParams(params)}] — no charge.`
+            );
+            return { ok: true, address: target, reply, mode: route.mode, charged: 0 };
+        }
+
+        const reply = await this.compsWriter.write(data);
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+
+        const charge = await this.credits.chargeForComps({ accountId, credits });
+        const charged = charge.ok ? credits : 0;
+        await this.rememberComps({
+            customer,
+            phone,
+            requestingMessageId: ctx.requestingMessageId,
+            target,
+            params,
+            record: response,
+            reportText: reply,
+        });
+
+        await this.writeStatusNote(
+            route,
+            input.contactId,
+            `Jake (text): pulled comps for "${target}" [${formatCompParams(params)}] — charged ${charged} credit(s).`
+        );
+        return { ok: true, address: target, reply, mode: route.mode, charged, refreshed: undefined };
+    }
+
+    /**
+     * Append the comps free-re-serve notice to a stored reply, KEEPING the
+     * GoTextJake.com footer last (mirrors {@link withSkipTraceReserveNotice}).
+     */
+    private withCompsReserveNotice(reportText: string, cost: number): string {
+        const notice =
+            "These comps are already on record, so this copy is free. " +
+            `Reply OK for fresh comps (costs ${cost} credit${cost === 1 ? "" : "s"}).`;
+        const footer = PropertyReportWriter.FOOTER;
+        const trimmed = reportText.trimEnd();
+        const body = trimmed.endsWith(footer)
+            ? trimmed.slice(0, trimmed.length - footer.length).trimEnd()
+            : trimmed;
+        return `${body}\n\n${notice}\n\n${footer}`;
+    }
+
+    /** Clear a phone's outstanding comps offer (best-effort; never blocks the reply). */
+    private async clearCompsPending(phone: string): Promise<void> {
+        try {
+            await this.comps.clearPending(phone);
+        } catch (err) {
+            console.error("⚠️ Jake comps pending clear failed:", this.errorSummary(err));
+        }
+    }
+
+    /** Snapshot a paid comps pull for the free re-serve rule (best-effort memory). */
+    private async rememberComps(input: {
+        customer: TextJakeCustomer;
+        phone: string;
+        requestingMessageId: string | null;
+        target: string;
+        params: CompParams;
+        record: RealEstateApiPropertyCompsResponse;
+        reportText: string;
+    }): Promise<void> {
+        try {
+            await this.comps.recordComps({
+                customerId: input.customer.id,
+                phone: input.phone,
+                messageId: input.requestingMessageId,
+                normalizedTarget: input.target,
+                params: input.params,
+                compsRecord: input.record,
+                reportText: input.reportText,
+            });
+        } catch (err) {
+            console.error("⚠️ Jake comps snapshot failed:", this.errorSummary(err));
+        }
     }
 
     /** Usage guidance for a message with no parseable address. No lookup, no charge. */
