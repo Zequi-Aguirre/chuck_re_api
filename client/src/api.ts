@@ -15,6 +15,7 @@ import {
   ReportPromptView,
   SkipTraceCostView,
   SkipTracePromptView,
+  TextCustomerInput,
   TextCustomerView,
 } from "./types";
 
@@ -129,6 +130,21 @@ export const api = {
   async listTextCustomers(): Promise<TextCustomerView[]> {
     const body = await request<{ customers: TextCustomerView[] }>("/text-customers");
     return body.customers;
+  },
+  // Create / edit a texter's profile (JAK-146): name + optional email, phone required.
+  async createTextCustomer(input: TextCustomerInput): Promise<TextCustomerView> {
+    const body = await request<{ customer: TextCustomerView }>("/text-customers", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    return body.customer;
+  },
+  async updateTextCustomer(id: string, input: TextCustomerInput): Promise<TextCustomerView> {
+    const body = await request<{ customer: TextCustomerView }>(
+      `/text-customers/${encodeURIComponent(id)}`,
+      { method: "PUT", body: JSON.stringify(input) }
+    );
+    return body.customer;
   },
   async grantTextCustomerCredits(
     phone: string,

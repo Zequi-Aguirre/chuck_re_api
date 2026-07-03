@@ -3,7 +3,7 @@ import { inject, injectable } from "tsyringe";
 import { GhlStatusService } from "../status/GhlStatusService";
 import { AdminAuthService } from "./AdminAuthService";
 import { AdminConnectionService } from "./AdminConnectionService";
-import { AdminTextCustomerService } from "./AdminTextCustomerService";
+import { AdminTextCustomerService, TextCustomerInput } from "./AdminTextCustomerService";
 import { requireAdminAuth, requireSuperadmin } from "./requireAdminAuth";
 import { AdminRole } from "./AdminTypes";
 import { PropertyReportPromptService } from "../../services/PropertyReportPromptService";
@@ -90,6 +90,10 @@ export class AdminResource {
     // and grant credits to one BY PHONE — a different account key than a
     // connection's locationId, so a gateway texter can finally be topped up.
     this.router.get("/text-customers", this.listTextCustomers.bind(this));
+    // Create / edit a texter's profile (JAK-146): name + optional email, keyed by
+    // the required phone. Distinct from the /credits grant below.
+    this.router.post("/text-customers", this.createTextCustomer.bind(this));
+    this.router.put("/text-customers/:id", this.updateTextCustomer.bind(this));
     this.router.post("/text-customers/credits", this.grantTextCustomerCredits.bind(this));
 
     // AI prompt — the admin-editable STYLE/FORMAT prompt for the JAK-130 property
@@ -409,6 +413,58 @@ export class AdminResource {
     } catch (err) {
       return next(err);
     }
+  }
+
+  /**
+   * Create a text customer's profile (JAK-146): first/last name + an OPTIONAL
+   * email, keyed by the REQUIRED phone. A blank email is allowed (saved as null);
+   * a non-blank email must look like one. A duplicate phone is a 409 (that number
+   * is already a text customer), not a 500.
+   */
+  private async createTextCustomer(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const parsed = parseTextCustomerBody(req);
+      if ("error" in parsed) {
+        return res.status(400).json({ error: parsed.error });
+      }
+      const customer = await this.textCustomers.create(parsed.value);
+      return res.status(201).json({ customer });
+    } catch (err) {
+      return this.handleTextCustomerWriteError(err, res, next);
+    }
+  }
+
+  /**
+   * Edit a text customer's phone + profile by id (JAK-146). Same validation as
+   * create — phone required, email optional-but-valid. 404 if no live customer
+   * has that id; 409 if the new phone collides with another customer.
+   */
+  private async updateTextCustomer(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const id = str(req.params.id);
+      if (!id) {
+        return res.status(400).json({ error: "missing customer id" });
+      }
+      const parsed = parseTextCustomerBody(req);
+      if ("error" in parsed) {
+        return res.status(400).json({ error: parsed.error });
+      }
+      const customer = await this.textCustomers.update(id, parsed.value);
+      if (!customer) {
+        return res.status(404).json({ error: "unknown customer" });
+      }
+      return res.status(200).json({ customer });
+    } catch (err) {
+      return this.handleTextCustomerWriteError(err, res, next);
+    }
+  }
+
+  /** A duplicate phone (unique violation, 23505) is a client 409, not a 500. */
+  private handleTextCustomerWriteError(err: unknown, res: Response, next: NextFunction): Response | void {
+    if (err && typeof err === "object" && (err as { code?: string }).code === "23505") {
+      return res.status(409).json({ error: "That phone is already a text customer" });
+    }
+    return next(err);
   }
 
   // --- AI prompt (JAK-131) --------------------------------------------------
@@ -826,6 +882,33 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /** Coerce an unknown to a trimmed string ("" for non-strings). */
 function str(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+/**
+ * Validate + normalize a text-customer create/update body (JAK-146). Phone is
+ * required; first/last name are optional (blank → null); email is optional but,
+ * when present, must be a plausible address. Returns either the clean input or a
+ * single error string — the caller turns the latter into a 400.
+ */
+function parseTextCustomerBody(
+  req: Request
+): { value: TextCustomerInput } | { error: string } {
+  const phone = str(req.body?.phone);
+  if (!phone) {
+    return { error: "phone is required" };
+  }
+  const email = str(req.body?.email);
+  if (email && !EMAIL_RE.test(email)) {
+    return { error: "email must be a valid email address" };
+  }
+  return {
+    value: {
+      phone,
+      firstName: str(req.body?.firstName) || null,
+      lastName: str(req.body?.lastName) || null,
+      email: email || null,
+    },
+  };
 }
 
 /** Normalize a phone-numbers input into a clean string[] (drops blanks). */

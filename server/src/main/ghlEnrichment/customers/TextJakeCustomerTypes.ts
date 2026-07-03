@@ -14,6 +14,10 @@ export interface TextJakeCustomer {
   phone: string;
   /** Contact id in the GHL sub-account handling their texts; null until known. */
   ghlContactId: string | null;
+  /** Optional profile (JAK-146) — nullable; phone stays the required identity. */
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
   /**
    * The account key this customer's credits are billed against in the JAK-109
    * ledger. Stable per customer — equals {@link id} — so a texter always draws

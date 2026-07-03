@@ -104,6 +104,10 @@ export interface AdminTextCustomerView {
   id: string;
   /** Sender phone (E.164) — the stable key for this customer. */
   phone: string;
+  /** Optional profile (JAK-146) — captured in the admin UI; null when unset. */
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
   /** Contact id in the sub-account handling their texts; null until known. */
   ghlContactId: string | null;
   /** Current spendable credit balance for this customer (0 if none yet). */
