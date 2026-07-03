@@ -14,6 +14,10 @@ import { PropertyReportWriter } from "../PropertyReportWriter";
 import { PropertyReportData } from "../../types/PropertyReport";
 import { JakeOrchestrator } from "../orchestrator/JakeOrchestrator";
 import { DispatchPlan } from "../orchestrator/OrchestratorTypes";
+import { SkipTraceReportWriter } from "../skiptrace/SkipTraceReportWriter";
+import { SkipTraceMemoryService } from "../skiptrace/SkipTraceMemoryService";
+import { SkipTraceSettingsService } from "../skiptrace/SkipTraceSettingsService";
+import { SkipTracePendingRow, SkipTraceRow } from "../skiptrace/SkipTraceTypes";
 
 /**
  * JakeAssistantService is mode-aware (JAK-115). These tests pin the two text
@@ -35,9 +39,37 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
   let reportWriter: MockProxy<PropertyReportWriter>;
   let memory: MockProxy<ConversationMemoryService>;
   let orchestrator: MockProxy<JakeOrchestrator>;
+  let skipTraceWriter: MockProxy<SkipTraceReportWriter>;
+  let skipTrace: MockProxy<SkipTraceMemoryService>;
+  let skipTraceSettings: MockProxy<SkipTraceSettingsService>;
   let service: JakeAssistantService;
 
   const reportSpecialist = () => [{ name: "report", needsConfirmation: false, estimatedCredits: 1 }];
+  const skipTraceSpecialist = () => [{ name: "skip_trace", needsConfirmation: true, estimatedCredits: 3 }];
+
+  const skipTraceRow = (over: Partial<SkipTraceRow> = {}): SkipTraceRow => ({
+    id: "st_1",
+    customer_id: "cust_x",
+    phone: "+15559990000",
+    message_id: "msg_1",
+    normalized_target: "742 Evergreen Terrace, Springfield, IL 62704",
+    target_key: "742 evergreen terrace, springfield, il 62704",
+    trace_record: { match: true },
+    report_text:
+      "Owner of 742 Evergreen Terrace: Homer Simpson\n\nPhone\n• +15550101\n\nGet more property info\nGoTextJake.com",
+    fetched_at: new Date("2026-07-01T00:00:00Z"),
+    created_at: new Date("2026-07-01T00:00:00Z"),
+    ...over,
+  });
+
+  const pendingRow = (over: Partial<SkipTracePendingRow> = {}): SkipTracePendingRow => ({
+    phone: "+15559990000",
+    customer_id: "cust_+15559990000",
+    target: "742 Evergreen Terrace, Springfield, IL 62704",
+    credits: 3,
+    created_at: new Date("2026-07-01T00:00:00Z"),
+    ...over,
+  });
 
   const lookupRow = (over: Partial<LookupRow> = {}): LookupRow => ({
     id: "lk_1",
@@ -88,6 +120,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     reportWriter = mock<PropertyReportWriter>();
     memory = mock<ConversationMemoryService>();
     orchestrator = mock<JakeOrchestrator>();
+    skipTraceWriter = mock<SkipTraceReportWriter>();
+    skipTrace = mock<SkipTraceMemoryService>();
+    skipTraceSettings = mock<SkipTraceSettingsService>();
 
     // The router is exercised in its own suite (JakeOrchestrator.test.ts); here it
     // defaults to the deterministic classification the pre-router single path used
@@ -125,6 +160,21 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       async (data: PropertyReportData) => `Jake Property Report\n${data.addressLine1 ?? "property"}`
     );
 
+    // Skip-trace (JAK-136) defaults: no cache, no pending offer, cost 3 credits,
+    // credits available, writer echoes a clean reply. Individual tests override.
+    skipTrace.checkCache.mockResolvedValue(null);
+    skipTrace.freshPending.mockResolvedValue(null);
+    skipTrace.setPending.mockResolvedValue(pendingRow());
+    skipTrace.clearPending.mockResolvedValue(undefined);
+    skipTrace.recordTrace.mockResolvedValue(skipTraceRow());
+    skipTraceSettings.costOfSkipTrace.mockResolvedValue(3);
+    skipTraceWriter.write.mockResolvedValue(
+      "Owner of 742 Evergreen Terrace: Homer Simpson\n\nPhone\n• +15550101\n\nGet more property info\nGoTextJake.com"
+    );
+    credits.hasCreditsForSkipTrace.mockResolvedValue(true);
+    credits.chargeForSkipTrace.mockResolvedValue({ ok: true, balanceAfter: 7, entries: [] });
+    credits.getBalance.mockResolvedValue(10);
+
     customers.resolveByPhone.mockImplementation(async (phone) => customerFor(phone));
     credits.hasCreditsForTextLookup.mockResolvedValue(true);
     credits.costOfTextLookup.mockReturnValue(1);
@@ -143,7 +193,10 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       credits,
       reportWriter,
       memory,
-      orchestrator
+      orchestrator,
+      skipTraceWriter,
+      skipTrace,
+      skipTraceSettings
     );
   });
 
@@ -711,31 +764,6 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(credits.chargeForTextLookup).not.toHaveBeenCalled();
     });
 
-    it("skip-trace intent → 'coming soon' reply, NO spend, NO paid API, NO fake result", async () => {
-      orchestrator.plan.mockResolvedValue({
-        intent: "skip_trace",
-        targetEntity: "742 Evergreen Terrace, Springfield, IL 62704",
-        specialists: [{ name: "skip_trace", needsConfirmation: true, estimatedCredits: 2 }],
-        userFacingNote: "",
-      });
-
-      const result = await service.handleInboundMessage({
-        contactId: "ct_1",
-        senderPhone: "+15559990000",
-        message: "find the owner for that one",
-      });
-
-      expect(result.intent).toBe("skip_trace");
-      expect(result.charged).toBe(0);
-      expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
-      expect(credits.chargeForTextLookup).not.toHaveBeenCalled();
-      const sent = (gateway.sendSms.mock.calls[0]![0] as { message: string }).message;
-      expect(sent.toLowerCase()).toContain("coming soon");
-      expect(sent).toContain("742 Evergreen Terrace");
-      expect(sent.endsWith("Get more property info\nGoTextJake.com")).toBe(true);
-      expect(sent).not.toMatch(/\p{Extended_Pictographic}/u);
-    });
-
     it("comps intent → 'coming soon' reply, NO spend", async () => {
       orchestrator.plan.mockResolvedValue({
         intent: "comps",
@@ -777,6 +805,163 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       const sent = (gateway.sendSms.mock.calls[0]![0] as { message: string }).message;
       expect(sent.endsWith("Get more property info\nGoTextJake.com")).toBe(true);
       expect(sent).not.toMatch(/\p{Extended_Pictographic}/u);
+    });
+  });
+
+  // ── Skip trace (JAK-136): credit-gated, confirm-before-spend, cache/free-reserve.
+  describe("skip trace (JAK-136)", () => {
+    const TARGET = "742 Evergreen Terrace, Springfield, IL 62704";
+    const skipTracePlan = (targetEntity: string | null = TARGET): DispatchPlan => ({
+      intent: "skip_trace",
+      targetEntity,
+      specialists: skipTraceSpecialist(),
+      userFacingNote: "",
+    });
+    const sent = () => (gateway.sendSms.mock.calls[0]![0] as { message: string }).message;
+
+    it("first request QUOTES the cost + parks a pending offer — NO spend, NO paid API", async () => {
+      orchestrator.plan.mockResolvedValue(skipTracePlan());
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "who owns 742 Evergreen Terrace?",
+      });
+
+      expect(result.charged).toBe(0);
+      // Confirm-before-spend: no paid API call, no charge on the first ask.
+      expect(realEstate.skipTraceByAddress).not.toHaveBeenCalled();
+      expect(credits.chargeForSkipTrace).not.toHaveBeenCalled();
+      expect(skipTrace.setPending).toHaveBeenCalledWith({
+        phone: "+15559990000",
+        customerId: "cust_+15559990000",
+        target: TARGET,
+        credits: 3,
+      });
+      expect(sent()).toContain("3 credits");
+      expect(sent().toLowerCase()).toContain("reply ok");
+      expect(sent().endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+      expect(sent()).not.toMatch(/\p{Extended_Pictographic}/u);
+    });
+
+    it("insufficient credits → clear no-charge message, NO pending offer, NO paid API", async () => {
+      orchestrator.plan.mockResolvedValue(skipTracePlan());
+      credits.hasCreditsForSkipTrace.mockResolvedValue(false);
+      credits.getBalance.mockResolvedValue(1);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "skip trace 742 Evergreen Terrace",
+      });
+
+      expect(result.charged).toBe(0);
+      expect(result.outOfCredits).toBe(true);
+      expect(skipTrace.setPending).not.toHaveBeenCalled();
+      expect(realEstate.skipTraceByAddress).not.toHaveBeenCalled();
+      expect(credits.chargeForSkipTrace).not.toHaveBeenCalled();
+      expect(sent()).toContain("3 credit");
+      expect(sent().endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+    });
+
+    it("bare OK after a quote RUNS the paid trace, charges EXACTLY the quoted cost, snapshots", async () => {
+      // The router classifies a bare "OK" as report_refresh; the FRESH pending
+      // skip-trace offer takes precedence, so the OK confirms the trace.
+      skipTrace.freshPending.mockResolvedValue(pendingRow({ credits: 3 }));
+      realEstate.skipTraceByAddress.mockResolvedValue({
+        match: true,
+        output: { identity: { name: "Homer Simpson", phones: [{ phone: "+15550101" }] } },
+      } as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "OK",
+      });
+
+      expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith(TARGET);
+      // Charged EXACTLY the quoted cost, to the texting customer's account.
+      expect(credits.chargeForSkipTrace).toHaveBeenCalledWith({
+        accountId: "acct_+15559990000",
+        credits: 3,
+      });
+      expect(result.charged).toBe(3);
+      // Offer consumed + result snapshotted for the free re-serve rule.
+      expect(skipTrace.clearPending).toHaveBeenCalledWith("+15559990000");
+      expect(skipTrace.recordTrace).toHaveBeenCalled();
+      expect(sent()).toContain("Homer Simpson");
+    });
+
+    it("OK'd trace that finds NO contact info → no charge, offer consumed", async () => {
+      skipTrace.freshPending.mockResolvedValue(pendingRow());
+      realEstate.skipTraceByAddress.mockResolvedValue(null);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "yes",
+      });
+
+      expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith(TARGET);
+      expect(credits.chargeForSkipTrace).not.toHaveBeenCalled();
+      expect(result.charged).toBe(0);
+      expect(skipTrace.recordTrace).not.toHaveBeenCalled();
+      expect(sent().toLowerCase()).toContain("couldn't find");
+      expect(sent().endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+    });
+
+    it("repeat trace within the free window → FREE re-serve, NO paid API, NO charge", async () => {
+      orchestrator.plan.mockResolvedValue(skipTracePlan());
+      skipTrace.checkCache.mockResolvedValue(skipTraceRow());
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "skip trace 742 Evergreen Terrace again",
+      });
+
+      expect(result.reserved).toBe(true);
+      expect(result.charged).toBe(0);
+      expect(realEstate.skipTraceByAddress).not.toHaveBeenCalled();
+      expect(credits.chargeForSkipTrace).not.toHaveBeenCalled();
+      // Free copy re-served verbatim, plus a "reply OK for a fresh trace" notice.
+      expect(sent()).toContain("Homer Simpson");
+      expect(sent().toLowerCase()).toContain("reply ok for a fresh");
+      expect(sent().endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+      // Parks a pending offer so a following OK runs a fresh (paid) trace.
+      expect(skipTrace.setPending).toHaveBeenCalled();
+    });
+
+    it("no address to trace → guidance, no charge, no pending", async () => {
+      orchestrator.plan.mockResolvedValue(skipTracePlan(null));
+      memory.lastResolvedAddress.mockResolvedValue(null);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "skip trace the owner",
+      });
+
+      expect(result.charged).toBe(0);
+      expect(realEstate.skipTraceByAddress).not.toHaveBeenCalled();
+      expect(skipTrace.setPending).not.toHaveBeenCalled();
+      expect(skipTrace.checkCache).not.toHaveBeenCalled();
+    });
+
+    it("no explicit target falls back to the last resolved address", async () => {
+      orchestrator.plan.mockResolvedValue(skipTracePlan(null));
+      memory.lastResolvedAddress.mockResolvedValue("9 B Rd, Town, CA 90000");
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "skip trace it",
+      });
+
+      expect(skipTrace.checkCache).toHaveBeenCalledWith("+15559990000", "9 B Rd, Town, CA 90000");
+      expect(skipTrace.setPending).toHaveBeenCalledWith(
+        expect.objectContaining({ target: "9 B Rd, Town, CA 90000", credits: 3 })
+      );
     });
   });
 });

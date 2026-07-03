@@ -50,15 +50,18 @@ export class SpecialistRegistry {
       estimatedCredits: 1,
       available: true,
     });
-    // Skip-trace (JAK-136) + comps (JAK-137): recognized but NOT built yet.
-    // Confirm-before-spend when they land; for now the router replies "coming
-    // soon" and spends nothing. Estimates are placeholders 136/137 will confirm.
+    // Skip-trace: BUILT (JAK-136). Runs the /v2/SkipTrace owner/contact lookup —
+    // a paid call that costs more than a report — so it is confirm-before-spend.
+    // `estimatedCredits` mirrors the SkipTraceSettingsService default (3); the
+    // assistant charges the live admin-configured cost at execution time.
     this.register({
       name: SpecialistRegistry.SKIP_TRACE,
       needsConfirmation: true,
-      estimatedCredits: 2,
-      available: false,
+      estimatedCredits: 3,
+      available: true,
     });
+    // Comps (JAK-137): recognized but NOT built yet. Confirm-before-spend when it
+    // lands; for now the router replies "coming soon" and spends nothing.
     this.register({
       name: SpecialistRegistry.COMPS,
       needsConfirmation: true,

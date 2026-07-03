@@ -21,6 +21,10 @@ import { TextJakeCustomerService } from "../customers/TextJakeCustomerService";
 import { ConversationStore } from "../conversation/ConversationStore";
 import { ConversationSettingsService } from "../conversation/ConversationSettingsService";
 import { ConversationMemoryService } from "../conversation/ConversationMemoryService";
+import { SkipTracePromptService } from "../../services/skiptrace/SkipTracePromptService";
+import { SkipTraceSettingsService } from "../../services/skiptrace/SkipTraceSettingsService";
+import { SkipTraceStore } from "../../services/skiptrace/SkipTraceStore";
+import { SkipTraceMemoryService } from "../../services/skiptrace/SkipTraceMemoryService";
 import { GhlCustomFieldStore } from "../lifecycle/GhlCustomFieldStore";
 import { GhlInstallLifecycleService } from "../lifecycle/GhlInstallLifecycleService";
 import { LeadEnrichmentQueueService } from "../../services/LeadEnrichmentQueueService";
@@ -246,6 +250,28 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   }
   if (!c.isRegistered(JakeOrchestrator)) {
     c.registerSingleton(JakeOrchestrator);
+  }
+
+  // JAK-136 — skip-trace specialist: the first real specialist behind the JAK-135
+  // registry seam. The prompt service fronts the admin-editable skiptrace_prompt
+  // and the settings service the admin-editable skip-trace credit cost (both the
+  // SAME app_settings pattern as JAK-131/135); the store persists the trace cache
+  // + the ONE pending confirm-before-spend offer per phone; the memory service is
+  // the free-re-serve business surface (reusing the JAK-134 free_reserve window).
+  // SINGLETONS so an admin edit busts the same cache the specialist reads; share
+  // the one Postgres pool. The DAO method + writer are auto-resolved like the
+  // report writer.
+  if (!c.isRegistered(SkipTracePromptService)) {
+    c.registerSingleton(SkipTracePromptService);
+  }
+  if (!c.isRegistered(SkipTraceSettingsService)) {
+    c.registerSingleton(SkipTraceSettingsService);
+  }
+  if (!c.isRegistered(SkipTraceStore)) {
+    c.registerSingleton(SkipTraceStore);
+  }
+  if (!c.isRegistered(SkipTraceMemoryService)) {
+    c.registerSingleton(SkipTraceMemoryService);
   }
 
   if (!c.isRegistered(AdminResource)) {

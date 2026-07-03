@@ -7,6 +7,8 @@ import {
   LocationStatusSummary,
   OrchestratorPromptView,
   ReportPromptView,
+  SkipTraceCostView,
+  SkipTracePromptView,
   TextCustomerView,
 } from "./types";
 
@@ -159,6 +161,32 @@ export const api = {
   },
   async resetOrchestratorPrompt(): Promise<OrchestratorPromptView> {
     return request<OrchestratorPromptView>("/orchestrator-prompt/reset", { method: "POST" });
+  },
+
+  // --- Skip-trace specialist (JAK-136) ---
+  async getSkipTracePrompt(): Promise<SkipTracePromptView> {
+    return request<SkipTracePromptView>("/skiptrace-prompt");
+  },
+  async updateSkipTracePrompt(prompt: string): Promise<SkipTracePromptView> {
+    return request<SkipTracePromptView>("/skiptrace-prompt", {
+      method: "PUT",
+      body: JSON.stringify({ prompt }),
+    });
+  },
+  async resetSkipTracePrompt(): Promise<SkipTracePromptView> {
+    return request<SkipTracePromptView>("/skiptrace-prompt/reset", { method: "POST" });
+  },
+  async getSkipTraceCost(): Promise<SkipTraceCostView> {
+    return request<SkipTraceCostView>("/skiptrace-cost");
+  },
+  async updateSkipTraceCost(credits: number): Promise<SkipTraceCostView> {
+    return request<SkipTraceCostView>("/skiptrace-cost", {
+      method: "PUT",
+      body: JSON.stringify({ credits }),
+    });
+  },
+  async resetSkipTraceCost(): Promise<SkipTraceCostView> {
+    return request<SkipTraceCostView>("/skiptrace-cost/reset", { method: "POST" });
   },
 
   // --- admins (JAK-124) ---

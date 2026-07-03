@@ -11,6 +11,8 @@ import {
   RealEstateApiPropertyDetailResponse,
   RealEstateApiPropertySearchResponse,
   RealEstateApiPropertySearchResult,
+  RealEstateApiSkipTraceResponse,
+  RealEstateApiSkipTraceResult,
   RealEstateApiAddress,
 } from "../types/RealEstateApi.ts";
 
@@ -28,6 +30,12 @@ export class RealEstateApiDao {
   private static readonly DEV_MOCK_DETAIL: RealEstateApiPropertyDetailResponse = {
     data: { mlsActive: false },
   };
+  /**
+   * Skip-trace dev mock (JAK-136): a deterministic NO-MATCH (never a fabricated
+   * owner/phone/PII), so off-prod skip-trace flows resolve to "no contact found"
+   * and no credit is spent — the SAME dev-safety boundary as the property lookups.
+   */
+  private static readonly DEV_MOCK_SKIPTRACE: RealEstateApiSkipTraceResponse = { data: null };
 
   constructor(
     private readonly env: EnvConfig,
@@ -102,6 +110,48 @@ export class RealEstateApiDao {
       return data.data?.[0] ?? null;
     } catch (err: any) {
       console.error(`❌ PropertySearch error: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Skip-trace an OWNER by property address (JAK-136) — the /v2/SkipTrace
+   * owner/contact lookup that backs the text-Jake skip-trace specialist. Returns
+   * the top match record (or null on no match). An optional owner name (carried
+   * over from a prior property result in memory) narrows the trace when present.
+   *
+   * This is a PAID, READ-ONLY endpoint, so it funnels through the SAME
+   * {@link paidPost} chokepoint as PropertySearch/PropertyDetail: off prod/staging
+   * it NEVER spends — the call is echoed and the deterministic no-match dev mock is
+   * returned instead of hitting the provider (dev never spends real credits/$).
+   */
+  public async skipTraceByAddress(
+    addressString: string,
+    owner?: { firstName?: string | null; lastName?: string | null }
+  ): Promise<RealEstateApiSkipTraceResult | null> {
+    try {
+      const parsed = this.parseAddress(addressString);
+      const body: Record<string, string> = parsed
+        ? {
+            address: `${parsed.house} ${parsed.street}`.trim(),
+            city: parsed.city,
+            state: parsed.state,
+            zip: parsed.zip,
+          }
+        : { address: addressString };
+      const first = owner?.firstName?.trim();
+      const last = owner?.lastName?.trim();
+      if (first) body.first_name = first;
+      if (last) body.last_name = last;
+
+      const data = await this.paidPost<RealEstateApiSkipTraceResponse>(
+        "/v2/SkipTrace",
+        body,
+        RealEstateApiDao.DEV_MOCK_SKIPTRACE
+      );
+      return data.data ?? null;
+    } catch (err: any) {
+      console.error(`❌ SkipTrace error: ${err.message}`);
       return null;
     }
   }

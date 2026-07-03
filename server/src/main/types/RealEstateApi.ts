@@ -193,6 +193,64 @@ export type RealEstateApiPropertySearchResponse = {
     data: RealEstateApiPropertySearchResult[];
 };
 
+/**
+ * One phone number on a /v2/SkipTrace result (JAK-136). The provider ships a few
+ * shapes across records, so every field is optional and an index signature keeps
+ * mapping null-safe; the DAO hands the whole record downstream and the specialist
+ * extracts a display number defensively.
+ */
+export type RealEstateApiSkipTracePhone = {
+    phone?: string | null;
+    number?: string | null;
+    phoneDisplay?: string | null;
+    telephone?: string | null;
+    type?: string | null;
+    phoneType?: string | null;
+    isConnected?: boolean | null;
+    doNotCall?: boolean | null;
+    [key: string]: unknown;
+};
+
+/** One email on a /v2/SkipTrace result (JAK-136). */
+export type RealEstateApiSkipTraceEmail = {
+    email?: string | null;
+    address?: string | null;
+    [key: string]: unknown;
+};
+
+/**
+ * A /v2/SkipTrace result record (JAK-136) — the owner/contact lookup for an
+ * address (or a named person). Field locations vary by provider account, so
+ * everything is optional and an index signature keeps the mapping
+ * forward-compatible; the specialist reads phones/emails/name/mailing defensively
+ * and NEVER fabricates a value that isn't present.
+ */
+export type RealEstateApiSkipTraceResult = {
+    match?: boolean | null;
+    /** Some accounts surface a top-level owner name; others nest it under output.identity. */
+    name?: string | null;
+    output?: {
+        identity?: {
+            name?: string | null;
+            names?: Array<{ fullName?: string | null; firstName?: string | null; lastName?: string | null } | string> | null;
+            address?: RealEstateApiMailingAddress | null;
+            phones?: RealEstateApiSkipTracePhone[] | null;
+            emails?: RealEstateApiSkipTraceEmail[] | null;
+        } | null;
+        demographics?: Record<string, unknown> | null;
+        [key: string]: unknown;
+    } | null;
+    /** Some accounts flatten phones/emails onto the record itself. */
+    phones?: RealEstateApiSkipTracePhone[] | null;
+    emails?: RealEstateApiSkipTraceEmail[] | null;
+    mailAddress?: RealEstateApiMailingAddress | null;
+    [key: string]: unknown;
+};
+
+export type RealEstateApiSkipTraceResponse = {
+    data?: RealEstateApiSkipTraceResult | null;
+};
+
 export type RealEstateApiPropertyDetailResponse = {
     data: RealEstateApiPropertyDetail;
 };

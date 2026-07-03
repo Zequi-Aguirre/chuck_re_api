@@ -119,3 +119,30 @@ export interface OrchestratorPromptView {
   updatedAt: string | null;
   updatedBy: string | null;
 }
+
+/**
+ * The editable STYLE prompt for the text-Jake skip-trace specialist (JAK-136).
+ * `prompt` is the effective value (the stored edit, or the code default when
+ * `isDefault`). The hard guardrails (no emojis / only-provided-values /
+ * GoTextJake.com footer) are NOT part of this — the specialist writer enforces
+ * them, so an edit here can never make Jake invent contact info or drop the footer.
+ */
+export interface SkipTracePromptView {
+  prompt: string;
+  isDefault: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+/**
+ * The editable CREDIT COST of one text-Jake skip trace (JAK-136). `value` is the
+ * effective cost in credits (the stored edit, or the code default when
+ * `isDefault`). A skip trace is a paid call, so the cost is always a positive
+ * integer — it can never be set to free.
+ */
+export interface SkipTraceCostView {
+  value: number;
+  isDefault: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}

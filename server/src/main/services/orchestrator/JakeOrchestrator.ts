@@ -84,11 +84,13 @@ export class JakeOrchestrator {
   }
 
   /**
-   * Resolve the concrete entity the plan acts on. Only the report intents carry a
-   * target: prefer a fresh explicit address, else an ordinal reference into the
-   * resolved-address list (out-of-range → null so the assistant can clarify),
-   * else the deterministically-parsed address. report_refresh's target is the
-   * last address, which the assistant resolves from memory at execution time.
+   * Resolve the concrete entity the plan acts on. property_report AND skip_trace
+   * (JAK-136) both act on an address: prefer a fresh explicit address, else an
+   * ordinal reference into the resolved-address list (out-of-range → null so the
+   * assistant can clarify), else the deterministically-parsed address. When none
+   * resolves here, the assistant falls back to the last resolved address at
+   * execution time (e.g. a bare "skip trace it"). report_refresh's target is the
+   * last address, also resolved by the assistant. comps/chitchat carry no target.
    */
   private resolveTarget(
     intent: JakeIntent,
@@ -96,7 +98,7 @@ export class JakeOrchestrator {
     resolvedAddresses: string[],
     input: OrchestratorInput
   ): string | null {
-    if (intent !== "property_report") return null;
+    if (intent !== "property_report" && intent !== "skip_trace") return null;
 
     if (classification.targetAddress) return classification.targetAddress;
 

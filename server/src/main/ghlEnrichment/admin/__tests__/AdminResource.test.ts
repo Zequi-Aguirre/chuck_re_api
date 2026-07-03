@@ -9,6 +9,8 @@ import { AdminResource } from "../AdminResource";
 import { AdminConnectionView, AdminTextCustomerView } from "../AdminTypes";
 import { PropertyReportPromptService } from "../../../services/PropertyReportPromptService";
 import { OrchestratorPromptService } from "../../../services/orchestrator/OrchestratorPromptService";
+import { SkipTracePromptService } from "../../../services/skiptrace/SkipTracePromptService";
+import { SkipTraceSettingsService } from "../../../services/skiptrace/SkipTraceSettingsService";
 
 // Obviously-fake, low-entropy placeholder used by the reset-password tests.
 // Held in a constant (not inlined next to a `password:` key) so a secret
@@ -34,6 +36,8 @@ describe("AdminResource", () => {
   let status: MockProxy<GhlStatusService>;
   let reportPrompt: MockProxy<PropertyReportPromptService>;
   let orchestratorPrompt: MockProxy<OrchestratorPromptService>;
+  let skipTracePrompt: MockProxy<SkipTracePromptService>;
+  let skipTraceSettings: MockProxy<SkipTraceSettingsService>;
   let app: Express;
 
   beforeEach(() => {
@@ -43,6 +47,8 @@ describe("AdminResource", () => {
     status = mock<GhlStatusService>();
     reportPrompt = mock<PropertyReportPromptService>();
     orchestratorPrompt = mock<OrchestratorPromptService>();
+    skipTracePrompt = mock<SkipTracePromptService>();
+    skipTraceSettings = mock<SkipTraceSettingsService>();
     // Default: authenticated AS A SUPERADMIN so the admin-management tests reach
     // their handlers. Individual tests override to a plain admin / no session.
     auth.verifyToken.mockReturnValue({ sub: "admin-id", email: "admin@example.com", role: "superadmin" });
@@ -51,8 +57,16 @@ describe("AdminResource", () => {
     app.use(express.json());
     app.use(
       "/api/admin",
-      new AdminResource(auth, connections, textCustomers, status, reportPrompt, orchestratorPrompt)
-        .router
+      new AdminResource(
+        auth,
+        connections,
+        textCustomers,
+        status,
+        reportPrompt,
+        orchestratorPrompt,
+        skipTracePrompt,
+        skipTraceSettings
+      ).router
     );
   });
 
@@ -392,6 +406,121 @@ describe("AdminResource", () => {
       expect(res.status).toBe(200);
       expect(res.body.isDefault).toBe(true);
       expect(orchestratorPrompt.resetPrompt).toHaveBeenCalled();
+    });
+  });
+
+  // --- Skip-trace specialist prompt (JAK-136) -------------------------------
+
+  describe("AI prompt (skiptrace-prompt)", () => {
+    const promptView = (over: Record<string, unknown> = {}) => ({
+      prompt: "SKIP TRACE PROMPT",
+      isDefault: false,
+      updatedAt: new Date("2026-07-03T00:00:00Z"),
+      updatedBy: "admin-id",
+      ...over,
+    });
+
+    it("is behind the auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app).get("/api/admin/skiptrace-prompt");
+      expect(res.status).toBe(401);
+      expect(skipTracePrompt.getView).not.toHaveBeenCalled();
+    });
+
+    it("is available to a REGULAR admin — NOT superadmin-gated", async () => {
+      asPlainAdmin();
+      skipTracePrompt.getView.mockResolvedValue(promptView({ isDefault: true }) as never);
+      skipTracePrompt.setPrompt.mockResolvedValue(promptView({ prompt: "NEW" }) as never);
+      skipTracePrompt.resetPrompt.mockResolvedValue(promptView({ isDefault: true }) as never);
+
+      expect((await asAdmin(request(app).get("/api/admin/skiptrace-prompt"))).status).toBe(200);
+      expect(
+        (await asAdmin(request(app).put("/api/admin/skiptrace-prompt").send({ prompt: "NEW" }))).status
+      ).toBe(200);
+      expect((await asAdmin(request(app).post("/api/admin/skiptrace-prompt/reset"))).status).toBe(200);
+    });
+
+    it("GET returns the effective prompt view (no hash/secret fields)", async () => {
+      skipTracePrompt.getView.mockResolvedValue(promptView() as never);
+      const res = await asAdmin(request(app).get("/api/admin/skiptrace-prompt"));
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        prompt: "SKIP TRACE PROMPT",
+        isDefault: false,
+        updatedAt: "2026-07-03T00:00:00.000Z",
+        updatedBy: "admin-id",
+      });
+    });
+
+    it("PUT saves a non-empty prompt with the editing admin id", async () => {
+      skipTracePrompt.setPrompt.mockResolvedValue(promptView({ prompt: "Terse" }) as never);
+      const res = await asAdmin(
+        request(app).put("/api/admin/skiptrace-prompt").send({ prompt: "  Terse  " })
+      );
+      expect(res.status).toBe(200);
+      expect(skipTracePrompt.setPrompt).toHaveBeenCalledWith("Terse", "admin-id");
+    });
+
+    it("PUT 400s an empty prompt", async () => {
+      const res = await asAdmin(request(app).put("/api/admin/skiptrace-prompt").send({ prompt: "   " }));
+      expect(res.status).toBe(400);
+      expect(skipTracePrompt.setPrompt).not.toHaveBeenCalled();
+    });
+
+    it("reset reverts to the default", async () => {
+      skipTracePrompt.resetPrompt.mockResolvedValue(promptView({ isDefault: true }) as never);
+      const res = await asAdmin(request(app).post("/api/admin/skiptrace-prompt/reset"));
+      expect(res.status).toBe(200);
+      expect(res.body.isDefault).toBe(true);
+      expect(skipTracePrompt.resetPrompt).toHaveBeenCalled();
+    });
+  });
+
+  // --- Skip-trace credit cost (JAK-136) ------------------------------------
+
+  describe("skiptrace-cost", () => {
+    const costView = (over: Record<string, unknown> = {}) => ({
+      value: 3,
+      isDefault: false,
+      updatedAt: new Date("2026-07-03T00:00:00Z"),
+      updatedBy: "admin-id",
+      ...over,
+    });
+
+    it("is behind the auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app).get("/api/admin/skiptrace-cost");
+      expect(res.status).toBe(401);
+      expect(skipTraceSettings.getView).not.toHaveBeenCalled();
+    });
+
+    it("GET returns the effective cost view", async () => {
+      skipTraceSettings.getView.mockResolvedValue(costView() as never);
+      const res = await asAdmin(request(app).get("/api/admin/skiptrace-cost"));
+      expect(res.status).toBe(200);
+      expect(res.body.value).toBe(3);
+    });
+
+    it("PUT saves a positive-integer cost with the editing admin id", async () => {
+      skipTraceSettings.setCost.mockResolvedValue(costView({ value: 5 }) as never);
+      const res = await asAdmin(request(app).put("/api/admin/skiptrace-cost").send({ credits: 5 }));
+      expect(res.status).toBe(200);
+      expect(skipTraceSettings.setCost).toHaveBeenCalledWith(5, "admin-id");
+    });
+
+    it("PUT 400s a zero / non-integer cost (a paid call can never be free)", async () => {
+      expect((await asAdmin(request(app).put("/api/admin/skiptrace-cost").send({ credits: 0 }))).status).toBe(400);
+      expect((await asAdmin(request(app).put("/api/admin/skiptrace-cost").send({ credits: 2.5 }))).status).toBe(400);
+      expect((await asAdmin(request(app).put("/api/admin/skiptrace-cost").send({ credits: -1 }))).status).toBe(400);
+      expect(skipTraceSettings.setCost).not.toHaveBeenCalled();
+    });
+
+    it("reset reverts to the default", async () => {
+      skipTraceSettings.resetCost.mockResolvedValue(costView({ isDefault: true }) as never);
+      const res = await asAdmin(request(app).post("/api/admin/skiptrace-cost/reset"));
+      expect(res.status).toBe(200);
+      expect(res.body.isDefault).toBe(true);
+      expect(skipTraceSettings.resetCost).toHaveBeenCalled();
     });
   });
 

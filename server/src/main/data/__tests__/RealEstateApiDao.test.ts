@@ -55,6 +55,13 @@ describe("RealEstateApiDao — paid-lookup dev safety (JAK-110)", () => {
       expect(await dao.searchPropertyByAddress(ADDRESS)).toBeNull();
       expect(post).not.toHaveBeenCalled();
     });
+
+    it("mocks a SkipTrace lookup with a deterministic no-match (no transport, no spend)", async () => {
+      const dao = daoFor(false);
+      // JAK-136: dev NEVER hits the paid /v2/SkipTrace — returns no owner/PII.
+      expect(await dao.skipTraceByAddress(ADDRESS)).toBeNull();
+      expect(post).not.toHaveBeenCalled();
+    });
   });
 
   describe("prod / staging (real actions ON)", () => {
@@ -80,6 +87,26 @@ describe("RealEstateApiDao — paid-lookup dev safety (JAK-110)", () => {
       expect(post).toHaveBeenCalledTimes(1);
       expect(post.mock.calls[0][0]).toBe("/v2/PropertySearch");
       expect(id).toBe(42);
+    });
+
+    it("hits the real /v2/SkipTrace endpoint in prod with the parsed address parts", async () => {
+      post.mockResolvedValue({
+        data: { data: { match: true, output: { identity: { name: "Owner One" } } } },
+      });
+      const dao = daoFor(true);
+
+      const result = await dao.skipTraceByAddress(ADDRESS);
+
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(post.mock.calls[0][0]).toBe("/v2/SkipTrace");
+      // The address is parsed into structured params for the trace.
+      expect(post.mock.calls[0][1]).toMatchObject({
+        address: "102 Southwind Dr",
+        city: "Kathleen",
+        state: "GA",
+        zip: "31047",
+      });
+      expect(result?.output?.identity?.name).toBe("Owner One");
     });
   });
 });
