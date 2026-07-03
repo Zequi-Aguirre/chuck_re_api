@@ -885,8 +885,14 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       ],
     };
 
-    it("JAK-144: runs the paid trace IMMEDIATELY (no OK), charges on success, snapshots", async () => {
+    it("JAK-145: traces the OWNER (name + address), charges on success, snapshots per-person", async () => {
       orchestrator.plan.mockResolvedValue(skipTracePlan());
+      // JAK-145: the default flow pulls the owner from PropertySearch and passes the
+      // owner NAME alongside the address — not just the address's top resident.
+      realEstate.searchPropertyByAddress.mockResolvedValue({
+        owner1FirstName: "Homer",
+        owner1LastName: "Simpson",
+      } as never);
       realEstate.skipTraceByAddress.mockResolvedValue(personsHit as never);
 
       const result = await service.handleInboundMessage({
@@ -895,8 +901,17 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
         message: "skip trace 742 Evergreen Terrace",
       });
 
-      // Ran on the first ask — NO confirmation step, NO pending offer.
-      expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith(TARGET);
+      // Ran on the first ask — NO confirmation step, NO pending offer — and passed
+      // the resolved owner name to the trace (JAK-145 Part A).
+      expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith(TARGET, {
+        firstName: "Homer",
+        lastName: "Simpson",
+      });
+      // Cache/free-reserve is keyed per (address + resolved person), not address alone.
+      expect(skipTrace.checkCache).toHaveBeenCalledWith("+15559990000", TARGET, "homer simpson");
+      expect(skipTrace.recordTrace).toHaveBeenCalledWith(
+        expect.objectContaining({ subjectKey: "homer simpson" })
+      );
       expect(skipTrace.setPending).not.toHaveBeenCalled();
       // The top-level persons[] (JAK-144 live shape) is parsed into the verified
       // data handed to the writer — owner name, phones, and emails.
@@ -920,6 +935,106 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(sent().toLowerCase()).not.toContain("reply ok");
       expect(sent().endsWith("Get more property info\nGoTextJake.com")).toBe(true);
       expect(sent()).not.toMatch(/\p{Extended_Pictographic}/u);
+    });
+
+    it("JAK-145 Part B: traces the PEOPLE the texter named, keyed per person, no owner fetch", async () => {
+      // "skip trace Marge and Homer" — the router extracts the named people. Fictional
+      // personas only; the scenario mirrors the live 'skip trace the two owners' ask.
+      orchestrator.plan.mockResolvedValue({ ...skipTracePlan(), personNames: ["Marge", "Homer"] });
+      realEstate.skipTraceByAddress.mockResolvedValue(personsHit as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "skip trace Marge and Homer",
+      });
+
+      // The FIRST named person's name goes to the provider (address for context).
+      expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith(TARGET, {
+        firstName: "Marge",
+        lastName: null,
+      });
+      // A named-person request never pays for an owner PropertySearch.
+      expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
+      // Keyed on the named people (sorted, order-independent) — NOT address alone.
+      expect(skipTrace.checkCache).toHaveBeenCalledWith("+15559990000", TARGET, "homer|marge");
+      expect(skipTrace.recordTrace).toHaveBeenCalledWith(
+        expect.objectContaining({ subjectKey: "homer|marge" })
+      );
+    });
+
+    it("JAK-145 Part C: hands the writer contacts GROUPED per person", async () => {
+      orchestrator.plan.mockResolvedValue(skipTracePlan());
+      // Two matched people at the address, each with their own numbers/emails.
+      realEstate.skipTraceByAddress.mockResolvedValue({
+        match: true,
+        persons: [
+          { fullName: "Ned Flanders", phones: [{ phone: "+15550001" }], emails: ["ned@example.com"] },
+          { fullName: "Maude Flanders", phones: [{ phone: "+15550002" }], emails: ["maude@example.com"] },
+        ],
+      } as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "skip trace 742 Evergreen Terrace",
+      });
+
+      const data = skipTraceWriter.write.mock.calls.at(-1)![0];
+      expect(data.persons).toEqual([
+        { name: "Ned Flanders", phones: ["+15550001"], emails: ["ned@example.com"] },
+        { name: "Maude Flanders", phones: ["+15550002"], emails: ["maude@example.com"] },
+      ]);
+    });
+
+    it("JAK-145 Part D: a DIFFERENT person at the same address is a NEW lookup (no cache collision)", async () => {
+      // Owner-default trace and a named-person trace at the SAME address resolve to
+      // DIFFERENT cache keys, so the named request can't be served the owner's cached
+      // result (the live 'ask for the other owner returns the cached first person' bug).
+      realEstate.searchPropertyByAddress.mockResolvedValue({
+        owner1FirstName: "Homer",
+        owner1LastName: "Simpson",
+      } as never);
+      realEstate.skipTraceByAddress.mockResolvedValue(personsHit as never);
+
+      orchestrator.plan.mockResolvedValue(skipTracePlan());
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "skip trace 742 Evergreen Terrace",
+      });
+
+      orchestrator.plan.mockResolvedValue({ ...skipTracePlan(), personNames: ["Marge Simpson"] });
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "what about Marge Simpson the co-owner?",
+      });
+
+      const keys = skipTrace.checkCache.mock.calls.map((c) => c[2]);
+      expect(keys).toContain("homer simpson"); // owner default
+      expect(keys).toContain("marge simpson"); // the named person — a distinct slot
+    });
+
+    it("JAK-145 Part D: a repeat of the SAME resolved person re-serves FREE", async () => {
+      realEstate.searchPropertyByAddress.mockResolvedValue({
+        owner1FirstName: "Homer",
+        owner1LastName: "Simpson",
+      } as never);
+      // The same owner is already on record for this (address + person) key.
+      skipTrace.checkCache.mockResolvedValue(skipTraceRow({ target_key: "742 evergreen terrace::homer simpson" }));
+      orchestrator.plan.mockResolvedValue(skipTracePlan());
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "skip trace 742 Evergreen Terrace again",
+      });
+
+      expect(result.reserved).toBe(true);
+      expect(result.charged).toBe(0);
+      expect(realEstate.skipTraceByAddress).not.toHaveBeenCalled();
+      expect(skipTrace.checkCache).toHaveBeenCalledWith("+15559990000", TARGET, "homer simpson");
     });
 
     it("insufficient credits → clear no-charge message, does NOT run, NO paid API", async () => {
@@ -1010,8 +1125,109 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
         message: "skip trace it",
       });
 
-      expect(skipTrace.checkCache).toHaveBeenCalledWith("+15559990000", "9 B Rd, Town, CA 90000");
+      // Owner unresolved here (no cache, no PropertySearch match) → address-only key
+      // and an address-only trace, exactly as before.
+      expect(skipTrace.checkCache).toHaveBeenCalledWith("+15559990000", "9 B Rd, Town, CA 90000", "");
       expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith("9 B Rd, Town, CA 90000");
+    });
+
+    // JAK-145: /v2/SkipTrace is ADDRESS-DOMINANT — it returns the current residents of
+    // whatever address we pass and ignores the owner name (live-verified). So for an
+    // ABSENTEE property the property address returns TENANTS, never the owner; the
+    // owner's tax MAILING address is what reaches the owner (a clean absentee owner
+    // returned as the top match at their mailing address in the live diagnosis). These
+    // use recorded-SHAPE fixtures (fictional personas, no live calls). The property
+    // address stays the report header + cache key; only the queried address changes.
+    describe("JAK-145: absentee owner → trace the MAILING address", () => {
+      // Owner-occupied is `false` and the mailing address differs from the property.
+      const absenteeRecord = {
+        owner1FirstName: "Homer",
+        owner1LastName: "Simpson",
+        ownerOccupied: false,
+        mailAddress: { address: "1 Retreat Rd", city: "Shelbyville", state: "IL", zip: "62565" },
+      };
+      const MAILING = "1 Retreat Rd, Shelbyville IL 62565";
+
+      it("traces the owner's MAILING address (not the property) and reaches the owner", async () => {
+        orchestrator.plan.mockResolvedValue(skipTracePlan());
+        realEstate.searchPropertyByAddress.mockResolvedValue(absenteeRecord as never);
+        realEstate.skipTraceByAddress.mockResolvedValue(personsHit as never);
+
+        const result = await service.handleInboundMessage({
+          contactId: "ct_1",
+          senderPhone: "+15559990000",
+          message: "skip trace 742 Evergreen Terrace",
+        });
+
+        // Queried the owner's MAILING address, carrying the owner name.
+        expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith(MAILING, {
+          firstName: "Homer",
+          lastName: "Simpson",
+        });
+        // The mailing trace returned contact info, so NO property-address fallback.
+        expect(realEstate.skipTraceByAddress).toHaveBeenCalledTimes(1);
+        // Cache/report still keyed on the PROPERTY address + owner identity — the trace
+        // address is an implementation detail, not part of the cache key.
+        expect(skipTrace.checkCache).toHaveBeenCalledWith("+15559990000", TARGET, "homer simpson");
+        expect(skipTrace.recordTrace).toHaveBeenCalledWith(
+          expect.objectContaining({ normalizedTarget: TARGET, subjectKey: "homer simpson" })
+        );
+        expect(result.charged).toBe(3);
+        expect(sent()).toContain("Homer Simpson");
+      });
+
+      it("OWNER-OCCUPANT (mailing == property) falls back to the PROPERTY address", async () => {
+        orchestrator.plan.mockResolvedValue(skipTracePlan());
+        realEstate.searchPropertyByAddress.mockResolvedValue({
+          owner1FirstName: "Homer",
+          owner1LastName: "Simpson",
+          // No ownerOccupied flag — the mailing address EQUALS the property address, so
+          // the address comparison alone must resolve to owner-occupied (trace property).
+          mailAddress: { address: "742 Evergreen Terrace", city: "Springfield", state: "IL", zip: "62704" },
+        } as never);
+        realEstate.skipTraceByAddress.mockResolvedValue(personsHit as never);
+
+        await service.handleInboundMessage({
+          contactId: "ct_1",
+          senderPhone: "+15559990000",
+          message: "skip trace 742 Evergreen Terrace",
+        });
+
+        // Owner-occupant → the PROPERTY address is traced, exactly once, never a mailing.
+        expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith(TARGET, {
+          firstName: "Homer",
+          lastName: "Simpson",
+        });
+        expect(realEstate.skipTraceByAddress).toHaveBeenCalledTimes(1);
+      });
+
+      it("an absentee MAILING trace that finds NOBODY falls back to the PROPERTY address", async () => {
+        orchestrator.plan.mockResolvedValue(skipTracePlan());
+        realEstate.searchPropertyByAddress.mockResolvedValue(absenteeRecord as never);
+        // Mailing address returns no contact (stale / PO box); the property address does.
+        realEstate.skipTraceByAddress
+          .mockResolvedValueOnce(null as never)
+          .mockResolvedValueOnce(personsHit as never);
+
+        const result = await service.handleInboundMessage({
+          contactId: "ct_1",
+          senderPhone: "+15559990000",
+          message: "skip trace 742 Evergreen Terrace",
+        });
+
+        // First the mailing address, then the property-address fallback — both with the name.
+        expect(realEstate.skipTraceByAddress).toHaveBeenNthCalledWith(1, MAILING, {
+          firstName: "Homer",
+          lastName: "Simpson",
+        });
+        expect(realEstate.skipTraceByAddress).toHaveBeenNthCalledWith(2, TARGET, {
+          firstName: "Homer",
+          lastName: "Simpson",
+        });
+        // The fallback delivered contact info → charged, and the owner is in the reply.
+        expect(result.charged).toBe(3);
+        expect(sent()).toContain("Homer Simpson");
+      });
     });
   });
 

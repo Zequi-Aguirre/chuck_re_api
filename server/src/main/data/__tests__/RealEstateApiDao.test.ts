@@ -131,6 +131,25 @@ describe("RealEstateApiDao — paid-lookup dev safety (JAK-110)", () => {
       expect(result?.persons?.[0]?.phones?.[0]?.phone).toBe("5615550100");
     });
 
+    it("passes the owner first/last name into the /v2/SkipTrace body (JAK-145)", async () => {
+      post.mockResolvedValue({ data: { match: true, persons: [{ fullName: "Owner One" }] } });
+      const dao = daoFor(true);
+
+      await dao.skipTraceByAddress(ADDRESS, { firstName: "Homer", lastName: "Simpson" });
+
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(post.mock.calls[0][0]).toBe("/v2/SkipTrace");
+      // The owner name rides alongside the parsed address so we trace the right person.
+      expect(post.mock.calls[0][1]).toMatchObject({
+        address: "102 Southwind Dr",
+        city: "Kathleen",
+        state: "GA",
+        zip: "31047",
+        first_name: "Homer",
+        last_name: "Simpson",
+      });
+    });
+
     it("pulls comps via /v2/PropertyDetail(comps:true) and normalizes the response (JAK-144)", async () => {
       // JAK-144: the standalone PropertyComps endpoints are 401 for this key; comps
       // come from PropertyDetail with comps:true, nested under data.comps, with the

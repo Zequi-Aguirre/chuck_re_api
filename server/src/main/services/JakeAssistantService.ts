@@ -12,6 +12,7 @@ import { TextJakeCustomer } from "../ghlEnrichment/customers/TextJakeCustomerTyp
 import { normalizeInboundAddress } from "../util/address.ts";
 import { JakeInboundMessage, JakeInboundResult, JakeTextMode } from "../types/Jake.ts";
 import {
+    RealEstateApiAddress,
     RealEstateApiMailingAddress,
     RealEstateApiPropertyCompsResponse,
     RealEstateApiPropertySearchResult,
@@ -33,7 +34,14 @@ import { DisambiguationPendingRow } from "./disambiguation/DisambiguationTypes.t
 import { SkipTraceReportWriter } from "./skiptrace/SkipTraceReportWriter.ts";
 import { SkipTraceMemoryService } from "./skiptrace/SkipTraceMemoryService.ts";
 import { SkipTraceSettingsService } from "./skiptrace/SkipTraceSettingsService.ts";
-import { SkipTraceData, SkipTraceRow, hasContactInfo } from "./skiptrace/SkipTraceTypes.ts";
+import {
+    SkipTraceData,
+    SkipTracePersonContact,
+    SkipTraceRow,
+    SkipTraceSubject,
+    hasContactInfo,
+    skipTraceSubjectKey,
+} from "./skiptrace/SkipTraceTypes.ts";
 import { CompsReportWriter } from "./comps/CompsReportWriter.ts";
 import { CompsMemoryService } from "./comps/CompsMemoryService.ts";
 import { CompsSettingsService } from "./comps/CompsSettingsService.ts";
@@ -491,10 +499,19 @@ export class JakeAssistantService {
             return { ok: true, address: null, reply, mode: route.mode, charged: 0 };
         }
 
+        // JAK-145: resolve WHO we trace — the texter-named people ("skip trace
+        // Jane and John"), else the PROPERTY OWNER pulled from PropertySearch
+        // (reusing the cached report's ownerInfo when we have it, so we don't pay for
+        // a second lookup). The owner name + address go to the trace, and the cache is
+        // keyed on (address + this person identity) so a request for a DIFFERENT
+        // person at the same address is a NEW lookup, not a cached hit of the first.
+        const subject = await this.resolveTraceSubject(phone, target, plan);
+        const subjectKey = skipTraceSubjectKey(subject.names);
+
         const cost = await this.skipTraceSettings.costOfSkipTrace();
 
-        // Free re-serve: a repeat trace of the same target within the free window.
-        const cached = await this.skipTrace.checkCache(phone, target);
+        // Free re-serve: a repeat trace of the same target AND person within the window.
+        const cached = await this.skipTrace.checkCache(phone, target, subjectKey);
         if (cached) {
             return this.reserveSkipTraceFromCache({ input, route, customer, phone, target, cached, cost });
         }
@@ -526,9 +543,172 @@ export class JakeAssistantService {
             accountId,
             phone,
             target,
+            subject,
+            subjectKey,
             credits: cost,
             requestingMessageId: ctx.requestingMessageId,
         });
+    }
+
+    /**
+     * One /v2/SkipTrace call at a given address (JAK-145), passing the owner's
+     * first/last name when known. Thin wrapper so the absentee-mailing trace and its
+     * property-address fallback read the same way. Off prod/staging this returns the
+     * DAO's no-spend mock, exactly as before.
+     */
+    private skipTraceAt(
+        address: string,
+        owner?: { firstName?: string | null; lastName?: string | null }
+    ): Promise<RealEstateApiSkipTraceResult | null> {
+        return owner
+            ? this.realEstateDao.skipTraceByAddress(address, owner)
+            : this.realEstateDao.skipTraceByAddress(address);
+    }
+
+    /**
+     * Resolve the SUBJECT of a skip trace (JAK-145): WHO Jake should trace at this
+     * address. Prefers the people the texter NAMED ("skip trace Jane and
+     * John"); otherwise the PROPERTY OWNER pulled from PropertySearch ownerInfo —
+     * reusing the cached property report's record when present so we never pay for a
+     * second lookup, and only falling back to a fresh PropertySearch when there's no
+     * snapshot. Returns empty names when neither resolves (the trace then runs on the
+     * address alone, exactly as before). Never fabricates a name.
+     */
+    private async resolveTraceSubject(
+        phone: string,
+        target: string,
+        plan: DispatchPlan
+    ): Promise<SkipTraceSubject> {
+        // Part B: the texter named specific people to trace.
+        const named = (plan.personNames ?? []).map((n) => n.trim()).filter(Boolean);
+        if (named.length) {
+            const primary = this.splitName(named[0]);
+            return { names: named, firstName: primary.firstName, lastName: primary.lastName };
+        }
+
+        // Part A: trace the property owner (reuse cached ownerInfo; fetch if absent).
+        // For an ABSENTEE owner the trace runs on the owner's MAILING address, not the
+        // property address (JAK-145) — see resolveOwnerName / absenteeMailingAddress.
+        const owner = await this.resolveOwnerName(phone, target);
+        if (owner) {
+            const full = [owner.firstName, owner.lastName].filter(Boolean).join(" ").trim();
+            return {
+                names: full ? [full] : [],
+                firstName: owner.firstName,
+                lastName: owner.lastName,
+                traceAddress: owner.traceAddress,
+            };
+        }
+        return { names: [] };
+    }
+
+    /**
+     * The property owner's first/last name + the address to trace (JAK-145), pulled
+     * from PropertySearch ownerInfo. Prefers the cached report snapshot (the JAK-134
+     * lookup cache) so we don't pay for a second PropertySearch; falls back to one
+     * fresh PropertySearch when there's no snapshot. Returns null when no owner name
+     * is available. Best-effort: a lookup error resolves to null (trace by address).
+     *
+     * `traceAddress` is the owner's tax MAILING address when the property is ABSENTEE
+     * (mailing present AND != property) — the address /v2/SkipTrace should be queried
+     * with to reach the owner instead of the property's tenants — else null, so the
+     * caller traces the property address as before (see absenteeMailingAddress).
+     */
+    private async resolveOwnerName(
+        phone: string,
+        target: string
+    ): Promise<{ firstName: string | null; lastName: string | null; traceAddress: string | null } | null> {
+        let record: RealEstateApiPropertySearchResult | null = null;
+        try {
+            const cached = await this.memory.checkCache(phone, target);
+            record = (cached?.property_record as RealEstateApiPropertySearchResult | null) ?? null;
+            if (!record) record = await this.realEstateDao.searchPropertyByAddress(target);
+        } catch (err) {
+            console.error("⚠️ Jake owner-name resolve failed:", this.errorSummary(err));
+            return null;
+        }
+        if (!record) return null;
+
+        let firstName = this.text(record.owner1FirstName);
+        let lastName = this.text(record.owner1LastName);
+        if (!firstName && !lastName) {
+            const full = this.text(record.owner1FullName);
+            if (full) {
+                const parts = this.splitName(full);
+                firstName = parts.firstName;
+                lastName = parts.lastName;
+            }
+        }
+        if (!firstName && !lastName) return null;
+        return { firstName, lastName, traceAddress: this.absenteeMailingAddress(record, target) };
+    }
+
+    /**
+     * The owner's MAILING address to skip-trace when the property is ABSENTEE
+     * (JAK-145), else null. /v2/SkipTrace is ADDRESS-DOMINANT — it returns the
+     * current residents of whatever address we pass and ignores the owner name — so
+     * for an absentee property the property address returns TENANTS, never the owner;
+     * the owner's tax mailing address is where the owner is far more likely reached
+     * (live-verified: an individual absentee owner returned as the top match at their
+     * own mailing address). When the record's mailing address is present AND differs
+     * from the property address, that mailing line is returned so the caller traces
+     * it. Returns null for owner-occupants (ownerOccupied === true, or mailing ==
+     * property) and when no mailing address is on record, so the caller falls back to
+     * the property address. Pure + null-safe: never fabricates an address.
+     */
+    private absenteeMailingAddress(
+        record: RealEstateApiPropertySearchResult,
+        target: string
+    ): string | null {
+        const mailing = this.mailingDisplay(record.mailAddress ?? null);
+        if (!mailing) return null;
+        // An explicit owner-occupied flag settles it — never divert to a mailing address.
+        if (record.ownerOccupied === true) return null;
+        const property = this.propertyAddressLine(record) ?? target;
+        const norm = (s: string) =>
+            String(s ?? "").toLowerCase().replace(/[.,]/g, " ").replace(/\s+/g, " ").trim();
+        if (property && norm(mailing) === norm(property)) return null;
+        return mailing;
+    }
+
+    /**
+     * Build the property's address line from a PropertySearch record (JAK-145) for
+     * the absentee mailing-vs-property comparison. The provider ships `address` as a
+     * full-line string, a structured object (`address`/`label`/`street` + city/state/
+     * zip), so all shapes are read defensively. Null when no address is present.
+     */
+    private propertyAddressLine(record: RealEstateApiPropertySearchResult): string | null {
+        const addr = record.address as
+            | string
+            | (RealEstateApiAddress & { address?: string | null })
+            | null
+            | undefined;
+        if (typeof addr === "string") return this.text(addr);
+        if (addr && typeof addr === "object") {
+            const label = this.text(addr.label) ?? this.text(addr.address);
+            if (label) return label;
+            const line1 =
+                this.text(addr.street) ??
+                [this.text(addr.house), this.text(addr.street)].filter(Boolean).join(" ");
+            const tail = [this.text(addr.city), this.text(addr.state), this.text(addr.zip)]
+                .filter(Boolean)
+                .join(" ");
+            const parts = [line1, tail].filter(Boolean);
+            return parts.length ? parts.join(", ") : null;
+        }
+        return null;
+    }
+
+    /**
+     * Split a display name ("John Doe", "Jane") into first/last for the
+     * /v2/SkipTrace params. The first token is the first name; the remainder (if any)
+     * is the last name. Single-token names carry only a first name. Never throws.
+     */
+    private splitName(name: string): { firstName: string | null; lastName: string | null } {
+        const parts = String(name).trim().replace(/\s+/g, " ").split(" ").filter(Boolean);
+        if (!parts.length) return { firstName: null, lastName: null };
+        if (parts.length === 1) return { firstName: parts[0], lastName: null };
+        return { firstName: parts[0], lastName: parts.slice(1).join(" ") };
     }
 
     /**
@@ -573,18 +753,46 @@ export class JakeAssistantService {
         accountId: string;
         phone: string;
         target: string;
+        subject: SkipTraceSubject;
+        subjectKey: string;
         credits: number;
         requestingMessageId: string | null;
     }): Promise<JakeInboundResult> {
-        const { input, route, customer, accountId, phone, target, credits } = ctx;
+        const { input, route, customer, accountId, phone, target, subject, subjectKey, credits } = ctx;
 
         // The paid trace + the LLM writer can take a moment; ack now and deliver the
         // result in a follow-up so the texter isn't left waiting silently (JAK-138).
         await this.sendAck(route, input.contactId);
 
+        // JAK-145: trace the resolved PERSON (owner or texter-named) — pass their
+        // first/last name alongside the address so we're asking for the right person,
+        // not just the address's top resident.
+        const owner =
+            subject.firstName || subject.lastName
+                ? { firstName: subject.firstName, lastName: subject.lastName }
+                : undefined;
+
+        // JAK-145: for an ABSENTEE owner, subject.traceAddress is the owner's MAILING
+        // address — /v2/SkipTrace is address-dominant, so the property address returns
+        // tenants while the mailing address reaches the owner. Trace the mailing
+        // address first; if it yields NO contact, fall back to the property address so
+        // an absentee owner with a stale/PO-box mailing still gets a best-effort trace.
+        // Owner-occupants have no traceAddress, so they trace the property address once.
+        const primaryAddress = subject.traceAddress?.trim() || target;
+
         let record: RealEstateApiSkipTraceResult | null;
+        let data: SkipTraceData;
         try {
-            record = await this.realEstateDao.skipTraceByAddress(target);
+            record = await this.skipTraceAt(primaryAddress, owner);
+            data = this.assembleSkipTraceData(record, target, subject);
+            if (primaryAddress !== target && !hasContactInfo(data)) {
+                const fallback = await this.skipTraceAt(target, owner);
+                const fallbackData = this.assembleSkipTraceData(fallback, target, subject);
+                if (hasContactInfo(fallbackData)) {
+                    record = fallback;
+                    data = fallbackData;
+                }
+            }
         } catch (err) {
             const reply = `Sorry — I hit a snag skip-tracing "${target}". Please try again shortly.`;
             await this.sendAndRemember(route, input.contactId, customer, phone, reply);
@@ -596,7 +804,6 @@ export class JakeAssistantService {
             return { ok: false, address: target, reply, mode: route.mode, charged: 0 };
         }
 
-        const data = this.assembleSkipTraceData(record, target);
         if (!record || !hasContactInfo(data)) {
             const reply = [
                 `I couldn't find owner contact info for ${target}, so I haven't charged you.`,
@@ -621,6 +828,7 @@ export class JakeAssistantService {
             phone,
             requestingMessageId: ctx.requestingMessageId,
             target,
+            subjectKey,
             record,
             reportText: reply,
         });
@@ -662,6 +870,7 @@ export class JakeAssistantService {
         phone: string;
         requestingMessageId: string | null;
         target: string;
+        subjectKey: string;
         record: RealEstateApiSkipTraceResult;
         reportText: string;
     }): Promise<void> {
@@ -671,6 +880,7 @@ export class JakeAssistantService {
                 phone: input.phone,
                 messageId: input.requestingMessageId,
                 normalizedTarget: input.target,
+                subjectKey: input.subjectKey,
                 traceRecord: input.record,
                 reportText: input.reportText,
             });
@@ -685,47 +895,120 @@ export class JakeAssistantService {
      * pulled defensively from the shapes the provider ships — nested under
      * `output.identity` or flattened onto the record — and de-duplicated. Never
      * fabricates a name/phone/email/address.
+     *
+     * JAK-145: the returned people are grouped into `persons[]`, each with THEIR OWN
+     * phones/emails/mailing, so the writer can present names next to their numbers
+     * instead of one flat list. The flat `phones`/`emails`/`ownerName` remain as an
+     * aggregate for back-compat + the billing gate. `subject` records who we ASKED
+     * to trace (the owner, or the texter-named people) for an honest header.
      */
     private assembleSkipTraceData(
         record: RealEstateApiSkipTraceResult | null,
-        target: string
+        target: string,
+        subject?: SkipTraceSubject | null
     ): SkipTraceData {
         const data: SkipTraceData = {};
         if (target.trim()) data.targetAddress = target.trim();
+        const requested = (subject?.names ?? []).map((n) => n.trim()).filter(Boolean);
+        if (requested.length) data.requestedName = requested.join(" & ");
         if (!record) return data;
 
-        // JAK-144: the LIVE provider returns matches under a top-level `persons[]`
+        // JAK-144/145: the LIVE provider returns matches under a top-level `persons[]`
         // array; older/other account shapes nest a single identity under
         // `output.identity` or flatten phones/emails onto the record. Read all of
         // them defensively so every shape resolves — never fabricating a value.
-        const persons = record.persons ?? [];
-        const identity = record.output?.identity ?? null;
+        const persons = this.skipTracePersonContacts(record);
+        if (persons.length) data.persons = persons;
 
-        const ownerName = this.skipTraceOwnerName(record, identity, persons);
+        const identity = record.output?.identity ?? null;
+        const rawPersons = record.persons ?? [];
+        const ownerName = this.skipTraceOwnerName(record, identity, rawPersons);
         if (ownerName) data.ownerName = ownerName;
 
-        const rawPhones: RealEstateApiSkipTracePhone[] = [
+        // Aggregate flat phones/emails across every matched person (plus the legacy
+        // shapes) — back-compat for the billing gate + the LLM's full context.
+        const phones = this.dedupe([
             ...persons.flatMap((p) => p.phones ?? []),
-            ...(identity?.phones ?? []),
-            ...(record.phones ?? []),
-        ];
-        const phones = this.dedupe(rawPhones.map((p) => this.phoneDisplay(p)));
+            ...(identity?.phones ?? []).map((p) => this.phoneDisplay(p)),
+            ...(record.phones ?? []).map((p) => this.phoneDisplay(p)),
+        ]);
         if (phones.length) data.phones = phones;
 
-        const rawEmails: Array<string | RealEstateApiSkipTraceEmail> = [
+        const emails = this.dedupe([
             ...persons.flatMap((p) => p.emails ?? []),
-            ...(identity?.emails ?? []),
-            ...(record.emails ?? []),
-        ];
-        const emails = this.dedupe(rawEmails.map((e) => this.emailDisplay(e)));
+            ...(identity?.emails ?? []).map((e) => this.emailDisplay(e)),
+            ...(record.emails ?? []).map((e) => this.emailDisplay(e)),
+        ]);
         if (emails.length) data.emails = emails;
 
-        const mailing = this.mailingDisplay(
-            persons[0]?.address ?? identity?.address ?? record.mailAddress ?? null
-        );
+        const mailing =
+            persons[0]?.mailingAddress ??
+            this.mailingDisplay(identity?.address ?? record.mailAddress ?? null);
         if (mailing) data.mailingAddress = mailing;
 
         return data;
+    }
+
+    /**
+     * Group a raw /v2/SkipTrace record into per-person contact blocks (JAK-145):
+     * each matched person with THEIR OWN name, phones, emails, and mailing address,
+     * de-duplicated. Prefers the live top-level `persons[]`; falls back to a single
+     * person built from a legacy `output.identity` / flattened record so older
+     * shapes still group cleanly. Only people with at least one field are kept —
+     * never fabricates a value.
+     */
+    private skipTracePersonContacts(record: RealEstateApiSkipTraceResult): SkipTracePersonContact[] {
+        const build = (
+            name: string | null,
+            phones: RealEstateApiSkipTracePhone[],
+            emails: Array<string | RealEstateApiSkipTraceEmail>,
+            mailing: RealEstateApiMailingAddress | null
+        ): SkipTracePersonContact | null => {
+            const person: SkipTracePersonContact = {};
+            if (name) person.name = name;
+            const ph = this.dedupe(phones.map((p) => this.phoneDisplay(p)));
+            if (ph.length) person.phones = ph;
+            const em = this.dedupe(emails.map((e) => this.emailDisplay(e)));
+            if (em.length) person.emails = em;
+            const mail = this.mailingDisplay(mailing);
+            if (mail) person.mailingAddress = mail;
+            return person.name || person.phones || person.emails || person.mailingAddress
+                ? person
+                : null;
+        };
+
+        const persons = record.persons ?? [];
+        if (persons.length) {
+            return persons
+                .map((p) =>
+                    build(
+                        this.personName(p),
+                        p.phones ?? [],
+                        p.emails ?? [],
+                        p.address ?? null
+                    )
+                )
+                .filter((p): p is SkipTracePersonContact => p !== null);
+        }
+
+        // Legacy single-identity / flattened shape → one grouped person.
+        const identity = record.output?.identity ?? null;
+        const single = build(
+            this.skipTraceOwnerName(record, identity, []),
+            [...(identity?.phones ?? []), ...(record.phones ?? [])],
+            [...(identity?.emails ?? []), ...(record.emails ?? [])],
+            identity?.address ?? record.mailAddress ?? null
+        );
+        return single ? [single] : [];
+    }
+
+    /** A single matched person's display name (live `persons[]` shape). */
+    private personName(person: RealEstateApiSkipTracePerson): string | null {
+        return (
+            this.text(person.fullName) ??
+            this.text(person.name) ??
+            (([person.firstName, person.lastName].filter(Boolean).join(" ").trim()) || null)
+        );
     }
 
     private skipTraceOwnerName(

@@ -41,6 +41,13 @@ export interface RouterClassification {
    * specialist then uses the admin defaults). Clamped downstream.
    */
   compParams?: CompParamOverrides | null;
+  /**
+   * For a skip_trace request (JAK-145) where the texter NAMED specific people to
+   * trace ("skip trace Jane and John", "trace John Smith"), the names they
+   * gave. Absent/omitted when they named nobody ("skip trace the owner") — the
+   * skip-trace specialist then traces the property owner from PropertySearch.
+   */
+  personNames?: string[] | null;
 }
 
 /**
@@ -87,6 +94,12 @@ const CLASSIFICATION_SCHEMA = {
       type: "string",
       description: "A short, plain, emoji-free note describing what you're doing.",
     },
+    personNames: {
+      type: ["array", "null"],
+      description:
+        "For a skip_trace request, the specific people the user NAMED to trace (e.g. 'skip trace Jane and John' -> ['Jane', 'John']). Use null when they named no specific person (e.g. 'skip trace the owner').",
+      items: { type: "string" },
+    },
     compParams: {
       type: ["object", "null"],
       additionalProperties: false,
@@ -110,7 +123,7 @@ const CLASSIFICATION_SCHEMA = {
       ],
     },
   },
-  required: ["intent", "targetAddress", "addressOrdinal", "userFacingNote", "compParams"],
+  required: ["intent", "targetAddress", "addressOrdinal", "userFacingNote", "personNames", "compParams"],
 } as const;
 
 /**
@@ -147,6 +160,7 @@ export class LlmRouterClient implements RouterLlmClient {
     "- property_report: the user wants a property report for an address, whether typed in this message or referenced from the list below.",
     "- report_refresh: a bare affirmative (OK / yes / yeah / sure) confirming a fresh paid copy of the last address.",
     "- skip_trace: the user wants owner contact info / to skip-trace an owner.",
+    "- For a skip_trace request, if the user NAMED specific people to trace (e.g. 'skip trace Jane and John', 'trace John Smith', 'get the 2nd owner Jane Doe'), list those names in personNames. Use null when they named no specific person (e.g. 'skip trace the owner', 'who owns it'). Never put an address or a role word ('owner', 'seller') in personNames — only actual names.",
     "- comps: the user wants comparable sales / a CMA / comps.",
     "- For a comps request, extract into compParams ONLY the search parameters the user explicitly named — radius (miles), number of comps, timeframe (months), bed/bath/sqft tolerance. Use null for anything they did not say. Never guess parameter values.",
     "- chitchat: a greeting, thanks, or anything unrecognized.",
@@ -256,7 +270,29 @@ export class LlmRouterClient implements RouterLlmClient {
     };
     const compParams = this.parseCompParams(obj.compParams);
     if (compParams) classification.compParams = compParams;
+    const personNames = this.parsePersonNames(obj.personNames);
+    if (personNames) classification.personNames = personNames;
     return classification;
+  }
+
+  /**
+   * Pull the texter-NAMED people (JAK-145) out of the model's output — the names to
+   * skip-trace when the user asked for specific people. Keeps only non-empty
+   * strings, trimmed + de-duplicated; returns null when nothing usable was given, so
+   * the key is omitted and non-skip-trace classifications stay exactly as before.
+   */
+  private parsePersonNames(raw: unknown): string[] | null {
+    if (!Array.isArray(raw)) return null;
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const value of raw) {
+      if (typeof value !== "string") continue;
+      const name = value.trim();
+      if (!name || seen.has(name.toLowerCase())) continue;
+      seen.add(name.toLowerCase());
+      out.push(name);
+    }
+    return out.length ? out : null;
   }
 
   /**

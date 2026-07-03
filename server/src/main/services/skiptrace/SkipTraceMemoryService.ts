@@ -32,29 +32,38 @@ export class SkipTraceMemoryService {
     private readonly settings: ConversationSettingsService
   ) {}
 
-  /** Snapshot a PAID skip-trace result so a repeat within the free window is free. */
+  /**
+   * Snapshot a PAID skip-trace result so a repeat within the free window is free.
+   * JAK-145: the cache row is keyed on (address + resolved-person identity) via
+   * `subjectKey`, so a snapshot of one person can't be re-served for a request that
+   * resolved to a DIFFERENT person at the same address.
+   */
   async recordTrace(input: {
     customerId: string;
     phone: string;
     messageId: string | null;
     normalizedTarget: string;
+    subjectKey?: string;
     traceRecord: unknown;
     reportText: string;
   }): Promise<SkipTraceRow> {
     return this.store.recordTrace({
       ...input,
-      targetKey: skipTraceTargetKey(input.normalizedTarget),
+      targetKey: skipTraceTargetKey(input.normalizedTarget, input.subjectKey ?? ""),
     });
   }
 
   /**
-   * Cache-check: the stored snapshot for (phone, target) IF the last paid trace
-   * for it is still within the free re-serve window, else null. Measured against
-   * `fetched_at`; the boundary is exclusive — a snapshot exactly
-   * `free_reserve_window_days` old (or older) is stale and triggers a fresh trace.
+   * Cache-check: the stored snapshot for (phone, target, subject) IF the last paid
+   * trace for it is still within the free re-serve window, else null. JAK-145: the
+   * key includes the resolved-person identity (`subjectKey`), so a different person
+   * at the same address is a cache MISS (a new lookup), not a stale hit of the first
+   * person. Measured against `fetched_at`; the boundary is exclusive — a snapshot
+   * exactly `free_reserve_window_days` old (or older) is stale and triggers a fresh
+   * trace.
    */
-  async checkCache(phone: string, target: string): Promise<SkipTraceRow | null> {
-    const latest = await this.store.latestTrace(phone, skipTraceTargetKey(target));
+  async checkCache(phone: string, target: string, subjectKey = ""): Promise<SkipTraceRow | null> {
+    const latest = await this.store.latestTrace(phone, skipTraceTargetKey(target, subjectKey));
     if (!latest) return null;
     const windowDays = await this.settings.freeReserveWindowDays();
     const cutoff = this.clock() - windowDays * DAY_MS;

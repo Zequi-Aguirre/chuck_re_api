@@ -83,6 +83,9 @@ export class JakeOrchestrator {
       // Carry the texter's comp parameter overrides through for the comps intent
       // only (JAK-137); other intents never read them.
       compParams: intent === "comps" ? classification.compParams ?? null : null,
+      // Carry the texter-named people through for the skip_trace intent only
+      // (JAK-145); other intents never read them.
+      personNames: intent === "skip_trace" ? classification.personNames ?? null : null,
       // Pass the raw referenced ordinal through so the assistant can tell an
       // out-of-range reference ("the 5th address") apart from no reference at all
       // (JAK-138 disambiguation).

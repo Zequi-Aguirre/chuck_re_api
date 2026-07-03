@@ -73,6 +73,32 @@ describe("SkipTraceMemoryService (JAK-136)", () => {
       await svc().checkCache("+15559990000", "  742 Evergreen   Terrace ");
       expect(store.latestTrace).toHaveBeenCalledWith("+15559990000", "742 evergreen terrace");
     });
+
+    it("folds the resolved-person identity into the key (JAK-145 — per-person cache)", async () => {
+      store.latestTrace.mockResolvedValue(null);
+      await svc().checkCache("+15559990000", "742 Evergreen Terrace", "homer simpson");
+      // A DIFFERENT person at the same address is a DIFFERENT store key → new lookup.
+      expect(store.latestTrace).toHaveBeenCalledWith(
+        "+15559990000",
+        "742 evergreen terrace::homer simpson"
+      );
+    });
+
+    it("records a snapshot under the per-person key (JAK-145)", async () => {
+      store.recordTrace.mockResolvedValue(traceRow(new Date(NOW)));
+      await svc().recordTrace({
+        customerId: "cust_x",
+        phone: "+15559990000",
+        messageId: null,
+        normalizedTarget: "742 Evergreen Terrace",
+        subjectKey: "homer|marge",
+        traceRecord: { match: true },
+        reportText: "…",
+      });
+      expect(store.recordTrace).toHaveBeenCalledWith(
+        expect.objectContaining({ targetKey: "742 evergreen terrace::homer|marge" })
+      );
+    });
   });
 
   describe("freshPending (confirm-before-spend offer TTL)", () => {
