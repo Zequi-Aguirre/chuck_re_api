@@ -8,6 +8,8 @@ import { requireAdminAuth, requireSuperadmin } from "./requireAdminAuth";
 import { AdminRole } from "./AdminTypes";
 import { PropertyReportPromptService } from "../../services/PropertyReportPromptService";
 import { OrchestratorPromptService } from "../../services/orchestrator/OrchestratorPromptService";
+import { SkipTracePromptService } from "../../services/skiptrace/SkipTracePromptService";
+import { SkipTraceSettingsService } from "../../services/skiptrace/SkipTraceSettingsService";
 
 /**
  * The admin dashboard's data API (JAK-113) — CRUD over connected sub-accounts,
@@ -52,7 +54,9 @@ export class AdminResource {
     @inject(AdminTextCustomerService) private readonly textCustomers: AdminTextCustomerService,
     @inject(GhlStatusService) private readonly status: GhlStatusService,
     @inject(PropertyReportPromptService) private readonly reportPrompt: PropertyReportPromptService,
-    @inject(OrchestratorPromptService) private readonly orchestratorPrompt: OrchestratorPromptService
+    @inject(OrchestratorPromptService) private readonly orchestratorPrompt: OrchestratorPromptService,
+    @inject(SkipTracePromptService) private readonly skipTracePrompt: SkipTracePromptService,
+    @inject(SkipTraceSettingsService) private readonly skipTraceSettings: SkipTraceSettingsService
   ) {
     this.router = Router();
     this.configureRoutes();
@@ -94,6 +98,18 @@ export class AdminResource {
     this.router.get("/orchestrator-prompt", this.getOrchestratorPrompt.bind(this));
     this.router.put("/orchestrator-prompt", this.updateOrchestratorPrompt.bind(this));
     this.router.post("/orchestrator-prompt/reset", this.resetOrchestratorPrompt.bind(this));
+
+    // Skip-trace specialist (JAK-136): the admin-editable STYLE prompt AND the
+    // admin-editable credit cost, both the SAME editable pattern as above.
+    // Available to ANY logged-in admin (requireAuth only). The HARD guardrails
+    // (no emojis / only-provided-values / GoTextJake.com footer) are enforced by
+    // the specialist writer and are NOT editable here.
+    this.router.get("/skiptrace-prompt", this.getSkipTracePrompt.bind(this));
+    this.router.put("/skiptrace-prompt", this.updateSkipTracePrompt.bind(this));
+    this.router.post("/skiptrace-prompt/reset", this.resetSkipTracePrompt.bind(this));
+    this.router.get("/skiptrace-cost", this.getSkipTraceCost.bind(this));
+    this.router.put("/skiptrace-cost", this.updateSkipTraceCost.bind(this));
+    this.router.post("/skiptrace-cost/reset", this.resetSkipTraceCost.bind(this));
 
     // Admin management (JAK-124, restricted in JAK-125): ONLY a superadmin may
     // manage other admins. requireSuperadmin runs after the router-level
@@ -444,6 +460,88 @@ export class AdminResource {
   private async resetOrchestratorPrompt(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     try {
       const view = await this.orchestratorPrompt.resetPrompt();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  // --- Skip-trace specialist prompt + cost (JAK-136) ------------------------
+
+  /** Return the effective editable skip-trace prompt + whether it is still the default. */
+  private async getSkipTracePrompt(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.skipTracePrompt.getView();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /**
+   * Save an admin-edited skip-trace STYLE prompt. The body's `prompt` is the style
+   * text ONLY — the hard guardrails (no emojis, only-provided-values, footer) are
+   * enforced by the specialist writer regardless, so there is nothing dangerous to
+   * reject beyond an empty value. Records the editing admin for the audit stamp.
+   */
+  private async updateSkipTracePrompt(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const prompt = typeof req.body?.prompt === "string" ? req.body.prompt.trim() : "";
+      if (!prompt) {
+        return res.status(400).json({ error: "prompt is required" });
+      }
+      if (prompt.length > MAX_PROMPT_LENGTH) {
+        return res.status(400).json({ error: `prompt must be at most ${MAX_PROMPT_LENGTH} characters` });
+      }
+      const view = await this.skipTracePrompt.setPrompt(prompt, req.admin?.sub ?? null);
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /** Revert the skip-trace prompt to the code default (clears the stored value). */
+  private async resetSkipTracePrompt(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.skipTracePrompt.resetPrompt();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /** Return the effective skip-trace credit cost + whether it is still the default. */
+  private async getSkipTraceCost(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.skipTraceSettings.getView();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /**
+   * Save an admin-edited skip-trace credit cost. `credits` must be a positive
+   * integer — a skip trace is a PAID call, so it can never be set to 0/free.
+   * Records the editing admin for the audit stamp.
+   */
+  private async updateSkipTraceCost(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const credits = Number(req.body?.credits);
+      if (!Number.isInteger(credits) || credits <= 0) {
+        return res.status(400).json({ error: "credits must be a positive integer" });
+      }
+      const view = await this.skipTraceSettings.setCost(credits, req.admin?.sub ?? null);
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /** Revert the skip-trace credit cost to the code default (clears the stored value). */
+  private async resetSkipTraceCost(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.skipTraceSettings.resetCost();
       return res.status(200).json(view);
     } catch (err) {
       return next(err);

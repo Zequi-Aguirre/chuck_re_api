@@ -11,10 +11,20 @@ import { LookupRow } from "../ghlEnrichment/conversation/ConversationTypes.ts";
 import { TextJakeCustomer } from "../ghlEnrichment/customers/TextJakeCustomerTypes.ts";
 import { normalizeInboundAddress } from "../util/address.ts";
 import { JakeInboundMessage, JakeInboundResult, JakeTextMode } from "../types/Jake.ts";
-import { RealEstateApiPropertySearchResult } from "../types/RealEstateApi.ts";
+import {
+    RealEstateApiMailingAddress,
+    RealEstateApiPropertySearchResult,
+    RealEstateApiSkipTraceEmail,
+    RealEstateApiSkipTracePhone,
+    RealEstateApiSkipTraceResult,
+} from "../types/RealEstateApi.ts";
 import { PropertyReportWriter } from "./PropertyReportWriter.ts";
 import { JakeOrchestrator } from "./orchestrator/JakeOrchestrator.ts";
 import { DispatchPlan } from "./orchestrator/OrchestratorTypes.ts";
+import { SkipTraceReportWriter } from "./skiptrace/SkipTraceReportWriter.ts";
+import { SkipTraceMemoryService } from "./skiptrace/SkipTraceMemoryService.ts";
+import { SkipTraceSettingsService } from "./skiptrace/SkipTraceSettingsService.ts";
+import { SkipTraceData, SkipTraceRow, hasContactInfo } from "./skiptrace/SkipTraceTypes.ts";
 import {
     AbsenteeStatus,
     EquityLevel,
@@ -58,7 +68,10 @@ export class JakeAssistantService {
         private readonly credits: CreditService,
         private readonly reportWriter: PropertyReportWriter,
         private readonly memory: ConversationMemoryService,
-        private readonly orchestrator: JakeOrchestrator
+        private readonly orchestrator: JakeOrchestrator,
+        private readonly skipTraceWriter: SkipTraceReportWriter,
+        private readonly skipTrace: SkipTraceMemoryService,
+        private readonly skipTraceSettings: SkipTraceSettingsService
     ) {}
 
     /**
@@ -118,8 +131,9 @@ export class JakeAssistantService {
 
     /**
      * Execute a dispatch plan (JAK-135). Report intents keep the FULL JAK-134
-     * cache-and-free-reserve behavior; skip-trace / comps are recognized but not
-     * built (JAK-136/137) → a no-spend "coming soon" reply; chitchat → guidance.
+     * cache-and-free-reserve behavior; skip-trace is built (JAK-136) with its own
+     * confirm-before-spend + cache-and-free-reserve; comps is recognized but not
+     * built (JAK-137) → a no-spend "coming soon" reply; chitchat → guidance.
      */
     private async dispatch(
         plan: DispatchPlan,
@@ -133,6 +147,27 @@ export class JakeAssistantService {
         }
     ): Promise<JakeInboundResult> {
         const { input, route, customer, accountId, phone, requestingMessageId } = ctx;
+
+        // Confirm-before-spend (JAK-136): a bare "OK"/"YES" right after a skip-trace
+        // QUOTE (or a free re-serve of one) runs the PAID trace. This is checked
+        // BEFORE the switch so it takes precedence over report_refresh — the router
+        // classifies a bare affirmative as a report refresh, but a fresh pending
+        // skip-trace offer means the OK is confirming that trace, not a report.
+        if (this.isAffirmativeOk(input.message)) {
+            const pending = await this.skipTrace.freshPending(phone);
+            if (pending) {
+                return this.runConfirmedSkipTrace({
+                    input,
+                    route,
+                    customer,
+                    accountId,
+                    phone,
+                    target: pending.target,
+                    credits: pending.credits,
+                    requestingMessageId,
+                });
+            }
+        }
 
         switch (plan.intent) {
             // A bare "OK"/"yes" confirming a fresh PAID copy of the last address
@@ -164,6 +199,9 @@ export class JakeAssistantService {
                 if (!target) {
                     return this.sendGuidance(input, route, customer, phone);
                 }
+                // Moving on to a report cancels any outstanding skip-trace quote so
+                // a later bare "OK" can't fire a stale (paid) trace.
+                await this.clearSkipTracePending(phone);
                 const cached = await this.memory.checkCache(phone, target);
                 if (cached) {
                     return this.reserveFromCache({ input, route, customer, phone, address: target, cached });
@@ -180,8 +218,20 @@ export class JakeAssistantService {
                 });
             }
 
-            // Recognized but not built yet — reply that it's coming, spend nothing.
+            // Owner skip trace (JAK-136): built + credit-gated + confirm-before-spend,
+            // with the SAME cache-and-free-reserve rule as reports.
             case "skip_trace":
+                return this.handleSkipTrace({
+                    input,
+                    route,
+                    customer,
+                    accountId,
+                    phone,
+                    plan,
+                    requestingMessageId,
+                });
+
+            // Recognized but not built yet — reply that it's coming, spend nothing.
             case "comps":
                 return this.sendComingSoon(input, route, customer, phone, plan);
 
@@ -194,10 +244,11 @@ export class JakeAssistantService {
 
     /**
      * A no-spend "coming soon" reply for a recognized-but-unbuilt capability
-     * (skip-trace JAK-136 / comps JAK-137). We NEVER fake results and NEVER spend:
-     * we name the capability, note it's on the way, and keep the guardrails
-     * (emoji-free, GoTextJake.com footer). The registration seam means when the
-     * specialist ships this branch is replaced by a real dispatch, not rewritten.
+     * (comps JAK-137). We NEVER fake results and NEVER spend: we name the
+     * capability, note it's on the way, and keep the guardrails (emoji-free,
+     * GoTextJake.com footer). The registration seam means when the specialist ships
+     * this branch is replaced by a real dispatch, not rewritten — exactly as
+     * skip-trace (JAK-136) already was.
      */
     private async sendComingSoon(
         input: JakeInboundMessage,
@@ -206,7 +257,7 @@ export class JakeAssistantService {
         phone: string,
         plan: DispatchPlan
     ): Promise<JakeInboundResult> {
-        const capability = plan.intent === "skip_trace" ? "Skip-tracing an owner" : "Pulling comparable sales";
+        const capability = "Pulling comparable sales";
         const forEntity = plan.targetEntity ? ` for ${plan.targetEntity}` : "";
         const reply = [
             `${capability}${forEntity} is coming soon. I can't run that yet, so I haven't charged you anything.`,
@@ -327,6 +378,344 @@ export class JakeAssistantService {
             `Jake (text): re-served cached report for "${address}" for FREE — no charge, no API call.`
         );
         return { ok: true, address, reply, mode: route.mode, charged: 0, reserved: true };
+    }
+
+    // ── Skip trace (JAK-136) ─────────────────────────────────────────────────
+
+    /**
+     * Handle a skip-trace request (JAK-136). Resolves the target address (the
+     * router's resolved entity, else the last address the texter sent). Then:
+     *   - a repeat trace of the SAME target within the free window → re-serve the
+     *     stored result FREE, with a "reply OK for a fresh trace" notice (no spend);
+     *   - a fresh trace → CONFIRM-BEFORE-SPEND: check the balance, quote the cost,
+     *     and store a pending offer so a bare "OK" runs it. Nothing is spent here.
+     * Insufficient balance → a clear, no-charge message and no pending offer.
+     */
+    private async handleSkipTrace(ctx: {
+        input: JakeInboundMessage;
+        route: TextRoute;
+        customer: TextJakeCustomer;
+        accountId: string;
+        phone: string;
+        plan: DispatchPlan;
+        requestingMessageId: string | null;
+    }): Promise<JakeInboundResult> {
+        const { input, route, customer, accountId, phone, plan } = ctx;
+
+        const target = plan.targetEntity ?? (await this.memory.lastResolvedAddress(phone));
+        if (!target) {
+            const reply = [
+                "Text me a property address first, then I can skip-trace the owner and pull their contact info.",
+                PropertyReportWriter.FOOTER,
+            ].join("\n\n");
+            await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+            await this.writeStatusNote(
+                route,
+                input.contactId,
+                "Jake (text): skip-trace asked with no address to trace — sent guidance, no charge."
+            );
+            return { ok: true, address: null, reply, mode: route.mode, charged: 0 };
+        }
+
+        const cost = await this.skipTraceSettings.costOfSkipTrace();
+
+        // Free re-serve: a repeat trace of the same target within the free window.
+        const cached = await this.skipTrace.checkCache(phone, target);
+        if (cached) {
+            return this.reserveSkipTraceFromCache({ input, route, customer, phone, target, cached, cost });
+        }
+
+        // Fresh trace → confirm-before-spend. Credit gate FIRST — never quote a
+        // price the customer can't pay, and never store a pending offer we can't run.
+        if (!(await this.credits.hasCreditsForSkipTrace(accountId, cost))) {
+            const balance = await this.credits.getBalance(accountId);
+            const reply = [
+                `A skip trace on ${target} costs ${cost} credit${cost === 1 ? "" : "s"}, but you have ${balance}. ` +
+                    "Top up and text me again to run it — I haven't charged you anything.",
+                PropertyReportWriter.FOOTER,
+            ].join("\n\n");
+            await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+            await this.writeStatusNote(
+                route,
+                input.contactId,
+                `Jake (text): skip trace for "${target}" needs ${cost} credit(s), balance ${balance} — declined, no charge.`
+            );
+            return { ok: false, address: target, reply, mode: route.mode, charged: 0, outOfCredits: true };
+        }
+
+        // Sufficient balance → QUOTE the cost + park a pending offer. No spend yet.
+        await this.skipTrace.setPending({ phone, customerId: customer.id, target, credits: cost });
+        const reply = [
+            `Skip-tracing the owner of ${target} pulls their phone and contact info. ` +
+                `It costs ${cost} credit${cost === 1 ? "" : "s"}. Reply OK to run it.`,
+            PropertyReportWriter.FOOTER,
+        ].join("\n\n");
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        await this.writeStatusNote(
+            route,
+            input.contactId,
+            `Jake (text): quoted skip trace for "${target}" at ${cost} credit(s) — awaiting OK, no charge yet.`
+        );
+        return { ok: true, address: target, reply, mode: route.mode, charged: 0 };
+    }
+
+    /**
+     * Free re-serve (JAK-136) of a skip trace: a repeat of the same target within
+     * the free window. Return the STORED reply verbatim — no paid API call, no LLM
+     * call, no credit — with an appended line telling the texter it's on record and
+     * to reply OK for a FRESH trace. We park a pending offer so that OK spends. The
+     * GoTextJake.com footer stays last.
+     */
+    private async reserveSkipTraceFromCache(ctx: {
+        input: JakeInboundMessage;
+        route: TextRoute;
+        customer: TextJakeCustomer;
+        phone: string;
+        target: string;
+        cached: SkipTraceRow;
+        cost: number;
+    }): Promise<JakeInboundResult> {
+        const { input, route, customer, phone, target, cached, cost } = ctx;
+        await this.skipTrace.setPending({ phone, customerId: customer.id, target, credits: cost });
+        const reply = this.withSkipTraceReserveNotice(cached.report_text, cost);
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        await this.writeStatusNote(
+            route,
+            input.contactId,
+            `Jake (text): re-served cached skip trace for "${target}" for FREE — no charge, no API call.`
+        );
+        return { ok: true, address: target, reply, mode: route.mode, charged: 0, reserved: true };
+    }
+
+    /**
+     * Run a CONFIRMED skip trace (JAK-136) — reached only after the texter replied
+     * OK to a quote (or a free re-serve). Consumes the pending offer, re-checks the
+     * balance, calls the paid /v2/SkipTrace (mock/no-spend off prod), and charges
+     * the quoted cost ONLY when the trace delivered usable contact info — mirroring
+     * the report's "no match, no charge" policy. On a hit it snapshots the result
+     * so a repeat within the free window re-serves for free.
+     */
+    private async runConfirmedSkipTrace(ctx: {
+        input: JakeInboundMessage;
+        route: TextRoute;
+        customer: TextJakeCustomer;
+        accountId: string;
+        phone: string;
+        target: string;
+        credits: number;
+        requestingMessageId: string | null;
+    }): Promise<JakeInboundResult> {
+        const { input, route, customer, accountId, phone, target, credits } = ctx;
+
+        // Consume the offer up front so a duplicate "OK" can't run it twice.
+        await this.clearSkipTracePending(phone);
+
+        // Re-check the balance — it may have drained between the quote and the OK.
+        if (!(await this.credits.hasCreditsForSkipTrace(accountId, credits))) {
+            const balance = await this.credits.getBalance(accountId);
+            const reply = [
+                `A skip trace on ${target} costs ${credits} credit${credits === 1 ? "" : "s"}, but you have ${balance}. ` +
+                    "Top up and text me again — I haven't charged you anything.",
+                PropertyReportWriter.FOOTER,
+            ].join("\n\n");
+            await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+            await this.writeStatusNote(
+                route,
+                input.contactId,
+                `Jake (text): OK'd skip trace for "${target}" but balance ${balance} < ${credits} — no charge.`
+            );
+            return { ok: false, address: target, reply, mode: route.mode, charged: 0, outOfCredits: true };
+        }
+
+        let record: RealEstateApiSkipTraceResult | null;
+        try {
+            record = await this.realEstateDao.skipTraceByAddress(target);
+        } catch (err) {
+            const reply = `Sorry — I hit a snag skip-tracing "${target}". Please try again shortly.`;
+            await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+            await this.writeStatusNote(
+                route,
+                input.contactId,
+                `Jake (text): skip trace FAILED for "${target}" (${this.errorSummary(err)}) — no charge.`
+            );
+            return { ok: false, address: target, reply, mode: route.mode, charged: 0 };
+        }
+
+        const data = this.assembleSkipTraceData(record, target);
+        if (!record || !hasContactInfo(data)) {
+            const reply = [
+                `I couldn't find owner contact info for ${target}, so I haven't charged you.`,
+                PropertyReportWriter.FOOTER,
+            ].join("\n\n");
+            await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+            await this.writeStatusNote(
+                route,
+                input.contactId,
+                `Jake (text): no skip-trace contact match for "${target}" — no charge.`
+            );
+            return { ok: true, address: target, reply, mode: route.mode, charged: 0 };
+        }
+
+        const reply = await this.skipTraceWriter.write(data, record);
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+
+        const charge = await this.credits.chargeForSkipTrace({ accountId, credits });
+        const charged = charge.ok ? credits : 0;
+        await this.rememberSkipTrace({
+            customer,
+            phone,
+            requestingMessageId: ctx.requestingMessageId,
+            target,
+            record,
+            reportText: reply,
+        });
+
+        await this.writeStatusNote(
+            route,
+            input.contactId,
+            `Jake (text): skip traced "${target}" — charged ${charged} credit(s).`
+        );
+        return { ok: true, address: target, reply, mode: route.mode, charged, refreshed: undefined };
+    }
+
+    /**
+     * Append the skip-trace free-re-serve notice to a stored reply, KEEPING the
+     * GoTextJake.com footer last (mirrors {@link withReserveNotice}).
+     */
+    private withSkipTraceReserveNotice(reportText: string, cost: number): string {
+        const notice =
+            "This owner is already on record, so this copy is free. " +
+            `Reply OK for a fresh trace (costs ${cost} credit${cost === 1 ? "" : "s"}).`;
+        const footer = PropertyReportWriter.FOOTER;
+        const trimmed = reportText.trimEnd();
+        const body = trimmed.endsWith(footer)
+            ? trimmed.slice(0, trimmed.length - footer.length).trimEnd()
+            : trimmed;
+        return `${body}\n\n${notice}\n\n${footer}`;
+    }
+
+    /** Clear a phone's outstanding skip-trace offer (best-effort; never blocks the reply). */
+    private async clearSkipTracePending(phone: string): Promise<void> {
+        try {
+            await this.skipTrace.clearPending(phone);
+        } catch (err) {
+            console.error("⚠️ Jake skip-trace pending clear failed:", this.errorSummary(err));
+        }
+    }
+
+    /** Snapshot a paid skip trace for the free re-serve rule (best-effort memory). */
+    private async rememberSkipTrace(input: {
+        customer: TextJakeCustomer;
+        phone: string;
+        requestingMessageId: string | null;
+        target: string;
+        record: RealEstateApiSkipTraceResult;
+        reportText: string;
+    }): Promise<void> {
+        try {
+            await this.skipTrace.recordTrace({
+                customerId: input.customer.id,
+                phone: input.phone,
+                messageId: input.requestingMessageId,
+                normalizedTarget: input.target,
+                traceRecord: input.record,
+                reportText: input.reportText,
+            });
+        } catch (err) {
+            console.error("⚠️ Jake skip-trace snapshot failed:", this.errorSummary(err));
+        }
+    }
+
+    /**
+     * Map a raw /v2/SkipTrace record into the clean, verified {@link SkipTraceData}
+     * the writer consumes. Only PRESENT values are set (missing → left undefined),
+     * pulled defensively from the shapes the provider ships — nested under
+     * `output.identity` or flattened onto the record — and de-duplicated. Never
+     * fabricates a name/phone/email/address.
+     */
+    private assembleSkipTraceData(
+        record: RealEstateApiSkipTraceResult | null,
+        target: string
+    ): SkipTraceData {
+        const data: SkipTraceData = {};
+        if (target.trim()) data.targetAddress = target.trim();
+        if (!record) return data;
+
+        const identity = record.output?.identity ?? null;
+
+        const ownerName = this.skipTraceOwnerName(record, identity);
+        if (ownerName) data.ownerName = ownerName;
+
+        const rawPhones: RealEstateApiSkipTracePhone[] = [
+            ...(identity?.phones ?? []),
+            ...(record.phones ?? []),
+        ];
+        const phones = this.dedupe(rawPhones.map((p) => this.phoneDisplay(p)));
+        if (phones.length) data.phones = phones;
+
+        const rawEmails: RealEstateApiSkipTraceEmail[] = [
+            ...(identity?.emails ?? []),
+            ...(record.emails ?? []),
+        ];
+        const emails = this.dedupe(rawEmails.map((e) => this.text(e?.email ?? e?.address) ?? ""));
+        if (emails.length) data.emails = emails;
+
+        const mailing = this.mailingDisplay(identity?.address ?? record.mailAddress ?? null);
+        if (mailing) data.mailingAddress = mailing;
+
+        return data;
+    }
+
+    private skipTraceOwnerName(
+        record: RealEstateApiSkipTraceResult,
+        identity: NonNullable<NonNullable<RealEstateApiSkipTraceResult["output"]>["identity"]> | null
+    ): string | null {
+        const top = this.text(record.name) ?? this.text(identity?.name);
+        if (top) return top;
+        const first = identity?.names?.[0];
+        if (typeof first === "string") return this.text(first);
+        if (first && typeof first === "object") {
+            const full = this.text(first.fullName);
+            if (full) return full;
+            const composed = [first.firstName, first.lastName].filter(Boolean).join(" ").trim();
+            return composed || null;
+        }
+        return null;
+    }
+
+    private phoneDisplay(p: RealEstateApiSkipTracePhone): string {
+        return (
+            this.text(p?.phoneDisplay) ??
+            this.text(p?.phone) ??
+            this.text(p?.number) ??
+            this.text(p?.telephone) ??
+            ""
+        );
+    }
+
+    private mailingDisplay(mail: RealEstateApiMailingAddress | null): string | null {
+        if (!mail) return null;
+        const label = this.text(mail.label);
+        if (label) return label;
+        const line1 = this.text(mail.address);
+        const tail = [this.text(mail.city), this.text(mail.state), this.text(mail.zip)]
+            .filter(Boolean)
+            .join(" ");
+        const parts = [line1, tail].filter(Boolean);
+        return parts.length ? parts.join(", ") : null;
+    }
+
+    /** Trim, drop blanks, and de-duplicate a list of display strings (order-preserving). */
+    private dedupe(values: string[]): string[] {
+        const seen = new Set<string>();
+        const out: string[] = [];
+        for (const v of values) {
+            const t = (v ?? "").trim();
+            if (!t || seen.has(t.toLowerCase())) continue;
+            seen.add(t.toLowerCase());
+            out.push(t);
+        }
+        return out;
     }
 
     /** Usage guidance for a message with no parseable address. No lookup, no charge. */

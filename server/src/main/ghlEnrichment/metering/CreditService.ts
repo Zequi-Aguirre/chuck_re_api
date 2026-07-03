@@ -132,6 +132,37 @@ export class CreditService {
     return this.ledger.charge({ locationId: input.accountId, contactId: null, lines });
   }
 
+  // ── Text-Jake skip trace (JAK-136) ─────────────────────────────────────────
+  // A skip trace hits the paid /v2/SkipTrace endpoint and costs MORE than a
+  // report, so its price is a distinct, ADMIN-editable knob (SkipTraceSettingsService)
+  // rather than a config constant — the caller passes the resolved cost in. Like
+  // the text-lookup path it bills the texting CUSTOMER's credit account (by phone),
+  // with no per-contact idempotency: each confirmed trace is its own billed action.
+
+  /** True if a customer's credit account can afford a skip trace at `credits`. */
+  async hasCreditsForSkipTrace(accountId: string, credits: number): Promise<boolean> {
+    if (credits <= 0) return true;
+    return (await this.ledger.getBalance(accountId)) >= credits;
+  }
+
+  /**
+   * Charge a customer's credit account for one delivered skip trace, atomically.
+   * `credits` is the admin-configured skip-trace cost, recorded as a single
+   * `skip_trace` ledger line. Returns the store's {@link ChargeResult} — `ok:false`
+   * if the balance can't cover it (never a partial charge). No contact id, so
+   * repeat traces each bill independently.
+   */
+  async chargeForSkipTrace(input: { accountId: string; credits: number }): Promise<ChargeResult> {
+    if (input.credits <= 0) {
+      return { ok: true, balanceAfter: await this.ledger.getBalance(input.accountId), entries: [] };
+    }
+    return this.ledger.charge({
+      locationId: input.accountId,
+      contactId: null,
+      lines: [{ reason: "skip_trace", amount: input.credits }],
+    });
+  }
+
   /**
    * Grant credits to a location (beta: manual top-up; also refunds/adjustments).
    * Atomic; returns the created ledger entry. Billing automation is deferred.

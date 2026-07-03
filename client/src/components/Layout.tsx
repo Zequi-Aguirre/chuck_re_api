@@ -18,6 +18,7 @@ import GroupsIcon from "@mui/icons-material/Groups";
 import SmsIcon from "@mui/icons-material/Sms";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import CallSplitIcon from "@mui/icons-material/CallSplit";
+import PersonSearchIcon from "@mui/icons-material/PersonSearch";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import LogoutIcon from "@mui/icons-material/Logout";
 import { useAuth } from "../auth";
@@ -43,6 +44,8 @@ export function Layout() {
     { label: "AI Prompt", to: "/report-settings", icon: <AutoAwesomeIcon />, show: true },
     // Router Prompt (JAK-135) — every logged-in admin can tune how Jake routes texts.
     { label: "Router Prompt", to: "/router-settings", icon: <CallSplitIcon />, show: true },
+    // Skip-Trace (JAK-136) — every logged-in admin can tune the reply + credit cost.
+    { label: "Skip-Trace", to: "/skiptrace-settings", icon: <PersonSearchIcon />, show: true },
     {
       label: "Admins",
       to: "/admins",

@@ -146,6 +146,47 @@ describe("CreditService", () => {
     });
   });
 
+  describe("skip trace (JAK-136)", () => {
+    it("checks affordability against the customer's account at the passed cost", async () => {
+      store.getBalance.mockResolvedValue(3);
+      expect(await service.hasCreditsForSkipTrace("acct_1", 3)).toBe(true);
+      expect(store.getBalance).toHaveBeenCalledWith("acct_1");
+
+      store.getBalance.mockResolvedValue(2);
+      expect(await service.hasCreditsForSkipTrace("acct_1", 3)).toBe(false);
+    });
+
+    it("is affordable without a DB read when the cost is 0", async () => {
+      expect(await service.hasCreditsForSkipTrace("acct_1", 0)).toBe(true);
+      expect(store.getBalance).not.toHaveBeenCalled();
+    });
+
+    it("charges a single skip_trace line at the passed cost, NO contact-id dedup", async () => {
+      store.charge.mockResolvedValue({ ok: true, balanceAfter: 7, entries: [] });
+
+      await service.chargeForSkipTrace({ accountId: "acct_1", credits: 3 });
+
+      expect(store.charge).toHaveBeenCalledWith({
+        locationId: "acct_1",
+        contactId: null,
+        lines: [{ reason: "skip_trace", amount: 3 }],
+      });
+    });
+
+    it("surfaces the store's ok:false when the balance can't cover the trace (no partial charge)", async () => {
+      store.charge.mockResolvedValue({ ok: false, balance: 1, required: 3 });
+      const result = await service.chargeForSkipTrace({ accountId: "acct_1", credits: 3 });
+      expect(result).toEqual({ ok: false, balance: 1, required: 3 });
+    });
+
+    it("is a free success (no charge issued) when the cost is 0", async () => {
+      store.getBalance.mockResolvedValue(5);
+      const result = await service.chargeForSkipTrace({ accountId: "acct_1", credits: 0 });
+      expect(result).toEqual({ ok: true, balanceAfter: 5, entries: [] });
+      expect(store.charge).not.toHaveBeenCalled();
+    });
+  });
+
   describe("refundEnrichment", () => {
     it("reverses a contact's charge via the ledger, defaulting the reason to refund", async () => {
       store.refund.mockResolvedValue(ledgerRow({ amount: 1, reason: "refund" }));

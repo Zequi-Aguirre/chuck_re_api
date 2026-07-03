@@ -113,19 +113,41 @@ describe("JakeOrchestrator (JAK-135 router)", () => {
       expect(plan.specialists[0].name).toBe("report");
     });
 
-    it("skip_trace → confirm-before-spend metadata from the registry (coming soon)", async () => {
-      llm.classify.mockResolvedValue(classification({ intent: "skip_trace" }));
+    it("skip_trace → BUILT (JAK-136) confirm-before-spend metadata + resolves a target address", async () => {
+      llm.classify.mockResolvedValue(
+        classification({ intent: "skip_trace", targetAddress: "9 New St, Town, CA 90000" })
+      );
 
       const plan = await orchestrator.plan({
         phone: "+15559990000",
-        message: "find the owner",
-        parsedAddress: null,
+        message: "who owns 9 New St?",
+        parsedAddress: "9 New St, Town, CA 90000",
         isAffirmative: false,
       });
 
       expect(plan.intent).toBe("skip_trace");
-      expect(plan.specialists).toEqual([{ name: "skip_trace", needsConfirmation: true, estimatedCredits: 2 }]);
-      expect(registry.isAvailable("skip_trace")).toBe(false);
+      expect(plan.specialists).toEqual([{ name: "skip_trace", needsConfirmation: true, estimatedCredits: 3 }]);
+      // JAK-136 flipped this on: skip trace is now a real, runnable specialist.
+      expect(registry.isAvailable("skip_trace")).toBe(true);
+      // Unlike the coming-soon stub, skip trace now carries a resolved target.
+      expect(plan.targetEntity).toBe("9 New St, Town, CA 90000");
+    });
+
+    it("skip_trace resolves an ordinal reference like property_report does", async () => {
+      memory.resolvedAddressList.mockResolvedValue([
+        "1 First St, Town, CA 90000",
+        "2 Second Ave, Town, CA 90000",
+      ]);
+      llm.classify.mockResolvedValue(classification({ intent: "skip_trace", addressOrdinal: 2 }));
+
+      const plan = await orchestrator.plan({
+        phone: "+15559990000",
+        message: "skip trace the 2nd one",
+        parsedAddress: null,
+        isAffirmative: false,
+      });
+
+      expect(plan.targetEntity).toBe("2 Second Ave, Town, CA 90000");
     });
 
     it("comps → confirm-before-spend metadata from the registry (coming soon)", async () => {
