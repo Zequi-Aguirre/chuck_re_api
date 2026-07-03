@@ -189,6 +189,44 @@ describe("JakeOrchestrator (JAK-135 router)", () => {
       expect(plan.compParams).toEqual({ radiusMiles: 1, monthsBack: 6, count: 3 });
     });
 
+    it("carries texter-named people through for a skip_trace request (JAK-145)", async () => {
+      llm.classify.mockResolvedValue(
+        classification({
+          intent: "skip_trace",
+          targetAddress: "9 New St, Town, CA 90000",
+          personNames: ["Marge", "Homer"],
+        })
+      );
+
+      const plan = await orchestrator.plan({
+        phone: "+15559990000",
+        message: "skip trace Marge and Homer",
+        parsedAddress: "9 New St, Town, CA 90000",
+        isAffirmative: false,
+      });
+
+      expect(plan.personNames).toEqual(["Marge", "Homer"]);
+    });
+
+    it("does not carry person names for non-skip-trace intents (JAK-145)", async () => {
+      llm.classify.mockResolvedValue(
+        classification({
+          intent: "property_report",
+          targetAddress: "9 New St, Town, CA 90000",
+          personNames: ["Marge"],
+        })
+      );
+
+      const plan = await orchestrator.plan({
+        phone: "+15559990000",
+        message: "9 New St, Town, CA 90000",
+        parsedAddress: "9 New St, Town, CA 90000",
+        isAffirmative: false,
+      });
+
+      expect(plan.personNames).toBeNull();
+    });
+
     it("does not carry comp params for non-comps intents", async () => {
       llm.classify.mockResolvedValue(
         classification({ intent: "property_report", targetAddress: "9 New St, Town, CA 90000", compParams: { count: 3 } })

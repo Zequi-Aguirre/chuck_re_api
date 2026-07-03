@@ -150,6 +150,57 @@ describe("SkipTraceReportWriter (JAK-136)", () => {
     });
   });
 
+  describe("grouped-by-person formatting (JAK-145)", () => {
+    // Fictional personas only (no real PII): the property owner is looked up, the
+    // trace returns two different address-linked residents, each with their own info.
+    const grouped: SkipTraceData = {
+      targetAddress: "742 Evergreen Terrace, Springfield, IL 62704",
+      requestedName: "Homer Simpson",
+      persons: [
+        {
+          name: "Ned Flanders",
+          phones: ["+1 555 010 0001", "+1 555 010 0002"],
+          emails: ["ned@example.com"],
+        },
+        {
+          name: "Maude Flanders",
+          phones: ["+1 555 010 0003"],
+          emails: ["maude@example.com", "maude2@example.com"],
+        },
+      ],
+    };
+
+    it("renders each PERSON with THEIR OWN phones/emails, names next to the numbers", () => {
+      const { writer } = makeWriter(DEFAULT_STYLE);
+      const out = writer.renderFallback(grouped);
+
+      // Both people appear, each name leading its own contact block.
+      expect(out).toContain("Ned Flanders");
+      expect(out).toContain("Maude Flanders");
+      // Each person's number is grouped under THEIR name (name precedes their phone).
+      expect(out.indexOf("Ned Flanders")).toBeLessThan(out.indexOf("+1 555 010 0001"));
+      expect(out.indexOf("+1 555 010 0001")).toBeLessThan(out.indexOf("Maude Flanders"));
+      expect(out.indexOf("Maude Flanders")).toBeLessThan(out.indexOf("+1 555 010 0003"));
+      // Honest header: who we looked up + the property.
+      expect(out).toContain("742 Evergreen Terrace");
+      expect(out).toContain("Homer Simpson");
+      expect(out.endsWith(FOOTER)).toBe(true);
+      expect(out).not.toMatch(EMOJI);
+    });
+
+    it("hands the grouped persons to the LLM so it can present them by person", async () => {
+      const { writer, llm } = makeWriter(DEFAULT_STYLE);
+      llm.generateText.mockResolvedValue(`Contacts\n\n${FOOTER}`);
+
+      await writer.write(grouped, { match: true });
+
+      const [sent] = llm.generateText.mock.calls[0]!;
+      expect(sent.user).toContain("Ned Flanders");
+      expect(sent.user).toContain("Maude Flanders");
+      expect(sent.user).toContain("+1 555 010 0003");
+    });
+  });
+
   describe("per-surface model selection (JAK-143)", () => {
     it("resolves the SKIPTRACE surface's selection and hands exactly it to the resolver", async () => {
       const selection: LlmSelection = { provider: "anthropic", model: "claude-sonnet-4-6" };

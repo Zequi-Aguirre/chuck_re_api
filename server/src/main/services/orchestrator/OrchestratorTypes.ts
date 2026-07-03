@@ -89,6 +89,13 @@ export interface DispatchPlan {
    * downstream.
    */
   compParams?: CompParamOverrides | null;
+  /**
+   * The specific people the texter named to skip-trace ("skip trace Jane and
+   * John"), for the skip_trace intent only (JAK-145). Null/absent when they named
+   * nobody — the skip-trace specialist then traces the property owner pulled from
+   * PropertySearch. Never carries an address or a role word, only actual names.
+   */
+  personNames?: string[] | null;
 }
 
 /** What the assistant hands the orchestrator for one inbound message. */

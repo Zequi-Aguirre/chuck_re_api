@@ -166,24 +166,62 @@ export class SkipTraceReportWriter {
   /**
    * Deterministic, emoji-free reply from the SAME verified data. Used whenever the
    * LLM path is unavailable — and it is the offline path. Lists only present values.
+   *
+   * JAK-145: when the trace returned people (`data.persons`), each person's name is
+   * shown with THEIR OWN phones/emails/mailing grouped under it, so contacts are
+   * never merged into one undifferentiated list. Falls back to the flat-list
+   * rendering only for legacy data that carries no per-person grouping.
    */
   renderFallback(data: SkipTraceData): string {
-    const header = data.ownerName
-      ? data.targetAddress
-        ? `Owner of ${data.targetAddress}: ${data.ownerName}`
-        : `Owner: ${data.ownerName}`
-      : data.targetAddress
-        ? `Owner contact for ${data.targetAddress}`
-        : "Owner contact";
+    const header = data.targetAddress
+      ? `Owner contact for ${data.targetAddress}`
+      : "Owner contact";
+    const requested =
+      data.requestedName && data.requestedName.trim()
+        ? `Looked up: ${data.requestedName.trim()}`
+        : null;
 
-    const chunks: (string | null)[] = [
-      header,
-      this.section("Phone", data.phones ?? []),
-      this.section("Email", data.emails ?? []),
-      data.mailingAddress ? `Mailing address\n${data.mailingAddress}` : null,
-      SkipTraceReportWriter.FOOTER,
-    ];
+    const chunks: (string | null)[] = [header, requested];
+
+    // Prefer the per-person grouping; when the data carries none (legacy/ungrouped),
+    // synthesize a single person from the flat fields so the owner's name still leads
+    // their own numbers.
+    const persons =
+      data.persons && data.persons.length
+        ? data.persons
+        : [
+            {
+              name: data.ownerName,
+              phones: data.phones,
+              emails: data.emails,
+              mailingAddress: data.mailingAddress,
+            },
+          ];
+    for (const person of persons) chunks.push(this.personBlock(person));
+
+    chunks.push(SkipTraceReportWriter.FOOTER);
     return chunks.filter((c): c is string => Boolean(c)).join("\n\n");
+  }
+
+  /**
+   * One person's block for the deterministic fallback (JAK-145): their NAME on the
+   * first line, then their own phones, emails, and mailing address beneath it.
+   * Present values only; a person with no contact info at all collapses to null.
+   */
+  private personBlock(person: {
+    name?: string;
+    phones?: string[];
+    emails?: string[];
+    mailingAddress?: string;
+  }): string | null {
+    const lines: string[] = [];
+    if (person.name && person.name.trim()) lines.push(person.name.trim());
+    const phone = this.section("Phone", person.phones ?? []);
+    if (phone) lines.push(phone);
+    const email = this.section("Email", person.emails ?? []);
+    if (email) lines.push(email);
+    if (person.mailingAddress) lines.push(`Mailing address\n${person.mailingAddress}`);
+    return lines.length ? lines.join("\n") : null;
   }
 
   private section(title: string, values: string[]): string | null {

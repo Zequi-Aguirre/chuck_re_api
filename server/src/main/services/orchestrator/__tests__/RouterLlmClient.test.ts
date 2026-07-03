@@ -189,6 +189,45 @@ describe("LlmRouterClient (JAK-135 router LLM, JAK-141 provider-agnostic, JAK-14
       expect(none.compParams).toBeUndefined();
     });
 
+    it("extracts texter-named people for a skip_trace request (JAK-145)", async () => {
+      const out = await withReply(
+        JSON.stringify({
+          intent: "skip_trace",
+          targetAddress: "9 New St, Town, CA 90000",
+          addressOrdinal: null,
+          userFacingNote: "",
+          personNames: ["Marge", "Homer"],
+        })
+      ).classify(req({ parsedAddress: "9 New St, Town, CA 90000" }));
+
+      expect(out.intent).toBe("skip_trace");
+      expect(out.personNames).toEqual(["Marge", "Homer"]);
+    });
+
+    it("trims + de-dupes person names and omits personNames when none usable", async () => {
+      const withNames = await withReply(
+        JSON.stringify({
+          intent: "skip_trace",
+          targetAddress: null,
+          addressOrdinal: null,
+          userFacingNote: "",
+          personNames: [" John Smith ", "John Smith", "", 42],
+        })
+      ).classify(req());
+      expect(withNames.personNames).toEqual(["John Smith"]);
+
+      const none = await withReply(
+        JSON.stringify({
+          intent: "skip_trace",
+          targetAddress: null,
+          addressOrdinal: null,
+          userFacingNote: "",
+          personNames: null,
+        })
+      ).classify(req());
+      expect(none.personNames).toBeUndefined();
+    });
+
     it("an unknown intent falls back to the deterministic classification", async () => {
       const out = await withReply(
         JSON.stringify({ intent: "banana", targetAddress: null, addressOrdinal: null, userFacingNote: "" })
