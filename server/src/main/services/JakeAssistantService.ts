@@ -6,6 +6,9 @@ import { GhlConnection } from "../ghlEnrichment/connections/GhlConnectionTypes.t
 import { JakeGatewayClient } from "../ghlEnrichment/gateway/JakeGatewayClient.ts";
 import { CreditService } from "../ghlEnrichment/metering/CreditService.ts";
 import { TextJakeCustomerService } from "../ghlEnrichment/customers/TextJakeCustomerService.ts";
+import { ConversationMemoryService } from "../ghlEnrichment/conversation/ConversationMemoryService.ts";
+import { LookupRow } from "../ghlEnrichment/conversation/ConversationTypes.ts";
+import { TextJakeCustomer } from "../ghlEnrichment/customers/TextJakeCustomerTypes.ts";
 import { normalizeInboundAddress } from "../util/address.ts";
 import { JakeInboundMessage, JakeInboundResult, JakeTextMode } from "../types/Jake.ts";
 import { RealEstateApiPropertySearchResult } from "../types/RealEstateApi.ts";
@@ -24,6 +27,8 @@ import {
  */
 interface TextRoute {
     mode: JakeTextMode;
+    /** The own_number location this route sends on; undefined for the gateway. */
+    locationId?: string;
     /** Send the SMS reply. */
     send(contactId: string, message: string): Promise<unknown>;
     /** Write a status note on the customer's contact. */
@@ -46,7 +51,8 @@ export class JakeAssistantService {
         private readonly connections: GhlConnectionService,
         private readonly customers: TextJakeCustomerService,
         private readonly credits: CreditService,
-        private readonly reportWriter: PropertyReportWriter
+        private readonly reportWriter: PropertyReportWriter,
+        private readonly memory: ConversationMemoryService
     ) {}
 
     /**
@@ -72,26 +78,82 @@ export class JakeAssistantService {
         // 1. Billing identity — the texting customer, keyed by sender phone.
         const customer = await this.customers.resolveByPhone(input.senderPhone, input.contactId);
         const accountId = customer.creditAccountId;
+        const phone = customer.phone;
 
         // 2. Mode + transport.
         const route = await this.resolveRoute(input);
 
         const address = normalizeInboundAddress(input.message);
 
-        // 3. No address → guidance, no lookup, no charge.
+        // 3. Persist EVERY inbound message in ordered per-phone memory (JAK-134),
+        //    with the address we resolved from it (null when it wasn't one). The
+        //    returned id links any resulting lookup snapshot back to this message.
+        const inboundId = await this.rememberInbound(customer, phone, input.message, address, route);
+
+        // 4. No parseable address → either an "OK" that refreshes the last address
+        //    (a fresh PAID copy), or usage guidance. Neither is a cache candidate.
         if (!address) {
-            await route.send(input.contactId, GUIDANCE_REPLY);
-            await this.writeStatusNote(
-                route,
-                input.contactId,
-                "Jake (text): message had no address — sent usage guidance."
-            );
-            return { ok: true, address: null, reply: GUIDANCE_REPLY, mode: route.mode, charged: 0 };
+            if (this.isAffirmativeOk(input.message)) {
+                const lastAddress = await this.memory.lastResolvedAddress(phone);
+                if (lastAddress) {
+                    return this.freshLookup({
+                        input,
+                        route,
+                        customer,
+                        accountId,
+                        phone,
+                        address: lastAddress,
+                        requestingMessageId: inboundId,
+                        onOkRefresh: true,
+                    });
+                }
+            }
+            return this.sendGuidance(input, route, customer, phone);
         }
 
-        // 4. Credit gate — never look up for free.
+        // 5. Cache hit within the free re-serve window → re-serve the STORED report
+        //    for FREE (no paid API call, no credit charged) and invite an OK
+        //    refresh for a fresh copy (JAK-134).
+        const cached = await this.memory.checkCache(phone, address);
+        if (cached) {
+            return this.reserveFromCache({ input, route, customer, phone, address, cached });
+        }
+
+        // 6. Cache miss → normal paid lookup path (charge on match, snapshot it).
+        return this.freshLookup({
+            input,
+            route,
+            customer,
+            accountId,
+            phone,
+            address,
+            requestingMessageId: inboundId,
+            onOkRefresh: false,
+        });
+    }
+
+    /**
+     * The paid-lookup path, shared by a cache miss and an OK refresh. Enforces the
+     * credit gate, runs the PropertySearch, replies, charges only on a delivered
+     * match, and SNAPSHOTS the match so a repeat within the free window re-serves
+     * for free. In dev/stg the RealEstate DAO returns its mock (no real spend), so
+     * this path is safe to exercise off prod.
+     */
+    private async freshLookup(ctx: {
+        input: JakeInboundMessage;
+        route: TextRoute;
+        customer: TextJakeCustomer;
+        accountId: string;
+        phone: string;
+        address: string;
+        requestingMessageId: string | null;
+        onOkRefresh: boolean;
+    }): Promise<JakeInboundResult> {
+        const { input, route, customer, accountId, phone, address } = ctx;
+
+        // Credit gate — never look up for free.
         if (!(await this.credits.hasCreditsForTextLookup(accountId))) {
-            await route.send(input.contactId, OUT_OF_CREDITS_REPLY);
+            await this.sendAndRemember(route, input.contactId, customer, phone, OUT_OF_CREDITS_REPLY);
             await this.writeStatusNote(
                 route,
                 input.contactId,
@@ -107,13 +169,12 @@ export class JakeAssistantService {
             };
         }
 
-        // 5. Look up the property and reply.
         let property: RealEstateApiPropertySearchResult | null;
         try {
             property = await this.realEstateDao.searchPropertyByAddress(address);
         } catch (err) {
             const reply = `Sorry — I hit a snag looking up "${address}". Please try again shortly.`;
-            await route.send(input.contactId, reply);
+            await this.sendAndRemember(route, input.contactId, customer, phone, reply);
             await this.writeStatusNote(
                 route,
                 input.contactId,
@@ -123,26 +184,181 @@ export class JakeAssistantService {
         }
 
         const reply = await this.buildReply(address, property);
-        await route.send(input.contactId, reply);
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
 
-        // 6. Charge only when a match was delivered — mirrors the enrichment
-        //    worker's "no match, no charge" policy (the lookup cost is ours).
+        // Charge only when a match was delivered — mirrors the enrichment worker's
+        // "no match, no charge" policy (the lookup cost is ours). On a match, also
+        // snapshot the result for the free re-serve rule.
         let charged = 0;
         if (property) {
             const charge = await this.credits.chargeForTextLookup({ accountId });
             charged = charge.ok ? this.credits.costOfTextLookup() : 0;
+            await this.rememberLookup({
+                customer,
+                phone,
+                requestingMessageId: ctx.requestingMessageId,
+                address,
+                property,
+                reportText: reply,
+            });
         }
 
-        // 7. Status note on the contact.
         await this.writeStatusNote(
             route,
             input.contactId,
             property
-                ? `Jake (text): looked up "${address}" — charged ${charged} credit(s).`
+                ? `Jake (text): ${ctx.onOkRefresh ? "fresh copy on OK for" : "looked up"} "${address}" — charged ${charged} credit(s).`
                 : `Jake (text): no property match for "${address}" — no charge.`
         );
 
-        return { ok: true, address, reply, mode: route.mode, charged };
+        return { ok: true, address, reply, mode: route.mode, charged, refreshed: ctx.onOkRefresh || undefined };
+    }
+
+    /**
+     * Free re-serve (JAK-134): a repeat of the same address within the free window.
+     * We return the STORED report verbatim — no paid API call, no LLM call, no
+     * credit — with one appended line telling the texter it's already on record and
+     * to reply OK for a fresh copy. The GoTextJake.com footer stays last.
+     */
+    private async reserveFromCache(ctx: {
+        input: JakeInboundMessage;
+        route: TextRoute;
+        customer: TextJakeCustomer;
+        phone: string;
+        address: string;
+        cached: LookupRow;
+    }): Promise<JakeInboundResult> {
+        const { input, route, customer, phone, address, cached } = ctx;
+        const reply = this.withReserveNotice(cached.report_text, this.credits.costOfTextLookup());
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        await this.writeStatusNote(
+            route,
+            input.contactId,
+            `Jake (text): re-served cached report for "${address}" for FREE — no charge, no API call.`
+        );
+        return { ok: true, address, reply, mode: route.mode, charged: 0, reserved: true };
+    }
+
+    /** Usage guidance for a message with no parseable address. No lookup, no charge. */
+    private async sendGuidance(
+        input: JakeInboundMessage,
+        route: TextRoute,
+        customer: TextJakeCustomer,
+        phone: string
+    ): Promise<JakeInboundResult> {
+        await this.sendAndRemember(route, input.contactId, customer, phone, GUIDANCE_REPLY);
+        await this.writeStatusNote(
+            route,
+            input.contactId,
+            "Jake (text): message had no address — sent usage guidance."
+        );
+        return { ok: true, address: null, reply: GUIDANCE_REPLY, mode: route.mode, charged: 0 };
+    }
+
+    /** Send a reply and record it as an outbound message (best-effort memory). */
+    private async sendAndRemember(
+        route: TextRoute,
+        contactId: string,
+        customer: TextJakeCustomer,
+        phone: string,
+        reply: string
+    ): Promise<void> {
+        await route.send(contactId, reply);
+        try {
+            await this.memory.appendOutbound({
+                customerId: customer.id,
+                phone,
+                body: reply,
+                tenantLocationId: route.locationId ?? null,
+                textMode: route.mode,
+            });
+        } catch (err) {
+            console.error("⚠️ Jake outbound memory write failed:", this.errorSummary(err));
+        }
+    }
+
+    /**
+     * Persist the inbound message (best-effort). Returns the new message id so a
+     * resulting lookup snapshot can link back to it, or null if the memory write
+     * failed — a memory hiccup must never block the customer's reply.
+     */
+    private async rememberInbound(
+        customer: TextJakeCustomer,
+        phone: string,
+        body: string,
+        resolvedAddress: string | null,
+        route: TextRoute
+    ): Promise<string | null> {
+        try {
+            const row = await this.memory.appendInbound({
+                customerId: customer.id,
+                phone,
+                body,
+                resolvedAddress,
+                tenantLocationId: route.locationId ?? null,
+                textMode: route.mode,
+            });
+            return row.id;
+        } catch (err) {
+            console.error("⚠️ Jake inbound memory write failed:", this.errorSummary(err));
+            return null;
+        }
+    }
+
+    /** Snapshot a paid lookup for the free re-serve rule (best-effort memory). */
+    private async rememberLookup(input: {
+        customer: TextJakeCustomer;
+        phone: string;
+        requestingMessageId: string | null;
+        address: string;
+        property: RealEstateApiPropertySearchResult;
+        reportText: string;
+    }): Promise<void> {
+        try {
+            await this.memory.recordLookup({
+                customerId: input.customer.id,
+                phone: input.phone,
+                messageId: input.requestingMessageId,
+                normalizedAddress: input.address,
+                propertyId: this.propertyId(input.property),
+                propertyRecord: input.property,
+                reportText: input.reportText,
+            });
+        } catch (err) {
+            console.error("⚠️ Jake lookup snapshot failed:", this.errorSummary(err));
+        }
+    }
+
+    /**
+     * Append the free-re-serve notice to a stored report, KEEPING the mandatory
+     * GoTextJake.com footer last. The notice sits just above the footer so the
+     * message still ends with the exact two footer lines (JAK-131 guardrail).
+     */
+    private withReserveNotice(reportText: string, cost: number): string {
+        const notice =
+            "This address is already on record, so this copy is free. " +
+            `Reply OK for a fresh copy (costs ${cost} credit${cost === 1 ? "" : "s"}).`;
+        const footer = PropertyReportWriter.FOOTER;
+        const trimmed = reportText.trimEnd();
+        const body = trimmed.endsWith(footer)
+            ? trimmed.slice(0, trimmed.length - footer.length).trimEnd()
+            : trimmed;
+        return `${body}\n\n${notice}\n\n${footer}`;
+    }
+
+    /**
+     * Whether a message is a bare affirmative ("OK"/"okay"/"yes") — the reply that
+     * asks Jake to fetch a FRESH paid copy of the last address. Kept tight so a
+     * real address or question is never mistaken for a refresh.
+     */
+    private isAffirmativeOk(message: string): boolean {
+        const compact = String(message).trim().toLowerCase().replace(/[^a-z]/g, "");
+        return compact === "ok" || compact === "okay" || compact === "yes";
+    }
+
+    /** The provider's record id as a string, or null when absent. */
+    private propertyId(property: RealEstateApiPropertySearchResult): string | null {
+        return property.id != null ? String(property.id) : null;
     }
 
     /**
@@ -163,6 +379,7 @@ export class JakeAssistantService {
                 .find((n) => n.length > 0 && conn.phoneNumbers.includes(n));
             return {
                 mode: "own_number",
+                locationId: conn.locationId,
                 send: (contactId, message) =>
                     this.ghlClient.sendSms(conn.locationId, {
                         contactId,

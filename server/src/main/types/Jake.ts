@@ -43,4 +43,14 @@ export type JakeInboundResult = {
   charged: number;
   /** True when the customer had no credits and the lookup was skipped. */
   outOfCredits?: boolean;
+  /**
+   * True when this reply was a FREE re-serve of a cached report within the free
+   * window — no paid API call, no credit charged (JAK-134).
+   */
+  reserved?: boolean;
+  /**
+   * True when this was a fresh PAID copy fetched because the texter replied "OK"
+   * to a cached re-serve (JAK-134).
+   */
+  refreshed?: boolean;
 };
