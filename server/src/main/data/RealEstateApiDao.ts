@@ -22,11 +22,12 @@ import {
 } from "../types/RealEstateApi.ts";
 
 /**
- * The API-facing comps parameters the DAO passes through to /v3/PropertyComps
- * (JAK-137). The caller (the comps specialist) resolves + clamps these from the
- * admin defaults and any texter overrides; the bed/bath/sqft tolerance filters are
- * applied downstream against the returned subject, so only the three query knobs
- * the endpoint takes pre-lookup live here.
+ * The API-facing comps parameters the DAO passes through to the comps lookup
+ * (JAK-137; via /v2/PropertyDetail with comps:true since JAK-144). The caller (the
+ * comps specialist) resolves + clamps these from the admin defaults and any texter
+ * overrides; the bed/bath/sqft tolerance filters are applied downstream against the
+ * returned subject, so only the three query knobs the endpoint takes pre-lookup
+ * live here.
  */
 export interface RealEstateApiCompsParams {
   /** Search radius in miles → max_radius_miles. */

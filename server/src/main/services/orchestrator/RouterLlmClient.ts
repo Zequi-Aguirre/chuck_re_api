@@ -1,5 +1,7 @@
-import { inject, injectable } from "tsyringe";
-import { LlmClient, LLM_CLIENT } from "../llm/LlmClient.ts";
+import { injectable } from "tsyringe";
+import { LlmClient } from "../llm/LlmClient.ts";
+import { LlmClientResolver } from "../llm/LlmClientResolver.ts";
+import { LlmModelSettingsService } from "../llm/LlmModelSettingsService.ts";
 import { JakeIntent, JAKE_INTENTS } from "./OrchestratorTypes.ts";
 import { CompParamOverrides } from "../comps/CompsTypes.ts";
 
@@ -120,12 +122,18 @@ const CLASSIFICATION_SCHEMA = {
  * (like the JAK-131 report guardrails) so an admin edit can never break
  * classification.
  *
+ * JAK-143: the provider+model the router runs on is the orchestrator surface's own
+ * admin-configurable selection ({@link LlmModelSettingsService}), resolved per call
+ * against the JAK-141 global Doppler default by {@link LlmClientResolver} — so an
+ * admin can route classification through a different model without touching the
+ * specialists. Keys still live in Doppler; only the model is chosen.
+ *
  * Reliability mirrors {@link import("../PropertyReportWriter").PropertyReportWriter}:
  * Jake must ALWAYS route, so if the selected provider's key is unset or the call
  * errors/times out we fall back to a deterministic classification (address →
  * report, "OK" → refresh, else chitchat). That fallback is also the offline/dev
  * path — it makes NO network call and NO paid spend. Keys are app-level Doppler
- * secrets held inside the injected {@link LlmClient} — NEVER hardcoded, never logged.
+ * secrets held inside the resolved LlmClient — NEVER hardcoded, never logged.
  */
 @injectable()
 export class LlmRouterClient implements RouterLlmClient {
@@ -148,14 +156,21 @@ export class LlmRouterClient implements RouterLlmClient {
     "- Reply ONLY with the JSON object. No emojis, no prose outside the JSON.",
   ].join("\n");
 
-  constructor(@inject(LLM_CLIENT) private readonly llm: LlmClient) {}
+  constructor(
+    private readonly llmResolver: LlmClientResolver,
+    private readonly modelSettings: LlmModelSettingsService
+  ) {}
 
   async classify(req: RouterClassifyRequest): Promise<RouterClassification> {
+    // JAK-143: resolve the orchestrator surface's own provider+model (falls back
+    // to the global Doppler default when unset) into a concrete client.
+    const selection = await this.modelSettings.getEffectiveSelection("orchestrator");
+    const llm = this.llmResolver.resolve(selection);
     // No key for the selected provider → skip the call entirely and route
     // deterministically (no network, no spend).
-    if (this.llm.isAvailable) {
+    if (llm.isAvailable) {
       try {
-        const raw = await this.generateWithLlm(req);
+        const raw = await this.generateWithLlm(llm, req);
         const parsed = this.parse(raw);
         if (parsed) return parsed;
         console.warn("⚠️ LlmRouterClient: unusable output — using deterministic fallback.");
@@ -169,9 +184,9 @@ export class LlmRouterClient implements RouterLlmClient {
     return this.deterministicFallback(req);
   }
 
-  /** Call the LLM with structured output. Throws on error/timeout (caught by {@link classify}). */
-  protected async generateWithLlm(req: RouterClassifyRequest): Promise<string> {
-    return this.llm.generateStructured({
+  /** Call the resolved client with structured output. Throws on error/timeout (caught by {@link classify}). */
+  protected async generateWithLlm(llm: LlmClient, req: RouterClassifyRequest): Promise<string> {
+    return llm.generateStructured({
       system: this.composeSystemPrompt(req.systemPrompt),
       user: this.buildUserPayload(req),
       maxTokens: LlmRouterClient.MAX_TOKENS,

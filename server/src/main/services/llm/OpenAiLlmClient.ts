@@ -16,6 +16,11 @@ import { LlmClient, LlmStructuredRequest, LlmTextRequest } from "./LlmClient.ts"
  * The client is built lazily and only when a key is present; {@link isAvailable}
  * lets callers skip the call entirely when the key is unset, so a missing key is
  * a clean fallback rather than a thrown error mid-request.
+ *
+ * JAK-143: an optional per-call model override lets a prompt surface pin its own
+ * OpenAI model (e.g. gpt-4o-mini); when unset it uses {@link EnvConfig.openAiModel}
+ * (the Doppler OPENAI_MODEL default). The key is unaffected — it stays the same
+ * Doppler secret regardless of which model is selected.
  */
 export class OpenAiLlmClient implements LlmClient {
   private static readonly TIMEOUT_MS = 8_000;
@@ -25,7 +30,15 @@ export class OpenAiLlmClient implements LlmClient {
   /** Lazily-built OpenAI client (cached). */
   private openai?: OpenAI;
 
-  constructor(private readonly env: EnvConfig) {}
+  constructor(
+    private readonly env: EnvConfig,
+    private readonly modelOverride?: string
+  ) {}
+
+  /** The effective model — the per-surface override (JAK-143) or the Doppler default. */
+  get model(): string {
+    return this.modelOverride?.trim() || this.env.openAiModel;
+  }
 
   get isAvailable(): boolean {
     return Boolean(this.env.openAiApiKey);
@@ -34,7 +47,7 @@ export class OpenAiLlmClient implements LlmClient {
   async generateText(req: LlmTextRequest): Promise<string> {
     const completion = await this.client().chat.completions.create(
       {
-        model: this.env.openAiModel,
+        model: this.model,
         temperature: req.temperature,
         max_tokens: req.maxTokens,
         messages: [
@@ -50,7 +63,7 @@ export class OpenAiLlmClient implements LlmClient {
   async generateStructured(req: LlmStructuredRequest): Promise<string> {
     const completion = await this.client().chat.completions.create(
       {
-        model: this.env.openAiModel,
+        model: this.model,
         max_tokens: req.maxTokens,
         // Structured output: constrain the reply to the exact schema so the plan
         // shape matches the Anthropic path byte-for-byte after parsing.

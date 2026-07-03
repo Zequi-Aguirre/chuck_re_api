@@ -1,0 +1,28 @@
+-- JAK-143 — Per-prompt PROVIDER + MODEL picker. Each of the four editable-prompt
+-- surfaces (orchestrator/router, skip-trace, comps, property-report) can OPTIONALLY
+-- pin its own LLM provider (OpenAI / Anthropic) + model. The choice lives in the
+-- existing app_settings KV store (same editable pattern as the JAK-131/135/136/137
+-- prompts + the JAK-137 comp params) under these keys, one JSON row per surface:
+--
+--     llm_model_orchestrator      llm_model_skiptrace
+--     llm_model_comps             llm_model_property_report
+--
+-- stored as JSON like {"provider":"anthropic","model":"claude-sonnet-4-6"} (model
+-- MAY be null -> use the provider's Doppler default model).
+--
+-- DEFAULT = NO ROW = inherit the GLOBAL Doppler default (LLM_PROVIDER / OPENAI_MODEL,
+-- JAK-141). We intentionally seed NO rows here: an absent key means "use the global
+-- default", which is exactly the desired default state, and pinning a model in the
+-- migration would freeze a stale model id into every environment. LlmModelSettingsService
+-- carries the resolution rule + the code default, staying the single source of truth
+-- for the fallback -- the same "code default, seed nothing that would override it"
+-- posture as the prompt seeds (which only insert ON CONFLICT DO NOTHING).
+--
+-- NO CREDENTIAL is stored here. This selection layer only ever names a provider + a
+-- model id; the API keys (OPENAI_API_KEY / ANTHROPIC_API_KEY) stay Doppler secrets,
+-- never in the DB and never in a UI.
+--
+-- This migration is therefore a documented, intentional no-op placeholder that keeps
+-- JAK-143's provenance in the migration history alongside the other app_settings
+-- seeds. The no-op SELECT keeps the file a valid, cleanly-applied migration.
+select 1;

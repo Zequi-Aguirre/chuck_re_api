@@ -13,6 +13,7 @@ import CircularProgress from "@mui/material/CircularProgress";
 import SaveIcon from "@mui/icons-material/Save";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import { api, ApiError } from "../api";
+import { ModelPickerSection } from "../components/ModelPickerSection";
 import { SkipTraceCostView, SkipTracePromptView } from "../types";
 
 /**
@@ -144,6 +145,14 @@ export function SkipTraceSettingsPage() {
           {error}
         </Alert>
       )}
+
+      <ModelPickerSection
+        load={api.getSkipTraceModel}
+        save={api.updateSkipTraceModel}
+        reset={api.resetSkipTraceModel}
+        onToast={setToast}
+        onError={setError}
+      />
 
       <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 }, mb: 3 }}>
         <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1.5 }}>

@@ -198,3 +198,28 @@ export interface CompsParamsView {
   updatedAt: string | null;
   updatedBy: string | null;
 }
+
+/** The LLM providers a prompt surface can select (JAK-143). Mirrors the server. */
+export type LlmProvider = "openai" | "anthropic";
+
+/**
+ * The per-prompt PROVIDER + MODEL selection for one editable-prompt surface
+ * (JAK-143). `provider`/`model` are the stored OVERRIDE (null while inheriting the
+ * global Doppler default); `effectiveProvider`/`effectiveModel` are what the
+ * surface runs on right now; `defaultProvider`/`defaultModel` are the global
+ * default shown when nothing is pinned. `providerKeyConfigured` is booleans ONLY —
+ * so the picker can note "provider key not configured — will use fallback" without
+ * ever seeing a key. NO api key is ever part of this shape; keys stay in Doppler.
+ */
+export interface LlmModelSettingView {
+  provider: LlmProvider | null;
+  model: string | null;
+  isDefault: boolean;
+  effectiveProvider: LlmProvider;
+  effectiveModel: string;
+  defaultProvider: LlmProvider;
+  defaultModel: string;
+  providerKeyConfigured: Record<LlmProvider, boolean>;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}

@@ -1,7 +1,6 @@
-import { DependencyContainer, instanceCachingFactory } from "tsyringe";
-import { EnvConfig } from "../../config/envConfig";
-import { LLM_CLIENT } from "../../services/llm/LlmClient";
-import { LlmClientFactory } from "../../services/llm/LlmClientFactory";
+import { DependencyContainer } from "tsyringe";
+import { LlmClientResolver } from "../../services/llm/LlmClientResolver";
+import { LlmModelSettingsService } from "../../services/llm/LlmModelSettingsService";
 import { GhlEnrichmentConfig } from "../config/GhlEnrichmentConfig";
 import { ExternalActionGuard } from "../../safety/ExternalActionGuard";
 import { PostgresDatabase } from "../../data/PostgresDatabase";
@@ -246,17 +245,21 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   // without rewriting the router; the router LLM client is injected behind a
   // token so tests mock it and never hit the network (dev/no-key falls back to a
   // deterministic, no-spend classification). All singletons; share the one pool.
-  // JAK-141 — provider-agnostic LLM layer. ONE LlmClient (OpenAI by default,
-  // Anthropic optional) shared by the router (structured classification) and every
-  // specialist writer (text generation). Registered as a caching factory so the
-  // whole app shares one client; the provider + models + keys all come from Doppler
-  // via EnvConfig (LLM_PROVIDER / OPENAI_* / ANTHROPIC_*) — never the DB, never a UI.
-  // When the selected provider's key is unset, callers use their deterministic
-  // fallbacks (router → rule-based; specialists → plain-text renderers).
-  if (!c.isRegistered(LLM_CLIENT)) {
-    c.register(LLM_CLIENT, {
-      useFactory: instanceCachingFactory((dep) => LlmClientFactory.create(dep.resolve(EnvConfig))),
-    });
+  // JAK-141/143 — provider-agnostic LLM layer with PER-SURFACE model selection.
+  // The resolver builds an LlmClient for a given {provider, model} (OpenAI by
+  // default, Anthropic optional), memoizing one client per selection; the settings
+  // service fronts each surface's admin-editable provider+model choice (same
+  // app_settings pattern as the prompts), falling back to the global Doppler
+  // default (LLM_PROVIDER / OPENAI_* / ANTHROPIC_*). The router + every specialist
+  // writer resolve their own surface's selection per call. KEYS STAY IN DOPPLER —
+  // this layer selects a provider+model, never reads/stores a key, and adds no key
+  // entry anywhere. When the selected provider's key is unset, callers use their
+  // deterministic fallbacks (router → rule-based; specialists → plain-text renderers).
+  if (!c.isRegistered(LlmClientResolver)) {
+    c.registerSingleton(LlmClientResolver);
+  }
+  if (!c.isRegistered(LlmModelSettingsService)) {
+    c.registerSingleton(LlmModelSettingsService);
   }
 
   if (!c.isRegistered(OrchestratorPromptService)) {

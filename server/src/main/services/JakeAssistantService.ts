@@ -1475,10 +1475,11 @@ export class JakeAssistantService {
     }
 
     /**
-     * Whether a message is a bare affirmative — the reply that CONFIRMS the last
-     * pending paid quote (skip-trace / comps), or a fresh paid copy of the last
-     * address. Unified across specialists (JAK-138): a bare OK / OKAY / YES / YEAH /
-     * YEP / Y / SURE (case-insensitive) confirms; anything else cancels. Kept tight
+     * Whether a message is a bare affirmative — the reply that requests a fresh paid
+     * copy (report_refresh) of the last address. Since JAK-144 removed
+     * confirm-before-spend for skip-trace / comps, a bare OK no longer confirms a
+     * pending quote; it only routes report_refresh. A bare OK / OKAY / YES / YEAH /
+     * YEP / Y / SURE (case-insensitive) matches; anything else does not. Kept tight
      * (a single bare token) so a real address or question is never mistaken for one.
      */
     private isAffirmativeOk(message: string): boolean {

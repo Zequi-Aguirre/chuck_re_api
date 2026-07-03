@@ -13,6 +13,7 @@ import CircularProgress from "@mui/material/CircularProgress";
 import SaveIcon from "@mui/icons-material/Save";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import { api, ApiError } from "../api";
+import { ModelPickerSection } from "../components/ModelPickerSection";
 import { ReportPromptView } from "../types";
 
 /**
@@ -116,6 +117,14 @@ export function ReportSettingsPage() {
           {error}
         </Alert>
       )}
+
+      <ModelPickerSection
+        load={api.getReportModel}
+        save={api.updateReportModel}
+        reset={api.resetReportModel}
+        onToast={setToast}
+        onError={setError}
+      />
 
       <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
         <TextField

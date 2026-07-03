@@ -13,6 +13,11 @@ import { SkipTraceSettingsService } from "../../services/skiptrace/SkipTraceSett
 import { CompsPromptService } from "../../services/comps/CompsPromptService";
 import { CompsSettingsService } from "../../services/comps/CompsSettingsService";
 import { CompParams } from "../../services/comps/CompsTypes";
+import {
+  LlmModelSettingsService,
+  LlmSurface,
+} from "../../services/llm/LlmModelSettingsService";
+import { LLM_PROVIDERS, LlmProvider } from "../../services/llm/LlmSelection";
 
 /**
  * The admin dashboard's data API (JAK-113) — CRUD over connected sub-accounts,
@@ -61,7 +66,8 @@ export class AdminResource {
     @inject(SkipTracePromptService) private readonly skipTracePrompt: SkipTracePromptService,
     @inject(SkipTraceSettingsService) private readonly skipTraceSettings: SkipTraceSettingsService,
     @inject(CompsPromptService) private readonly compsPrompt: CompsPromptService,
-    @inject(CompsSettingsService) private readonly compsSettings: CompsSettingsService
+    @inject(CompsSettingsService) private readonly compsSettings: CompsSettingsService,
+    @inject(LlmModelSettingsService) private readonly modelSettings: LlmModelSettingsService
   ) {
     this.router = Router();
     this.configureRoutes();
@@ -131,6 +137,17 @@ export class AdminResource {
     this.router.get("/comps-params", this.getCompsParams.bind(this));
     this.router.put("/comps-params", this.updateCompsParams.bind(this));
     this.router.post("/comps-params/reset", this.resetCompsParams.bind(this));
+
+    // Per-prompt PROVIDER + MODEL picker (JAK-143). Each of the four editable-prompt
+    // surfaces (router, skip-trace, comps, property report) can OPTIONALLY pin its
+    // own provider (OpenAI / Anthropic) + model; unset falls back to the global
+    // Doppler default (LLM_PROVIDER / OPENAI_MODEL). Same editable pattern +
+    // requireAuth-only gate as the prompts above. NO api-key entry anywhere — the
+    // routes select a provider+model only; keys stay Doppler secrets.
+    this.modelRoutes("report-model", "property_report");
+    this.modelRoutes("orchestrator-model", "orchestrator");
+    this.modelRoutes("skiptrace-model", "skiptrace");
+    this.modelRoutes("comps-model", "comps");
 
     // Admin management (JAK-124, restricted in JAK-125): ONLY a superadmin may
     // manage other admins. requireSuperadmin runs after the router-level
@@ -695,6 +712,90 @@ export class AdminResource {
   private async resetCompsParams(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     try {
       const view = await this.compsSettings.resetParams();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  // --- Per-prompt provider + model picker (JAK-143) -------------------------
+
+  /**
+   * Register GET/PUT/reset for one surface's provider+model selection, mirroring
+   * the prompt routes. `path` is the URL segment (e.g. "comps-model"); `surface`
+   * is the {@link LlmSurface} it maps to. All three inherit the router-level
+   * requireAdminAuth gate.
+   */
+  private modelRoutes(path: string, surface: LlmSurface): void {
+    this.router.get(`/${path}`, (req, res, next) => this.getModel(surface, req, res, next));
+    this.router.put(`/${path}`, (req, res, next) => this.updateModel(surface, req, res, next));
+    this.router.post(`/${path}/reset`, (req, res, next) => this.resetModel(surface, req, res, next));
+  }
+
+  /** Return a surface's effective provider+model view (stored override + effective + global default). */
+  private async getModel(
+    surface: LlmSurface,
+    _req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<Response | void> {
+    try {
+      const view = await this.modelSettings.getView(surface);
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /**
+   * Pin a surface's provider (+ optional model). `provider` MUST be a known
+   * provider (openai | anthropic); `model` is an OPTIONAL free-text model id (blank
+   * → use the provider's default model). There is deliberately NO api-key field —
+   * keys stay Doppler secrets; this only selects a provider+model. Records the
+   * editing admin for the audit stamp.
+   */
+  private async updateModel(
+    surface: LlmSurface,
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<Response | void> {
+    try {
+      const provider = typeof req.body?.provider === "string" ? req.body.provider.trim().toLowerCase() : "";
+      if (!LLM_PROVIDERS.includes(provider as LlmProvider)) {
+        return res.status(400).json({ error: `provider must be one of: ${LLM_PROVIDERS.join(", ")}` });
+      }
+      const modelRaw = req.body?.model;
+      if (modelRaw !== undefined && modelRaw !== null && typeof modelRaw !== "string") {
+        return res.status(400).json({ error: "model must be a string" });
+      }
+      const model = typeof modelRaw === "string" ? modelRaw.trim() : "";
+      if (model.length > LlmModelSettingsService.MAX_MODEL_LENGTH) {
+        return res
+          .status(400)
+          .json({ error: `model must be at most ${LlmModelSettingsService.MAX_MODEL_LENGTH} characters` });
+      }
+      const view = await this.modelSettings.setSelection(
+        surface,
+        provider as LlmProvider,
+        model || null,
+        req.admin?.sub ?? null
+      );
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /** Revert a surface's provider+model to the global default (clears the stored override). */
+  private async resetModel(
+    surface: LlmSurface,
+    _req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<Response | void> {
+    try {
+      const view = await this.modelSettings.reset(surface);
       return res.status(200).json(view);
     } catch (err) {
       return next(err);
