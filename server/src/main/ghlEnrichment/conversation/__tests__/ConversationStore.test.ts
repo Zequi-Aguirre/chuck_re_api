@@ -86,6 +86,32 @@ describe("ConversationStore", () => {
     });
   });
 
+  describe("resolvedAddresses (JAK-135 ordered list)", () => {
+    it("returns DISTINCT inbound resolved addresses, oldest-first by first send", async () => {
+      db.query.mockResolvedValue({
+        rows: [
+          { resolved_address: "1 First St, Town, CA 90000" },
+          { resolved_address: "2 Second Ave, Town, CA 90000" },
+        ],
+      } as never);
+
+      const list = await store.resolvedAddresses("+15550000000");
+
+      expect(list).toEqual(["1 First St, Town, CA 90000", "2 Second Ave, Town, CA 90000"]);
+      const [sql, params] = lastQuery(db);
+      expect(String(sql)).toContain("direction = 'inbound'");
+      expect(String(sql)).toContain("resolved_address IS NOT NULL");
+      expect(String(sql)).toContain("GROUP BY resolved_address");
+      expect(String(sql)).toContain("MIN(created_at)");
+      expect(params).toEqual(["+15550000000"]);
+    });
+
+    it("returns [] when the phone has sent no addresses", async () => {
+      db.query.mockResolvedValue({ rows: [] } as never);
+      expect(await store.resolvedAddresses("+15550000000")).toEqual([]);
+    });
+  });
+
   describe("latestLookup", () => {
     it("selects the newest snapshot for (phone, address_key)", async () => {
       db.query.mockResolvedValue({ rows: [{ id: "lk_1" }] } as never);

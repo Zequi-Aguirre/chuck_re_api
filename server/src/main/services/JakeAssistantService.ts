@@ -13,6 +13,8 @@ import { normalizeInboundAddress } from "../util/address.ts";
 import { JakeInboundMessage, JakeInboundResult, JakeTextMode } from "../types/Jake.ts";
 import { RealEstateApiPropertySearchResult } from "../types/RealEstateApi.ts";
 import { PropertyReportWriter } from "./PropertyReportWriter.ts";
+import { JakeOrchestrator } from "./orchestrator/JakeOrchestrator.ts";
+import { DispatchPlan } from "./orchestrator/OrchestratorTypes.ts";
 import {
     AbsenteeStatus,
     EquityLevel,
@@ -35,9 +37,12 @@ interface TextRoute {
     note(contactId: string, body: string): Promise<unknown>;
 }
 
-const GUIDANCE_REPLY =
-    "Hi! Text me a full property address (e.g. \"123 Main St, Springfield, IL 62704\") " +
-    "and I'll pull up what I can find.";
+const GUIDANCE_REPLY = [
+    "Hi! I'm Jake. Text me a full property address (e.g. \"123 Main St, Springfield, IL 62704\") " +
+        "and I'll pull up a property report — owner, value, equity, and distress signals.",
+    "You can also refer back to an address you already sent (\"the 2nd one\", \"the last address\").",
+    PropertyReportWriter.FOOTER,
+].join("\n\n");
 
 const OUT_OF_CREDITS_REPLY =
     "You're out of Jake credits, so I couldn't run that lookup. Top up and text the address again.";
@@ -52,22 +57,22 @@ export class JakeAssistantService {
         private readonly customers: TextJakeCustomerService,
         private readonly credits: CreditService,
         private readonly reportWriter: PropertyReportWriter,
-        private readonly memory: ConversationMemoryService
+        private readonly memory: ConversationMemoryService,
+        private readonly orchestrator: JakeOrchestrator
     ) {}
 
     /**
-     * Core text-Jake path (JAK-115), MODE-AWARE:
+     * Core text-Jake path (JAK-115), MODE-AWARE, now ORCHESTRATED (JAK-135):
      *   1. resolve the texting CUSTOMER by sender phone (the billing identity —
      *      both modes); upsert a Postgres record + its credit account (JAK-109).
      *   2. resolve the text MODE: if an active connection owns this inbound and is
      *      set to 'own_number', run inside THAT customer's own GHL sub-account on
      *      their per-tenant key + number (the JAK-114 path). Otherwise 'gateway':
      *      run through Zequi's shared Jake sub-account on the master gateway key.
-     *   3. parse the address; no address → guidance reply, no charge.
-     *   4. credit gate — never look up for free; out of credits → notice + note.
-     *   5. look up the property, reply over the chosen transport.
-     *   6. charge the customer's credits only when a match was delivered.
-     *   7. write a status note on the contact (both modes).
+     *   3. persist the inbound message in ordered per-phone memory (JAK-134).
+     *   4. ask the ORCHESTRATOR to classify intent + resolve references into a
+     *      typed dispatch plan (JAK-135), then execute it — this REPLACES the old
+     *      single-path address branch with orchestrated dispatch.
      *
      * Cross-tenant isolation holds: own_number only ever sends/notes on the
      * resolved connection's own creds + a number proven to be its own; the gateway
@@ -90,10 +95,50 @@ export class JakeAssistantService {
         //    returned id links any resulting lookup snapshot back to this message.
         const inboundId = await this.rememberInbound(customer, phone, input.message, address, route);
 
-        // 4. No parseable address → either an "OK" that refreshes the last address
-        //    (a fresh PAID copy), or usage guidance. Neither is a cache candidate.
-        if (!address) {
-            if (this.isAffirmativeOk(input.message)) {
+        // 4. Classify intent + resolve references against memory (JAK-135). The
+        //    router reads the recent window + the ordered resolved-address list and
+        //    returns a typed plan; we dispatch on it below.
+        const plan = await this.orchestrator.plan({
+            phone,
+            message: input.message,
+            parsedAddress: address,
+            isAffirmative: this.isAffirmativeOk(input.message),
+        });
+
+        const result = await this.dispatch(plan, {
+            input,
+            route,
+            customer,
+            accountId,
+            phone,
+            requestingMessageId: inboundId,
+        });
+        return { ...result, intent: plan.intent };
+    }
+
+    /**
+     * Execute a dispatch plan (JAK-135). Report intents keep the FULL JAK-134
+     * cache-and-free-reserve behavior; skip-trace / comps are recognized but not
+     * built (JAK-136/137) → a no-spend "coming soon" reply; chitchat → guidance.
+     */
+    private async dispatch(
+        plan: DispatchPlan,
+        ctx: {
+            input: JakeInboundMessage;
+            route: TextRoute;
+            customer: TextJakeCustomer;
+            accountId: string;
+            phone: string;
+            requestingMessageId: string | null;
+        }
+    ): Promise<JakeInboundResult> {
+        const { input, route, customer, accountId, phone, requestingMessageId } = ctx;
+
+        switch (plan.intent) {
+            // A bare "OK"/"yes" confirming a fresh PAID copy of the last address
+            // (JAK-134 confirm-before-spend). The target is the last address in
+            // memory; absent one, fall through to guidance.
+            case "report_refresh": {
                 const lastAddress = await this.memory.lastResolvedAddress(phone);
                 if (lastAddress) {
                     return this.freshLookup({
@@ -103,33 +148,78 @@ export class JakeAssistantService {
                         accountId,
                         phone,
                         address: lastAddress,
-                        requestingMessageId: inboundId,
+                        requestingMessageId,
                         onOkRefresh: true,
                     });
                 }
+                return this.sendGuidance(input, route, customer, phone);
             }
-            return this.sendGuidance(input, route, customer, phone);
-        }
 
-        // 5. Cache hit within the free re-serve window → re-serve the STORED report
-        //    for FREE (no paid API call, no credit charged) and invite an OK
-        //    refresh for a fresh copy (JAK-134).
-        const cached = await this.memory.checkCache(phone, address);
-        if (cached) {
-            return this.reserveFromCache({ input, route, customer, phone, address, cached });
-        }
+            // A report for a resolved address (typed directly, or resolved from a
+            // reference like "the 2nd address I sent"). Keeps the JAK-134 cache
+            // rule: a hit within the free window re-serves for FREE; a miss is a
+            // normal paid lookup, charged on match and snapshotted.
+            case "property_report": {
+                const target = plan.targetEntity;
+                if (!target) {
+                    return this.sendGuidance(input, route, customer, phone);
+                }
+                const cached = await this.memory.checkCache(phone, target);
+                if (cached) {
+                    return this.reserveFromCache({ input, route, customer, phone, address: target, cached });
+                }
+                return this.freshLookup({
+                    input,
+                    route,
+                    customer,
+                    accountId,
+                    phone,
+                    address: target,
+                    requestingMessageId,
+                    onOkRefresh: false,
+                });
+            }
 
-        // 6. Cache miss → normal paid lookup path (charge on match, snapshot it).
-        return this.freshLookup({
-            input,
+            // Recognized but not built yet — reply that it's coming, spend nothing.
+            case "skip_trace":
+            case "comps":
+                return this.sendComingSoon(input, route, customer, phone, plan);
+
+            // Greeting / unrecognized — helpful guidance, no lookup, no charge.
+            case "chitchat":
+            default:
+                return this.sendGuidance(input, route, customer, phone);
+        }
+    }
+
+    /**
+     * A no-spend "coming soon" reply for a recognized-but-unbuilt capability
+     * (skip-trace JAK-136 / comps JAK-137). We NEVER fake results and NEVER spend:
+     * we name the capability, note it's on the way, and keep the guardrails
+     * (emoji-free, GoTextJake.com footer). The registration seam means when the
+     * specialist ships this branch is replaced by a real dispatch, not rewritten.
+     */
+    private async sendComingSoon(
+        input: JakeInboundMessage,
+        route: TextRoute,
+        customer: TextJakeCustomer,
+        phone: string,
+        plan: DispatchPlan
+    ): Promise<JakeInboundResult> {
+        const capability = plan.intent === "skip_trace" ? "Skip-tracing an owner" : "Pulling comparable sales";
+        const forEntity = plan.targetEntity ? ` for ${plan.targetEntity}` : "";
+        const reply = [
+            `${capability}${forEntity} is coming soon. I can't run that yet, so I haven't charged you anything.`,
+            "For now, text me a property address and I'll pull a full report.",
+            PropertyReportWriter.FOOTER,
+        ].join("\n\n");
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        await this.writeStatusNote(
             route,
-            customer,
-            accountId,
-            phone,
-            address,
-            requestingMessageId: inboundId,
-            onOkRefresh: false,
-        });
+            input.contactId,
+            `Jake (text): ${plan.intent} requested${forEntity} — not built yet, replied "coming soon", no charge.`
+        );
+        return { ok: true, address: plan.targetEntity, reply, mode: route.mode, charged: 0 };
     }
 
     /**

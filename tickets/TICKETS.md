@@ -24,12 +24,11 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-132** (P1) Feed FULL PropertySearch response to AI report writer; guarantee mortgage/foreclosure/lien flags surface — depends: JAK-130, JAK-131
 - [ ] **JAK-133** (P0) HOTFIX: restore edited-in-place applied migration (unbreak staging deploy) + adopt real-timestamp migration tooling — depends: JAK-132
 
-## Open (8)
+## Open (7)
 - [ ] **JAK-103** (P0) Token refresh service — depends: JAK-102
 - [ ] **JAK-117** (P1) Align DB config to house pattern (discrete DB_* vars, mirror Automator/Northstar)
 - [ ] **JAK-119** (P1) Retire legacy single-tenant GHL_API_KEY + GHL_BASE_URL path (chuck_re_api MVP leftovers)
 - [ ] **JAK-124** (P1) Admin management: logged-in admin can create another admin — depends: JAK-113
-- [ ] **JAK-135** (P1) Orchestrator / router AI: intent classification + dispatch plan — depends: JAK-134
 - [ ] **JAK-136** (P1) Skip-trace specialist: RealEstate API skip-trace DAO + specialist AI — depends: JAK-135
 - [ ] **JAK-137** (P1) Comps specialist: RealEstate API comparables/CMA DAO + specialist AI — depends: JAK-135
 - [ ] **JAK-138** (P2) Conversational UX polish: follow-ups, disambiguation, confirm-before-spend — depends: JAK-135, JAK-136, JAK-137
@@ -41,7 +40,7 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-153** (P3) [LATER] Privacy Policy + Terms pages for Jake
 - [ ] **JAK-154** (P3) [LATER] CRM upsell bundle (GHL SaaS resale + AskZoe concierge)
 
-## Done (16)
+## Done (17)
 - [x] **JAK-100** (P0) Project ticket store (SQLite in-repo)
 - [x] **JAK-101** (P0) GHL app scaffolding + Doppler config + env helper — depends: JAK-100
 - [x] **JAK-102** (P0) Encrypted connection/credential store — depends: JAK-101
@@ -58,3 +57,4 @@ Epic: `ghl-enrichment`
 - [x] **JAK-114** (P0) Multi-tenant text-Jake routing (migrate MVP off single Doppler key) — depends: JAK-102
 - [x] **JAK-116** (P1) Deploy runbook: DEPLOY.md for Render staging bring-up
 - [x] **JAK-134** (P1) Conversation memory store: per-phone conversation history in Postgres
+- [x] **JAK-135** (P1) Orchestrator / router AI: intent classification + dispatch plan — depends: JAK-134

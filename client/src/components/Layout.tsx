@@ -17,6 +17,7 @@ import MenuIcon from "@mui/icons-material/Menu";
 import GroupsIcon from "@mui/icons-material/Groups";
 import SmsIcon from "@mui/icons-material/Sms";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
+import CallSplitIcon from "@mui/icons-material/CallSplit";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import LogoutIcon from "@mui/icons-material/Logout";
 import { useAuth } from "../auth";
@@ -40,6 +41,8 @@ export function Layout() {
     { label: "Text customers", to: "/text-customers", icon: <SmsIcon />, show: true },
     // AI Prompt (JAK-131) — every logged-in admin can tune the report style.
     { label: "AI Prompt", to: "/report-settings", icon: <AutoAwesomeIcon />, show: true },
+    // Router Prompt (JAK-135) — every logged-in admin can tune how Jake routes texts.
+    { label: "Router Prompt", to: "/router-settings", icon: <CallSplitIcon />, show: true },
     {
       label: "Admins",
       to: "/admins",

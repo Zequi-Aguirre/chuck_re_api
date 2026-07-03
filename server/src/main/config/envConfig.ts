@@ -39,6 +39,15 @@ export class EnvConfig {
     public readonly openAiApiKey: string;
     public readonly openAiModel: string;
 
+    // 🧭 Anthropic — powers the text-Jake orchestrator/router (JAK-135). Claude
+    // classifies every inbound message + resolves references into a dispatch plan.
+    // The key is an app-level Doppler secret (NEVER hardcoded); the model is
+    // configurable and defaults to the latest Opus. Optional at boot — an empty
+    // key just means the router uses its deterministic fallback (address→report,
+    // OK→refresh, else chitchat), which makes NO network call and NO paid spend.
+    public readonly anthropicApiKey: string;
+    public readonly anthropicModel: string;
+
     // 🗄️ Postgres (per-location connection/credential store — JAK-102 onward).
     // HOUSE PATTERN (JAK-117): discrete connection vars mirroring Automator +
     // Northstar (DB_HOST/DB_PORT/DB_USER/DB_PASS/DB_DB) instead of a single
@@ -109,6 +118,11 @@ export class EnvConfig {
         // Model overridable via OPENAI_MODEL; default 'gpt-4o-mini'.
         this.openAiApiKey = process.env.OPENAI_API_KEY ?? "";
         this.openAiModel = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+
+        // 🧭 Anthropic (JAK-135). Key from Doppler (ANTHROPIC_API_KEY) — never
+        // hardcoded. Model overridable via ANTHROPIC_MODEL; default the latest Opus.
+        this.anthropicApiKey = process.env.ANTHROPIC_API_KEY ?? "";
+        this.anthropicModel = process.env.ANTHROPIC_MODEL ?? "claude-opus-4-8";
 
         // 🗄️ Postgres discrete connection vars (Doppler). HOUSE PATTERN shared
         // with Automator + Northstar — same DB_* var names. Optional at boot —

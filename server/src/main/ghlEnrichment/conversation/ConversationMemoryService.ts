@@ -72,6 +72,15 @@ export class ConversationMemoryService {
     return this.store.lastResolvedAddress(phone);
   }
 
+  /**
+   * The ordered per-phone resolved-address list, oldest-first — the "Nth address
+   * I sent" index the JAK-135 orchestrator resolves references against. Distinct
+   * by first send, so ordinals ("the 2nd address", "the last one") stay stable.
+   */
+  async resolvedAddressList(phone: string): Promise<string[]> {
+    return this.store.resolvedAddresses(phone);
+  }
+
   /** Snapshot a paid PropertySearch result so a repeat within the window is free. */
   async recordLookup(input: {
     customerId: string;

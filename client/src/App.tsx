@@ -8,6 +8,7 @@ import { ConnectionsPage } from "./pages/ConnectionsPage";
 import { ConnectionDetailPage } from "./pages/ConnectionDetailPage";
 import { TextCustomersPage } from "./pages/TextCustomersPage";
 import { ReportSettingsPage } from "./pages/ReportSettingsPage";
+import { OrchestratorSettingsPage } from "./pages/OrchestratorSettingsPage";
 import { AdminsPage } from "./pages/AdminsPage";
 import { ReactNode } from "react";
 
@@ -60,6 +61,8 @@ export function App() {
         <Route path="/text-customers" element={<TextCustomersPage />} />
         {/* AI Prompt (JAK-131) — available to ANY logged-in admin, not gated. */}
         <Route path="/report-settings" element={<ReportSettingsPage />} />
+        {/* Router Prompt (JAK-135) — available to ANY logged-in admin, not gated. */}
+        <Route path="/router-settings" element={<OrchestratorSettingsPage />} />
         <Route
           path="/admins"
           element={

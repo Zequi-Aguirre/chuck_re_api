@@ -78,6 +78,15 @@ describe("ConversationMemoryService", () => {
     });
   });
 
+  describe("resolvedAddressList (JAK-135)", () => {
+    it("delegates to the store's ordered resolved-address query", async () => {
+      store.resolvedAddresses.mockResolvedValue(["1 A St, Town, CA 90000", "2 B St, Town, CA 90000"]);
+      const out = await svc.resolvedAddressList("+15550000000");
+      expect(store.resolvedAddresses).toHaveBeenCalledWith("+15550000000");
+      expect(out).toEqual(["1 A St, Town, CA 90000", "2 B St, Town, CA 90000"]);
+    });
+  });
+
   describe("checkCache (free-reserve window boundary)", () => {
     it("returns null when there is no snapshot for the address", async () => {
       store.latestLookup.mockResolvedValue(null);

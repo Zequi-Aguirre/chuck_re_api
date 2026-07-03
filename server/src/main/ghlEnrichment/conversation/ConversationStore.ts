@@ -77,6 +77,26 @@ export class ConversationStore {
   }
 
   /**
+   * The ordered per-phone list of DISTINCT resolved addresses the sender has
+   * texted, oldest-first (by first appearance). This is the "Nth address I sent"
+   * index the JAK-135 orchestrator resolves references against ("the 2nd address",
+   * "the last one"). Sourced from the inbound message log (every parsed address,
+   * not just paid lookups) so it reflects everything the person actually sent;
+   * de-duplicated by first send so ordinals are stable.
+   */
+  async resolvedAddresses(phone: string): Promise<string[]> {
+    const result = await this.db.query<{ resolved_address: string }>(
+      `SELECT resolved_address
+         FROM text_jake_conversation_messages
+        WHERE phone = $1 AND direction = 'inbound' AND resolved_address IS NOT NULL
+        GROUP BY resolved_address
+        ORDER BY MIN(created_at) ASC, MIN(id) ASC`,
+      [phone]
+    );
+    return result.rows.map((r) => r.resolved_address);
+  }
+
+  /**
    * The latest cached lookup for (phone, address_key), newest first, REGARDLESS
    * of age — the free-window check is applied by the service so its boundary is
    * testable without the clock. Null if this phone never looked up this address.
