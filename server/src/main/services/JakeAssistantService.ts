@@ -86,6 +86,18 @@ const OUT_OF_CREDITS_REPLY =
  */
 const ACK_REPLY = "Working on it, one moment.";
 
+/**
+ * The exact hold-notice copy sent when a text customer is on hold (JAK-148) —
+ * emoji-free, with the mandatory GoTextJake.com footer last. Kept as a single
+ * editable constant. Sent for the SOFT on_hold state (GHL is still forwarding
+ * their texts, so Jake must reply something) and as the deactivated backstop.
+ * Jake does NO work and NO charge on either path.
+ */
+const ACCOUNT_ON_HOLD_REPLY = [
+    "Your account is on hold. Please contact the admin to get this resolved.",
+    PropertyReportWriter.FOOTER,
+].join("\n\n");
+
 @injectable()
 export class JakeAssistantService {
     /** The bare tokens that count as a spend confirmation (JAK-138 unified confirm). */
@@ -145,6 +157,16 @@ export class JakeAssistantService {
 
         // 2. Mode + transport.
         const route = await this.resolveRoute(input);
+
+        // JAK-148 two-level hold — enforced BEFORE any work (no orchestrator, no
+        // specialist, no charge). on_hold: GHL still forwards their texts, so Jake
+        // intercepts and replies a friendly hold notice. deactivated: GHL's "text
+        // Jake" field is unapproved so it should have stopped forwarding, but if an
+        // inbound still slips through we refuse to process it too (backstop).
+        // NEITHER path touches credits.
+        if (customer.status !== "active") {
+            return this.replyAccountHeld(input, route, customer, phone);
+        }
 
         const address = normalizeInboundAddress(input.message);
 
@@ -1617,6 +1639,38 @@ export class JakeAssistantService {
         } catch (err) {
             console.error("⚠️ Jake ack send failed:", this.errorSummary(err));
         }
+    }
+
+    /**
+     * Reply to an inbound from a held customer (JAK-148) WITHOUT doing any work.
+     * on_hold and deactivated both land here: we record the inbound for history
+     * (memory only), send the fixed hold notice, and drop a status note — no
+     * orchestrator, no specialist, no credit charge. Returns a benign result with
+     * the status as its intent for telemetry.
+     */
+    private async replyAccountHeld(
+        input: JakeInboundMessage,
+        route: TextRoute,
+        customer: TextJakeCustomer,
+        phone: string
+    ): Promise<JakeInboundResult> {
+        // Best-effort history only — never a specialist, never a charge.
+        await this.rememberInbound(customer, phone, input.message, null, route);
+        await this.sendAndRemember(route, input.contactId, customer, phone, ACCOUNT_ON_HOLD_REPLY);
+        const label = customer.status === "deactivated" ? "DEACTIVATED" : "ON HOLD";
+        await this.writeStatusNote(
+            route,
+            input.contactId,
+            `Jake (text): account ${label} — sent hold notice, no processing, no charge.`
+        );
+        return {
+            ok: true,
+            address: null,
+            reply: ACCOUNT_ON_HOLD_REPLY,
+            mode: route.mode,
+            charged: 0,
+            intent: customer.status,
+        };
     }
 
     /**

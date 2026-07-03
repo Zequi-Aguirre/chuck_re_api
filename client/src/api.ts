@@ -17,6 +17,7 @@ import {
   SkipTracePromptView,
   FindContactResult,
   TextCustomerInput,
+  TextCustomerStatusResult,
   TextCustomerView,
   TextCustomerWriteResult,
 } from "./types";
@@ -152,6 +153,25 @@ export const api = {
     return request<FindContactResult>("/text-customers/find-contact", {
       method: "POST",
       body: JSON.stringify({ phone }),
+    });
+  },
+  // Two-level hold controls (JAK-148). None of these touch credits.
+  //   hold       — SOFT: GHL keeps forwarding; Jake replies "on hold", no charge.
+  //   deactivate — HARD: flip "text Jake" unapproved so GHL stops forwarding.
+  //   reactivate — back to active: re-approve so normal processing resumes.
+  async holdTextCustomer(id: string): Promise<TextCustomerStatusResult> {
+    return request<TextCustomerStatusResult>(`/text-customers/${encodeURIComponent(id)}/hold`, {
+      method: "POST",
+    });
+  },
+  async deactivateTextCustomer(id: string): Promise<TextCustomerStatusResult> {
+    return request<TextCustomerStatusResult>(`/text-customers/${encodeURIComponent(id)}/deactivate`, {
+      method: "POST",
+    });
+  },
+  async reactivateTextCustomer(id: string): Promise<TextCustomerStatusResult> {
+    return request<TextCustomerStatusResult>(`/text-customers/${encodeURIComponent(id)}/reactivate`, {
+      method: "POST",
     });
   },
   async grantTextCustomerCredits(

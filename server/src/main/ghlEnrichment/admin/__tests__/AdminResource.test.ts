@@ -216,6 +216,7 @@ describe("AdminResource", () => {
     lastName: null,
     email: null,
     ghlContactId: null,
+    status: "active",
     creditBalance: 0,
     createdAt: new Date("2026-07-01T00:00:00Z"),
     lastSeenAt: new Date("2026-07-02T00:00:00Z"),
@@ -511,6 +512,60 @@ describe("AdminResource", () => {
       expect(res.status).toBe(200);
       expect(res.body.found).toBe(false);
       expect(res.body.contact).toBeNull();
+    });
+  });
+
+  // --- Two-level hold controls (JAK-148) ------------------------------------
+
+  describe("POST /text-customers/:id hold controls", () => {
+    const okStatus = (over = {}) => ({ customer: textCustomerView(over), sync: null });
+
+    it.each([
+      ["hold", "on_hold"],
+      ["deactivate", "deactivated"],
+      ["reactivate", "active"],
+    ])("POST .../%s is behind the auth gate", async (action) => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app).post(`/api/admin/text-customers/cust-1/${action}`).send({});
+      expect(res.status).toBe(401);
+      expect(textCustomers.changeStatus).not.toHaveBeenCalled();
+    });
+
+    it("hold → changeStatus(id, 'on_hold') and returns the updated customer", async () => {
+      textCustomers.changeStatus.mockResolvedValue(okStatus({ status: "on_hold" }));
+      const res = await asAdmin(request(app).post("/api/admin/text-customers/cust-1/hold").send({}));
+      expect(res.status).toBe(200);
+      expect(res.body.customer.status).toBe("on_hold");
+      expect(textCustomers.changeStatus).toHaveBeenCalledWith("cust-1", "on_hold");
+    });
+
+    it("deactivate → changeStatus(id, 'deactivated') and returns the sync outcome", async () => {
+      textCustomers.changeStatus.mockResolvedValue({
+        customer: textCustomerView({ status: "deactivated" }),
+        sync: { status: "synced", ghlContactId: "ghl_1", message: "off" },
+      });
+      const res = await asAdmin(
+        request(app).post("/api/admin/text-customers/cust-1/deactivate").send({})
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.customer.status).toBe("deactivated");
+      expect(res.body.sync.status).toBe("synced");
+      expect(textCustomers.changeStatus).toHaveBeenCalledWith("cust-1", "deactivated");
+    });
+
+    it("reactivate → changeStatus(id, 'active')", async () => {
+      textCustomers.changeStatus.mockResolvedValue(okStatus({ status: "active" }));
+      const res = await asAdmin(
+        request(app).post("/api/admin/text-customers/cust-1/reactivate").send({})
+      );
+      expect(res.status).toBe(200);
+      expect(textCustomers.changeStatus).toHaveBeenCalledWith("cust-1", "active");
+    });
+
+    it("404s an unknown customer id", async () => {
+      textCustomers.changeStatus.mockResolvedValue(null);
+      const res = await asAdmin(request(app).post("/api/admin/text-customers/nope/hold").send({}));
+      expect(res.status).toBe(404);
     });
   });
 

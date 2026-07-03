@@ -154,6 +154,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     firstName: null,
     lastName: null,
     email: null,
+    status: "active",
     creditAccountId: `acct_${phone}`,
     createdAt: new Date("2026-07-01T00:00:00Z"),
     modifiedAt: new Date("2026-07-01T00:00:00Z"),
@@ -331,6 +332,68 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
 
       expect(credits.hasCreditsForTextLookup).toHaveBeenCalledWith("acct_+15559990000");
       expect(credits.chargeForTextLookup).toHaveBeenCalledWith({ accountId: "acct_+15559990000" });
+      expect(result.charged).toBe(1);
+    });
+  });
+
+  describe("two-level hold (JAK-148)", () => {
+    it("on_hold: replies the hold notice, runs NO specialist, and charges NOTHING", async () => {
+      customers.resolveByPhone.mockResolvedValue({
+        ...customerFor("+15559990000"),
+        status: "on_hold",
+      });
+      // A real address would normally run a property_report; on hold it must not.
+      realEstate.searchPropertyByAddress.mockResolvedValue({ address: "123 Main St" } as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "123 Main St, Springfield, IL 62704",
+      });
+
+      // Friendly hold notice went back over the gateway.
+      expect(result.charged).toBe(0);
+      expect(result.reply).toContain("on hold");
+      expect(gateway.sendSms).toHaveBeenCalledWith(
+        expect.objectContaining({ contactId: "ct_1", message: expect.stringContaining("on hold") })
+      );
+      // No work: the router never ran, no lookup, no specialist, no charge. The GHL
+      // approval field is never touched here, so it stays approved (GHL keeps sending).
+      expect(orchestrator.plan).not.toHaveBeenCalled();
+      expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
+      expect(credits.chargeForTextLookup).not.toHaveBeenCalled();
+      expect(credits.hasCreditsForTextLookup).not.toHaveBeenCalled();
+    });
+
+    it("deactivated: backstop refuses to process/charge if an inbound still arrives", async () => {
+      customers.resolveByPhone.mockResolvedValue({
+        ...customerFor("+15559990000"),
+        status: "deactivated",
+      });
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "742 Evergreen Terrace, Springfield, IL 62704",
+      });
+
+      expect(result.charged).toBe(0);
+      expect(orchestrator.plan).not.toHaveBeenCalled();
+      expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
+      expect(credits.chargeForTextLookup).not.toHaveBeenCalled();
+    });
+
+    it("active: normal processing resumes — the router runs and a lookup can charge", async () => {
+      // Default customerFor is active; a real address routes to a paid report.
+      realEstate.searchPropertyByAddress.mockResolvedValue({ address: "1 A St" } as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "1 A St, Town, CA 90000",
+      });
+
+      expect(orchestrator.plan).toHaveBeenCalled();
       expect(result.charged).toBe(1);
     });
   });

@@ -4,6 +4,8 @@ import {
   isMobileWidth,
   customerListLayout,
   customerDisplayName,
+  customerStatusLabel,
+  customerStatusColor,
 } from "../textCustomersLayout";
 
 /**
@@ -36,5 +38,14 @@ describe("textCustomersLayout (JAK-146 mobile-first)", () => {
     expect(customerDisplayName({ firstName: "Ada", lastName: "Lovelace" })).toBe("Ada Lovelace");
     expect(customerDisplayName({ firstName: "Ada", lastName: null })).toBe("Ada");
     expect(customerDisplayName({ firstName: null, lastName: null })).toBe("");
+  });
+
+  it("maps hold status to a friendly label + chip color (JAK-148)", () => {
+    expect(customerStatusLabel("active")).toBe("Active");
+    expect(customerStatusLabel("on_hold")).toBe("On hold");
+    expect(customerStatusLabel("deactivated")).toBe("Deactivated");
+    expect(customerStatusColor("active")).toBe("success");
+    expect(customerStatusColor("on_hold")).toBe("warning");
+    expect(customerStatusColor("deactivated")).toBe("error");
   });
 });

@@ -1,5 +1,6 @@
 import { injectable } from "tsyringe";
 import { PostgresDatabase } from "../../data/PostgresDatabase";
+import { TextCustomerStatus } from "./TextJakeCustomerTypes";
 
 /**
  * Raw persistence row for `text_jake_customers` (JAK-115). One row per distinct
@@ -15,6 +16,9 @@ export interface TextJakeCustomerRow {
   first_name: string | null;
   last_name: string | null;
   email: string | null;
+  // Two-level hold state (JAK-148): 'active' | 'on_hold' | 'deactivated'. Column
+  // default is 'active', so a row created before this ticket reads as active.
+  status: TextCustomerStatus;
   created_at: Date;
   modified_at: Date;
   deleted_at: Date | null;
@@ -117,6 +121,29 @@ export class TextJakeCustomerStore {
        WHERE id = $1 AND deleted_at IS NULL
        RETURNING *`,
       [id, ghlContactId]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  /**
+   * Set a customer's two-level hold status (JAK-148): 'active' | 'on_hold' |
+   * 'deactivated'. Returns the updated row, or null if no live customer has that
+   * id. Deliberately touches ONLY `status` (+ `modified_at`) — it never reads or
+   * writes the credit ledger, so a hold/deactivate/reactivate can NEVER move a
+   * balance. The GHL "text Jake" field flip (deactivate/reactivate) is a separate
+   * step the admin service runs through the JAK-147 sync.
+   */
+  async setStatus(
+    id: string,
+    status: TextCustomerStatus
+  ): Promise<TextJakeCustomerRow | null> {
+    const result = await this.db.query<TextJakeCustomerRow>(
+      `UPDATE text_jake_customers
+       SET status = $2,
+           modified_at = now()
+       WHERE id = $1 AND deleted_at IS NULL
+       RETURNING *`,
+      [id, status]
     );
     return result.rows[0] ?? null;
   }

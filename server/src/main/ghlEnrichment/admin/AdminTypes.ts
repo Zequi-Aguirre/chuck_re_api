@@ -7,6 +7,8 @@
  * and the safe, credential-free shapes the admin API returns to the SPA.
  */
 
+import { TextCustomerStatus } from "../customers/TextJakeCustomerTypes";
+
 /**
  * Admin privilege level (JAK-125).
  *  - `admin`      — full sub-account management (connections/status), the default.
@@ -110,6 +112,12 @@ export interface AdminTextCustomerView {
   email: string | null;
   /** Contact id in the sub-account handling their texts; null until known. */
   ghlContactId: string | null;
+  /**
+   * Two-level hold state (JAK-148): 'active' | 'on_hold' | 'deactivated'. The
+   * admin card shows it and offers On hold / Deactivate / Reactivate; it never
+   * affects the credit balance below.
+   */
+  status: TextCustomerStatus;
   /** Current spendable credit balance for this customer (0 if none yet). */
   creditBalance: number;
   createdAt: Date;

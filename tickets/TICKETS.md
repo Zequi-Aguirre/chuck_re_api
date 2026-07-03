@@ -7,7 +7,7 @@
 
 Epic: `ghl-enrichment`
 
-## In progress (16)
+## In progress (15)
 - [ ] **JAK-115** (P0) Master GHL gateway key + mode-aware text-Jake (gateway vs own_number) — depends: JAK-102, JAK-109, JAK-114
 - [ ] **JAK-118** (P2) Remove dead scaffold-clone env vars (VITE_ASKZACK_CLIENT_URL/SERVER_URL, VITE_ASKZOE_SERVER_URL, LOCAL_NGROK_URL)
 - [ ] **JAK-120** (P1) Comprehensive DEPLOY.md refresh: single up-to-date staging setup doc — depends: JAK-116, JAK-117, JAK-118, JAK-119
@@ -23,7 +23,6 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-131** (P1) Admin-editable AI prompt for the Jake Property Report — depends: JAK-130
 - [ ] **JAK-132** (P1) Feed FULL PropertySearch response to AI report writer; guarantee mortgage/foreclosure/lien flags surface — depends: JAK-130, JAK-131
 - [ ] **JAK-133** (P0) HOTFIX: restore edited-in-place applied migration (unbreak staging deploy) + adopt real-timestamp migration tooling — depends: JAK-132
-- [ ] **JAK-147** (P0) Sync text customer to Jake GHL sub-account + set 'text Jake' approval field — depends: JAK-146, JAK-104, JAK-102, JAK-110
 
 ## Open (4)
 - [ ] **JAK-103** (P0) Token refresh service — depends: JAK-102
@@ -38,7 +37,7 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-153** (P3) [LATER] Privacy Policy + Terms pages for Jake
 - [ ] **JAK-154** (P3) [LATER] CRM upsell bundle (GHL SaaS resale + AskZoe concierge)
 
-## Done (26)
+## Done (28)
 - [x] **JAK-100** (P0) Project ticket store (SQLite in-repo)
 - [x] **JAK-101** (P0) GHL app scaffolding + Doppler config + env helper — depends: JAK-100
 - [x] **JAK-102** (P0) Encrypted connection/credential store — depends: JAK-101
@@ -65,3 +64,5 @@ Epic: `ghl-enrichment`
 - [x] **JAK-144** (P0) Fix skip-trace + comps no-data bug + remove confirm-before-spend — depends: JAK-136, JAK-137, JAK-138
 - [x] **JAK-145** (P0) Skip-trace the property OWNER + group results by person (+ per-person cache key) — depends: JAK-136, JAK-144
 - [x] **JAK-146** (P0) Text-customer profile fields (name/email) + mobile-first text-customers admin page — depends: JAK-129, JAK-115
+- [x] **JAK-147** (P0) Sync text customer to Jake GHL sub-account + set 'text Jake' approval field — depends: JAK-146, JAK-104, JAK-102, JAK-110
+- [x] **JAK-148** (P0) Two-level hold for text customers (soft on-hold + hard deactivate) with GHL 'text Jake' field flip — depends: JAK-147, JAK-146, JAK-110
