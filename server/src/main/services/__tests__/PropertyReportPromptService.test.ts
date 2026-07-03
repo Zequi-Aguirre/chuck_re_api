@@ -48,15 +48,22 @@ describe("PropertyReportPromptService", () => {
     expect(DEFAULT).toContain("No liens or foreclosure on record");
   });
 
-  describe("JAK-132 reseed migration (20260702000005)", () => {
+  describe("JAK-132 reseed migration (real-timestamp forward migration)", () => {
     const fs = require("fs");
     const path = require("path");
 
+    // JAK-133: the reseed lives in a real-timestamp forward migration (never a
+    // hand-numbered filename, never an edit to the already-applied 000004 seed).
+    // Resolve it by its stable suffix so a future re-timestamp doesn't break this.
+    const migrationsDir = path.join(__dirname, "../../../../../postgres/migrations");
+    const reseedFile = fs
+      .readdirSync(migrationsDir)
+      .find((f: string) => f.endsWith(".do._update_property_report_prompt_jak132.sql"));
+    if (!reseedFile) {
+      throw new Error("JAK-132 reseed migration not found in postgres/migrations");
+    }
     const reseedSql: string = fs.readFileSync(
-      path.join(
-        __dirname,
-        "../../../../../postgres/migrations/20260702000005.do._update_property_report_prompt_jak132.sql"
-      ),
+      path.join(migrationsDir, reseedFile),
       "utf8"
     );
 

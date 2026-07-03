@@ -15,9 +15,10 @@
     "test": "jest",
     "start": "doppler run -p jake -c dev -- node dist/server.js",
     "local-built-ngrok": "pkill -f ngrok || true && ngrok http 8080 --url https://askzack-local.ngrok.app",
-    "db-migrate": "cd postgres && ./migrate.sh",
+    "db-migrate": "node postgres/checkMigrationFilenames.js && cd postgres && ./migrate.sh",
     "dev-db-migrate": "doppler run -p jake -c dev --command 'cd postgres && ./migrate.sh'",
-    "create-migration": "node postgres/createMigration.js"
+    "create-migration": "node postgres/createMigration.js",
+    "check:migration-filenames": "node postgres/checkMigrationFilenames.js"
   },
   "keywords": [],
   "author": "",
