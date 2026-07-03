@@ -1,7 +1,9 @@
-// JAK-137 — Comps specialist types: the comp PARAMETERS model (defaults, texter
-// overrides, clamping), the clean verified shape the writer consumes, the pure
-// assembler that turns a raw /v3/PropertyComps response into it, and the
-// cache/pending persistence rows.
+// JAK-137 / JAK-144 — Comps specialist types: the comp PARAMETERS model (defaults,
+// texter overrides, clamping), the clean verified shape the writer consumes, the
+// pure assembler that turns the (normalized) comps response into it, and the
+// cache/pending persistence rows. (JAK-144: comps are pulled via PropertyDetail
+// with comps:true and normalized by the DAO — the standalone PropertyComps
+// endpoints are not authorized for this key.)
 
 import {
   RealEstateApiAddress,
@@ -183,8 +185,19 @@ export function hasComps(data: CompsData): boolean {
 const text = (v: unknown): string | null =>
   typeof v === "string" && v.trim() ? v.trim() : null;
 
-const num = (v: unknown): number | null =>
-  typeof v === "number" && Number.isFinite(v) ? v : null;
+// JAK-144: the provider ships comp numerics inconsistently — some as numbers
+// (bathrooms), many as strings ("250000", "4", "2083"). Coerce a finite numeric
+// string too, so prices/beds/baths/sqft aren't silently dropped from the reply and
+// the tolerance filters actually compare. Non-numeric / blank stays null (never
+// fabricated).
+const num = (v: unknown): number | null => {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const t = v.trim();
+    if (t && Number.isFinite(Number(t))) return Number(t);
+  }
+  return null;
+};
 
 /** Normalize an ISO (YYYY-MM-DD…) sale date to MM/DD/YYYY; pass others through. */
 function formatSaleDate(raw: string): string {
@@ -236,7 +249,12 @@ function toCompSale(comp: RealEstateApiCompRecord): CompSaleData {
   const out: CompSaleData = {};
   const address = addressDisplay(comp.address);
   if (address) out.address = address;
-  const price = num(comp.lastSaleAmount) ?? num(comp.mlsSoldPrice);
+  // JAK-144: the provider ships lastSaleAmount as "0" for some records (no usable
+  // sale price). Prefer the first POSITIVE of lastSaleAmount / mlsSoldPrice so the
+  // reply never renders a "$0" comp; omit the price when neither is positive.
+  const price = [num(comp.lastSaleAmount), num(comp.mlsSoldPrice)].find(
+    (p): p is number => p != null && p > 0
+  );
   if (price != null) out.salePrice = price;
   const beds = num(comp.bedrooms);
   if (beds != null) out.beds = beds;
@@ -252,8 +270,8 @@ function toCompSale(comp: RealEstateApiCompRecord): CompSaleData {
 }
 
 /**
- * Assemble the clean, verified {@link CompsData} from a raw /v3/PropertyComps
- * response (JAK-137). Pure + null-safe: it reads comps from `comps` or `data`,
+ * Assemble the clean, verified {@link CompsData} from the normalized comps
+ * response (JAK-137 / JAK-144). Pure + null-safe: it reads comps from `comps` or `data`,
  * filters them to the bed/bath/sqft tolerance against the returned subject (skipping
  * any dimension either side is missing), caps at `params.count`, and derives the
  * average sale price + AVM range ONLY from values the provider returned. Never

@@ -211,7 +211,11 @@ export type RealEstateApiSkipTracePhone = {
     [key: string]: unknown;
 };
 
-/** One email on a /v2/SkipTrace result (JAK-136). */
+/**
+ * One email on a /v2/SkipTrace result (JAK-136). The live provider ships emails as
+ * plain strings inside a person record; older/other account shapes wrap them in an
+ * object. Both are tolerated, so a plain string OR `{ email }` / `{ address }` maps.
+ */
 export type RealEstateApiSkipTraceEmail = {
     email?: string | null;
     address?: string | null;
@@ -219,14 +223,42 @@ export type RealEstateApiSkipTraceEmail = {
 };
 
 /**
- * A /v2/SkipTrace result record (JAK-136) — the owner/contact lookup for an
- * address (or a named person). Field locations vary by provider account, so
- * everything is optional and an index signature keeps the mapping
- * forward-compatible; the specialist reads phones/emails/name/mailing defensively
- * and NEVER fabricates a value that isn't present.
+ * One matched PERSON on a /v2/SkipTrace response (JAK-144). The live provider
+ * returns matches as a top-level `persons[]` array — each entry carries the
+ * person's name, a structured current `address`, a `phones[]` array (each an
+ * object with a `phone` string), and an `emails[]` array of plain strings. Field
+ * locations vary by account, so everything is optional and an index signature keeps
+ * the mapping forward-compatible; the specialist reads defensively and NEVER
+ * fabricates a value that isn't present.
+ */
+export type RealEstateApiSkipTracePerson = {
+    personId?: string | number | null;
+    firstName?: string | null;
+    lastName?: string | null;
+    middleName?: string | null;
+    fullName?: string | null;
+    name?: string | null;
+    age?: string | number | null;
+    address?: (RealEstateApiMailingAddress & { streetAddress?: string | null }) | null;
+    phones?: RealEstateApiSkipTracePhone[] | null;
+    /** Live shape: plain strings. Tolerate `{ email }` / `{ address }` objects too. */
+    emails?: Array<string | RealEstateApiSkipTraceEmail> | null;
+    [key: string]: unknown;
+};
+
+/**
+ * A /v2/SkipTrace RESPONSE record (JAK-136 / JAK-144) — the owner/contact lookup
+ * for an address (or a named person). The LIVE provider returns matches under a
+ * top-level `persons[]` array with a `match` flag; older/other account shapes nest
+ * a single identity under `output.identity` or flatten phones/emails onto the
+ * record. All are tolerated: everything is optional and an index signature keeps
+ * the mapping forward-compatible; the specialist reads persons/phones/emails/name/
+ * mailing defensively and NEVER fabricates a value that isn't present.
  */
 export type RealEstateApiSkipTraceResult = {
     match?: boolean | null;
+    /** Live shape: the matched people (most-relevant first). */
+    persons?: RealEstateApiSkipTracePerson[] | null;
     /** Some accounts surface a top-level owner name; others nest it under output.identity. */
     name?: string | null;
     output?: {
@@ -235,19 +267,25 @@ export type RealEstateApiSkipTraceResult = {
             names?: Array<{ fullName?: string | null; firstName?: string | null; lastName?: string | null } | string> | null;
             address?: RealEstateApiMailingAddress | null;
             phones?: RealEstateApiSkipTracePhone[] | null;
-            emails?: RealEstateApiSkipTraceEmail[] | null;
+            emails?: Array<string | RealEstateApiSkipTraceEmail> | null;
         } | null;
         demographics?: Record<string, unknown> | null;
         [key: string]: unknown;
     } | null;
     /** Some accounts flatten phones/emails onto the record itself. */
     phones?: RealEstateApiSkipTracePhone[] | null;
-    emails?: RealEstateApiSkipTraceEmail[] | null;
+    emails?: Array<string | RealEstateApiSkipTraceEmail> | null;
     mailAddress?: RealEstateApiMailingAddress | null;
     [key: string]: unknown;
 };
 
-export type RealEstateApiSkipTraceResponse = {
+/**
+ * The raw HTTP body of a /v2/SkipTrace call. The live provider returns the matches
+ * at the TOP LEVEL (`persons[]` + `match`), NOT wrapped under `data` — so the DAO
+ * returns the whole body as the {@link RealEstateApiSkipTraceResult}. `data` is kept
+ * optional for any legacy account shape that wrapped a single result.
+ */
+export type RealEstateApiSkipTraceResponse = RealEstateApiSkipTraceResult & {
     data?: RealEstateApiSkipTraceResult | null;
 };
 
@@ -319,6 +357,32 @@ export type RealEstateApiPropertyCompsResponse = {
     reapiAvmLow?: number | null;
     reapiAvmHigh?: number | null;
     recordCount?: number | null;
+    [key: string]: unknown;
+};
+
+/**
+ * The PropertyDetail body when called with `comps: true` (JAK-144). Our API key is
+ * only scoped to pull comparables THIS way — the standalone /v2|/v3 PropertyComps
+ * endpoints return 401 AUTH_SCOPE_UNAUTHORIZED for this account. The provider
+ * returns the SUBJECT property (its usual PropertyDetail fields, plus a top-level
+ * AVM `estimatedValue` and lat/long) with the comparables nested under `comps`. The
+ * DAO reshapes this into a {@link RealEstateApiPropertyCompsResponse} for the
+ * specialist. Everything is optional and the numeric fields ship as string OR
+ * number depending on the field, so the mapper coerces defensively.
+ */
+export type RealEstateApiPropertyDetailComps = RealEstateApiPropertyDetail & {
+    comps?: RealEstateApiCompRecord[] | null;
+    estimatedValue?: number | string | null;
+    estimatedEquity?: number | string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    bedrooms?: number | string | null;
+    bathrooms?: number | string | null;
+    squareFeet?: number | string | null;
+};
+
+export type RealEstateApiPropertyDetailCompsResponse = {
+    data?: RealEstateApiPropertyDetailComps | null;
     [key: string]: unknown;
 };
 

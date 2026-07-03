@@ -41,16 +41,16 @@ export const JAKE_INTENTS: readonly JakeIntent[] = [
 ] as const;
 
 /**
- * One specialist the plan asks to run, with its confirm-before-spend metadata.
- * `needsConfirmation` + `estimatedCredits` mirror JAK-134's shipped pattern:
- * anything that will spend credits tells the user the cost and waits for an
- * OK/YES first. Report-on-an-address keeps its base-credit behavior
- * (needsConfirmation = false), while skip-trace / comps require confirmation.
+ * One specialist the plan asks to run, with its credit metadata. `estimatedCredits`
+ * is the expected cost surfaced to the planner. JAK-144: skip-trace and comps now
+ * run immediately on ask and charge on success (no "reply OK" gate), so ALL current
+ * specialists ship with `needsConfirmation = false`. The flag remains on the
+ * interface for any future specialist that genuinely needs a confirm gate.
  */
 export interface SpecialistPlan {
   /** Registry key: "report" | "skip_trace" | "comps". */
   name: string;
-  /** True when running this specialist will spend credits and must be confirmed. */
+  /** True when running this specialist must be confirmed before it spends (unused by current specialists — JAK-144). */
   needsConfirmation: boolean;
   /** Credits this specialist is expected to cost (informational until it runs). */
   estimatedCredits: number;

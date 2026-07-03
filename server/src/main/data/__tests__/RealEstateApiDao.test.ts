@@ -58,16 +58,16 @@ describe("RealEstateApiDao — paid-lookup dev safety (JAK-110)", () => {
 
     it("mocks a SkipTrace lookup with a deterministic no-match (no transport, no spend)", async () => {
       const dao = daoFor(false);
-      // JAK-136: dev NEVER hits the paid /v2/SkipTrace — returns no owner/PII.
-      expect(await dao.skipTraceByAddress(ADDRESS)).toBeNull();
+      // JAK-136/144: dev NEVER hits the paid /v2/SkipTrace — returns no owner/PII.
+      expect(await dao.skipTraceByAddress(ADDRESS)).toEqual({ persons: [], match: false });
       expect(post).not.toHaveBeenCalled();
     });
 
     it("mocks a PropertyComps lookup with a deterministic EMPTY result (no transport, no spend)", async () => {
       const dao = daoFor(false);
-      // JAK-137: dev NEVER hits the paid /v3/PropertyComps — returns no comps.
+      // JAK-137/144: dev NEVER hits the paid comps lookup — returns no comps.
       const result = await dao.getCompsByAddress(ADDRESS, { radiusMiles: 1, count: 5, monthsBack: 12 });
-      expect(result).toEqual({ comps: [] });
+      expect(result?.comps).toEqual([]);
       expect(post).not.toHaveBeenCalled();
     });
   });
@@ -97,9 +97,21 @@ describe("RealEstateApiDao — paid-lookup dev safety (JAK-110)", () => {
       expect(id).toBe(42);
     });
 
-    it("hits the real /v2/SkipTrace endpoint in prod with the parsed address parts", async () => {
+    it("hits the real /v2/SkipTrace endpoint in prod and parses the top-level persons[] (JAK-144)", async () => {
+      // JAK-144: the live provider returns matches at the TOP LEVEL under
+      // `persons[]` (NOT wrapped under `data`). Representative (fake) shape.
       post.mockResolvedValue({
-        data: { data: { match: true, output: { identity: { name: "Owner One" } } } },
+        data: {
+          match: true,
+          persons: [
+            {
+              fullName: "Owner One",
+              phones: [{ phone: "5615550100", phoneType: "W" }],
+              emails: ["owner.one@example.com"],
+              address: { streetAddress: "102 Southwind Dr", city: "Kathleen", state: "GA", zip: "31047" },
+            },
+          ],
+        },
       });
       const dao = daoFor(true);
 
@@ -114,26 +126,48 @@ describe("RealEstateApiDao — paid-lookup dev safety (JAK-110)", () => {
         state: "GA",
         zip: "31047",
       });
-      expect(result?.output?.identity?.name).toBe("Owner One");
+      // Parsed from the top-level persons[] (the old `data.data` read got nothing).
+      expect(result?.persons?.[0]?.fullName).toBe("Owner One");
+      expect(result?.persons?.[0]?.phones?.[0]?.phone).toBe("5615550100");
     });
 
-    it("hits the real /v3/PropertyComps endpoint in prod with the mapped parameters", async () => {
+    it("pulls comps via /v2/PropertyDetail(comps:true) and normalizes the response (JAK-144)", async () => {
+      // JAK-144: the standalone PropertyComps endpoints are 401 for this key; comps
+      // come from PropertyDetail with comps:true, nested under data.comps, with the
+      // subject's beds/baths/sqft under propertyInfo and the AVM as estimatedValue.
       post.mockResolvedValue({
-        data: { comps: [{ id: 1, lastSaleAmount: 400000 }], reapiAvm: 410000 },
+        data: {
+          data: {
+            mlsActive: true,
+            estimatedValue: 356000,
+            propertyInfo: { bedrooms: 4, bathrooms: 3, livingSquareFeet: 2253 },
+            comps: [
+              { id: "1", address: { address: "489 Freeman Rd Nw" }, lastSaleAmount: "250000", bedrooms: "4", squareFeet: "2083" },
+            ],
+          },
+        },
       });
       const dao = daoFor(true);
 
       const result = await dao.getCompsByAddress(ADDRESS, { radiusMiles: 2, count: 4, monthsBack: 6 });
 
       expect(post).toHaveBeenCalledTimes(1);
-      expect(post.mock.calls[0][0]).toBe("/v3/PropertyComps");
-      // radius → max_radius_miles, count → max_results, months → max_days_back (×30).
+      expect(post.mock.calls[0][0]).toBe("/v2/PropertyDetail");
+      // Address parts + comps:true (NOT the old max_radius_miles/max_results params).
       expect(post.mock.calls[0][1]).toMatchObject({
-        max_radius_miles: 2,
-        max_results: 4,
-        max_days_back: 180,
+        street: "Southwind Dr",
+        city: "Kathleen",
+        state: "GA",
+        zip: "31047",
+        comps: true,
       });
-      expect(result?.reapiAvm).toBe(410000);
+      // Normalized: comps lifted from data.comps, AVM from estimatedValue, subject
+      // beds/baths/sqft from propertyInfo.
+      expect(result?.comps?.length).toBe(1);
+      expect((result?.comps?.[0] as any)?.lastSaleAmount).toBe("250000");
+      expect(result?.reapiAvm).toBe(356000);
+      expect(result?.subject?.bedrooms).toBe(4);
+      expect(result?.subject?.squareFeet).toBe(2253);
     });
   });
 });

@@ -50,23 +50,27 @@ export class SpecialistRegistry {
       estimatedCredits: 1,
       available: true,
     });
-    // Skip-trace: BUILT (JAK-136). Runs the /v2/SkipTrace owner/contact lookup —
-    // a paid call that costs more than a report — so it is confirm-before-spend.
-    // `estimatedCredits` mirrors the SkipTraceSettingsService default (3); the
-    // assistant charges the live admin-configured cost at execution time.
+    // Skip-trace: BUILT (JAK-136). Runs the /v2/SkipTrace owner/contact lookup.
+    // JAK-144 removed the "reply OK" gate: it now runs immediately on ask and
+    // charges on success (still credit-gated + no charge on no-data), so
+    // needsConfirmation is false. `estimatedCredits` mirrors the
+    // SkipTraceSettingsService default (3); the assistant charges the live
+    // admin-configured cost at execution time.
     this.register({
       name: SpecialistRegistry.SKIP_TRACE,
-      needsConfirmation: true,
+      needsConfirmation: false,
       estimatedCredits: 3,
       available: true,
     });
-    // Comps (JAK-137): BUILT. Runs the /v3/PropertyComps comparables lookup — a paid
-    // call that costs more than a report — so it is confirm-before-spend.
-    // `estimatedCredits` mirrors the CompsSettingsService default (3); the assistant
-    // charges the live admin-configured cost at execution time.
+    // Comps (JAK-137): BUILT. Runs the comparables lookup (JAK-144: via
+    // PropertyDetail comps:true). Like skip-trace, JAK-144 removed the "reply OK"
+    // gate — it runs immediately on ask and charges on success — so
+    // needsConfirmation is false. `estimatedCredits` mirrors the
+    // CompsSettingsService default (3); the assistant charges the live
+    // admin-configured cost at execution time.
     this.register({
       name: SpecialistRegistry.COMPS,
-      needsConfirmation: true,
+      needsConfirmation: false,
       estimatedCredits: 3,
       available: true,
     });

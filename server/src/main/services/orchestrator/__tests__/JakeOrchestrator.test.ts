@@ -126,7 +126,7 @@ describe("JakeOrchestrator (JAK-135 router)", () => {
       });
 
       expect(plan.intent).toBe("skip_trace");
-      expect(plan.specialists).toEqual([{ name: "skip_trace", needsConfirmation: true, estimatedCredits: 3 }]);
+      expect(plan.specialists).toEqual([{ name: "skip_trace", needsConfirmation: false, estimatedCredits: 3 }]);
       // JAK-136 flipped this on: skip trace is now a real, runnable specialist.
       expect(registry.isAvailable("skip_trace")).toBe(true);
       // Unlike the coming-soon stub, skip trace now carries a resolved target.
@@ -163,7 +163,7 @@ describe("JakeOrchestrator (JAK-135 router)", () => {
       });
 
       expect(plan.intent).toBe("comps");
-      expect(plan.specialists).toEqual([{ name: "comps", needsConfirmation: true, estimatedCredits: 3 }]);
+      expect(plan.specialists).toEqual([{ name: "comps", needsConfirmation: false, estimatedCredits: 3 }]);
       // JAK-137 flipped this on: comps is now a real, runnable specialist.
       expect(registry.isAvailable("comps")).toBe(true);
       // Unlike the old coming-soon stub, comps now carries a resolved target.
