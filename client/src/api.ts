@@ -8,6 +8,8 @@ import {
   CompsCostView,
   CompsParamsView,
   CompsPromptView,
+  LlmModelSettingView,
+  LlmProvider,
   LocationStatusSummary,
   OrchestratorPromptView,
   ReportPromptView,
@@ -229,6 +231,61 @@ export const api = {
   },
   async resetCompsParams(): Promise<CompsParamsView> {
     return request<CompsParamsView>("/comps-params/reset", { method: "POST" });
+  },
+
+  // --- Per-prompt provider + model picker (JAK-143) ---
+  // Each surface exposes GET/PUT/reset over its own provider+model selection. PUT
+  // sends only a provider + optional model — NEVER an api key (keys stay Doppler).
+  async getReportModel(): Promise<LlmModelSettingView> {
+    return request<LlmModelSettingView>("/report-model");
+  },
+  async updateReportModel(provider: LlmProvider, model: string): Promise<LlmModelSettingView> {
+    return request<LlmModelSettingView>("/report-model", {
+      method: "PUT",
+      body: JSON.stringify({ provider, model }),
+    });
+  },
+  async resetReportModel(): Promise<LlmModelSettingView> {
+    return request<LlmModelSettingView>("/report-model/reset", { method: "POST" });
+  },
+
+  async getOrchestratorModel(): Promise<LlmModelSettingView> {
+    return request<LlmModelSettingView>("/orchestrator-model");
+  },
+  async updateOrchestratorModel(provider: LlmProvider, model: string): Promise<LlmModelSettingView> {
+    return request<LlmModelSettingView>("/orchestrator-model", {
+      method: "PUT",
+      body: JSON.stringify({ provider, model }),
+    });
+  },
+  async resetOrchestratorModel(): Promise<LlmModelSettingView> {
+    return request<LlmModelSettingView>("/orchestrator-model/reset", { method: "POST" });
+  },
+
+  async getSkipTraceModel(): Promise<LlmModelSettingView> {
+    return request<LlmModelSettingView>("/skiptrace-model");
+  },
+  async updateSkipTraceModel(provider: LlmProvider, model: string): Promise<LlmModelSettingView> {
+    return request<LlmModelSettingView>("/skiptrace-model", {
+      method: "PUT",
+      body: JSON.stringify({ provider, model }),
+    });
+  },
+  async resetSkipTraceModel(): Promise<LlmModelSettingView> {
+    return request<LlmModelSettingView>("/skiptrace-model/reset", { method: "POST" });
+  },
+
+  async getCompsModel(): Promise<LlmModelSettingView> {
+    return request<LlmModelSettingView>("/comps-model");
+  },
+  async updateCompsModel(provider: LlmProvider, model: string): Promise<LlmModelSettingView> {
+    return request<LlmModelSettingView>("/comps-model", {
+      method: "PUT",
+      body: JSON.stringify({ provider, model }),
+    });
+  },
+  async resetCompsModel(): Promise<LlmModelSettingView> {
+    return request<LlmModelSettingView>("/comps-model/reset", { method: "POST" });
   },
 
   // --- admins (JAK-124) ---

@@ -17,6 +17,11 @@ import { LlmClient, LlmStructuredRequest, LlmTextRequest } from "./LlmClient.ts"
  * intentionally NOT forwarded here. The API key is an app-level Doppler secret
  * ({@link EnvConfig.anthropicApiKey}) — NEVER hardcoded, never logged; the model
  * is config-driven ({@link EnvConfig.anthropicModel}, default claude-opus-4-8).
+ *
+ * JAK-143: an optional per-call model override lets a prompt surface pin its own
+ * Claude model (e.g. claude-sonnet-4-6); when unset it uses
+ * {@link EnvConfig.anthropicModel} (the Doppler ANTHROPIC_MODEL default). The key
+ * is unaffected — it stays the same Doppler secret regardless of the model.
  */
 export class AnthropicLlmClient implements LlmClient {
   private static readonly TIMEOUT_MS = 8_000;
@@ -26,7 +31,15 @@ export class AnthropicLlmClient implements LlmClient {
   /** Lazily-built Anthropic client (cached). */
   private anthropic?: Anthropic;
 
-  constructor(private readonly env: EnvConfig) {}
+  constructor(
+    private readonly env: EnvConfig,
+    private readonly modelOverride?: string
+  ) {}
+
+  /** The effective model — the per-surface override (JAK-143) or the Doppler default. */
+  get model(): string {
+    return this.modelOverride?.trim() || this.env.anthropicModel;
+  }
 
   get isAvailable(): boolean {
     return Boolean(this.env.anthropicApiKey);
@@ -35,7 +48,7 @@ export class AnthropicLlmClient implements LlmClient {
   async generateText(req: LlmTextRequest): Promise<string> {
     const response = await this.client().messages.create(
       {
-        model: this.env.anthropicModel,
+        model: this.model,
         max_tokens: req.maxTokens,
         thinking: { type: "adaptive" },
         system: req.system,
@@ -49,7 +62,7 @@ export class AnthropicLlmClient implements LlmClient {
   async generateStructured(req: LlmStructuredRequest): Promise<string> {
     const response = await this.client().messages.create(
       {
-        model: this.env.anthropicModel,
+        model: this.model,
         max_tokens: req.maxTokens,
         thinking: { type: "adaptive" },
         system: req.system,

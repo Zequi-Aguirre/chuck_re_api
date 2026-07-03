@@ -1,17 +1,24 @@
 import { LlmRouterClient, RouterClassifyRequest } from "../RouterLlmClient";
 import { LlmClient, LlmStructuredRequest } from "../../llm/LlmClient";
+import { LlmClientResolver } from "../../llm/LlmClientResolver";
+import { LlmModelSettingsService } from "../../llm/LlmModelSettingsService";
+import { LlmSelection, LlmSelectionOverride } from "../../llm/LlmSelection";
 
 /**
- * The router's LLM seam (JAK-135), now provider-agnostic (JAK-141). It classifies
- * through the shared {@link LlmClient} structured-output seam — OpenAI or Anthropic,
- * whichever LLM_PROVIDER selects — but two things must hold WITHOUT the network:
+ * The router's LLM seam (JAK-135), provider-agnostic (JAK-141) with a per-surface
+ * model selection (JAK-143). It classifies through the shared {@link LlmClient}
+ * structured-output seam — OpenAI or Anthropic, whichever the orchestrator surface's
+ * setting selects (falling back to the global default) — but these must hold WITHOUT
+ * the network:
  *   - no key for the selected provider (isAvailable=false): it falls back to a
  *     deterministic classification and NEVER touches the LLM seam (no call, no
  *     spend) — address→report, OK→refresh, else chitchat;
- *   - when the model DOES answer, its structured JSON is parsed + validated.
- * A fake LlmClient stands in for the seam so we exercise both paths offline.
+ *   - when the model DOES answer, its structured JSON is parsed + validated;
+ *   - it resolves the ORCHESTRATOR surface's provider+model and hands exactly that
+ *     selection to the client resolver (JAK-143).
+ * A fake LlmClient + a stub resolver/settings stand in so we exercise every path offline.
  */
-describe("LlmRouterClient (JAK-135 router LLM, JAK-141 provider-agnostic)", () => {
+describe("LlmRouterClient (JAK-135 router LLM, JAK-141 provider-agnostic, JAK-143 per-surface model)", () => {
   const req = (over: Partial<RouterClassifyRequest> = {}): RouterClassifyRequest => ({
     systemPrompt: "STYLE",
     message: "hi",
@@ -25,6 +32,7 @@ describe("LlmRouterClient (JAK-135 router LLM, JAK-141 provider-agnostic)", () =
   /** A fake LlmClient with no network — controls availability + the structured reply. */
   class FakeLlm implements LlmClient {
     readonly provider = "fake";
+    readonly model = "fake-model";
     lastRequest?: LlmStructuredRequest;
     constructor(
       readonly isAvailable: boolean,
@@ -39,6 +47,29 @@ describe("LlmRouterClient (JAK-135 router LLM, JAK-141 provider-agnostic)", () =
     }
   }
 
+  /** A stub resolver that always returns `llm` and records the selection it was asked for. */
+  const resolverFor = (llm: LlmClient): LlmClientResolver & { lastOverride?: LlmSelectionOverride | null } => {
+    const stub = {
+      lastOverride: undefined as LlmSelectionOverride | null | undefined,
+      resolve(override?: LlmSelectionOverride | null) {
+        stub.lastOverride = override ?? null;
+        return llm;
+      },
+      effectiveSelection: () => ({ provider: "openai", model: "gpt-4o" }) as LlmSelection,
+    };
+    return stub as unknown as LlmClientResolver & { lastOverride?: LlmSelectionOverride | null };
+  };
+
+  /** A stub settings service returning a fixed effective selection for the surface. */
+  const settingsReturning = (
+    selection: LlmSelection = { provider: "openai", model: "gpt-4o" }
+  ): LlmModelSettingsService =>
+    ({ getEffectiveSelection: jest.fn().mockResolvedValue(selection) } as unknown as LlmModelSettingsService);
+
+  /** Build a real router over the fake seam + stub resolver/settings. */
+  const makeRouter = (llm: FakeLlm, selection?: LlmSelection) =>
+    new LlmRouterClient(resolverFor(llm), settingsReturning(selection));
+
   describe("deterministic fallback (no key → no network, no spend)", () => {
     // isAvailable=false + a seam that EXPLODES if called — proves the fallback
     // never reaches the LLM when the selected provider has no key.
@@ -46,7 +77,7 @@ describe("LlmRouterClient (JAK-135 router LLM, JAK-141 provider-agnostic)", () =
       const llm = new FakeLlm(false, () => {
         throw new Error("generateStructured must not be called when the key is unset");
       });
-      return { client: new LlmRouterClient(llm), llm };
+      return { client: makeRouter(llm), llm };
     };
 
     it("a parseable address → property_report on it", async () => {
@@ -75,7 +106,7 @@ describe("LlmRouterClient (JAK-135 router LLM, JAK-141 provider-agnostic)", () =
   });
 
   describe("structured-output parsing", () => {
-    const withReply = (raw: string) => new LlmRouterClient(new FakeLlm(true, raw));
+    const withReply = (raw: string) => makeRouter(new FakeLlm(true, raw));
 
     it("parses + validates a well-formed classification", async () => {
       const out = await withReply(
@@ -100,7 +131,7 @@ describe("LlmRouterClient (JAK-135 router LLM, JAK-141 provider-agnostic)", () =
         true,
         JSON.stringify({ intent: "chitchat", targetAddress: null, addressOrdinal: null, userFacingNote: "" })
       );
-      await new LlmRouterClient(llm).classify(req({ systemPrompt: "BE TERSE", message: "yo" }));
+      await makeRouter(llm).classify(req({ systemPrompt: "BE TERSE", message: "yo" }));
 
       expect(llm.lastRequest).toBeDefined();
       expect(llm.lastRequest!.system).toContain("BE TERSE");
@@ -177,13 +208,45 @@ describe("LlmRouterClient (JAK-135 router LLM, JAK-141 provider-agnostic)", () =
       const llm = new FakeLlm(true, () => {
         throw new Error("provider 500");
       });
-      const out = await new LlmRouterClient(llm).classify(req({ isAffirmative: true }));
+      const out = await makeRouter(llm).classify(req({ isAffirmative: true }));
       expect(out.intent).toBe("report_refresh");
     });
   });
 
+  describe("per-surface model selection (JAK-143)", () => {
+    it("resolves the ORCHESTRATOR surface's selection and hands exactly it to the resolver", async () => {
+      const llm = new FakeLlm(
+        true,
+        JSON.stringify({ intent: "chitchat", targetAddress: null, addressOrdinal: null, userFacingNote: "" })
+      );
+      const resolver = resolverFor(llm);
+      const selection: LlmSelection = { provider: "anthropic", model: "claude-sonnet-4-6" };
+      const settings = settingsReturning(selection);
+      const client = new LlmRouterClient(resolver, settings);
+
+      await client.classify(req());
+
+      expect(settings.getEffectiveSelection).toHaveBeenCalledWith("orchestrator");
+      // The resolver is asked for EXACTLY the surface's selection — so the router
+      // classifies through the admin-chosen provider+model.
+      expect(resolver.lastOverride).toEqual(selection);
+    });
+
+    it("still routes deterministically (no resolve of a live client is used) when the key is unset", async () => {
+      const llm = new FakeLlm(false, () => {
+        throw new Error("must not call the seam without a key");
+      });
+      const settings = settingsReturning({ provider: "anthropic", model: "claude-opus-4-8" });
+      const out = await new LlmRouterClient(resolverFor(llm), settings).classify(
+        req({ parsedAddress: "1 Main St, Town, CA 90000" })
+      );
+      expect(out.intent).toBe("property_report");
+      expect(settings.getEffectiveSelection).toHaveBeenCalledWith("orchestrator");
+    });
+  });
+
   it("composes the system prompt with the admin style AND the always-on hard rules", () => {
-    const composed = new LlmRouterClient(new FakeLlm(true, "{}")).composeSystemPrompt("BE TERSE");
+    const composed = makeRouter(new FakeLlm(true, "{}")).composeSystemPrompt("BE TERSE");
     expect(composed).toContain("BE TERSE");
     expect(composed).toContain("HARD RULES");
     expect(composed).toContain("property_report");

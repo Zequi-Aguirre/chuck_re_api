@@ -1,5 +1,7 @@
-import { inject, injectable } from "tsyringe";
-import { LlmClient, LLM_CLIENT } from "../llm/LlmClient";
+import { injectable } from "tsyringe";
+import { LlmClient } from "../llm/LlmClient";
+import { LlmClientResolver } from "../llm/LlmClientResolver";
+import { LlmModelSettingsService } from "../llm/LlmModelSettingsService";
 import { CompSaleData, CompsData } from "./CompsTypes";
 import { CompsPromptService } from "./CompsPromptService";
 
@@ -15,12 +17,17 @@ import { CompsPromptService } from "./CompsPromptService";
  * invent a comp, address, or price), state the parameters used, and end with the
  * GoTextJake.com footer.
  *
+ * JAK-143: the provider+model this writer runs on is the comps surface's own
+ * admin-configurable selection ({@link LlmModelSettingsService}), resolved per call
+ * against the JAK-141 global Doppler default and turned into a concrete client by
+ * {@link LlmClientResolver}. Keys still live in Doppler — only the model is chosen.
+ *
  * RELIABILITY mirrors the report/skip-trace writers: Jake must ALWAYS reply, so if
  * the LLM errors/times out (~8s) — or the selected provider has no key — we fall
  * back to a deterministic, emoji-free reply built from the SAME data. Even on the
  * LLM path we strip stray emoji and force the exact footer, so the guardrails hold
  * on the OUTPUT too. The provider key is an app-level Doppler secret held inside
- * the injected {@link LlmClient} — NEVER hardcoded — and is never logged.
+ * the resolved {@link LlmClient} — NEVER hardcoded — and is never logged.
  */
 @injectable()
 export class CompsReportWriter {
@@ -50,7 +57,8 @@ export class CompsReportWriter {
   ].join("\n");
 
   constructor(
-    @inject(LLM_CLIENT) private readonly llm: LlmClient,
+    private readonly llmResolver: LlmClientResolver,
+    private readonly modelSettings: LlmModelSettingsService,
     private readonly promptService: CompsPromptService
   ) {}
 
@@ -61,12 +69,16 @@ export class CompsReportWriter {
    * GoTextJake.com footer.
    */
   async write(data: CompsData): Promise<string> {
+    // JAK-143: resolve the comps surface's own provider+model (falls back to the
+    // global Doppler default when unset) into a concrete client.
+    const selection = await this.modelSettings.getEffectiveSelection("comps");
+    const llm = this.llmResolver.resolve(selection);
     // No key for the selected provider → straight to the deterministic fallback
     // (no network, no spend).
-    if (this.llm.isAvailable) {
+    if (llm.isAvailable) {
       try {
         const style = await this.promptService.getEffectivePrompt();
-        const raw = await this.generateWithLlm(data, style);
+        const raw = await this.generateWithLlm(llm, data, style);
         const clean = this.stripEmojis(raw).trim();
         if (clean) return this.enforceFooter(clean);
         console.warn("⚠️ CompsReportWriter: empty LLM output — using deterministic fallback.");
@@ -80,10 +92,10 @@ export class CompsReportWriter {
     return this.renderFallback(data);
   }
 
-  /** Generate via the LLM layer with the verified data. Throws on error/timeout (caught by {@link write}). */
-  protected async generateWithLlm(data: CompsData, style: string): Promise<string> {
+  /** Generate via the resolved LLM client with the verified data. Throws on error/timeout (caught by {@link write}). */
+  protected async generateWithLlm(llm: LlmClient, data: CompsData, style: string): Promise<string> {
     const [system, user] = this.buildMessages(data, style);
-    return this.llm.generateText({
+    return llm.generateText({
       system: system.content,
       user: user.content,
       maxTokens: CompsReportWriter.MAX_TOKENS,

@@ -1,5 +1,7 @@
-import { inject, injectable } from "tsyringe";
-import { LlmClient, LLM_CLIENT } from "../llm/LlmClient.ts";
+import { injectable } from "tsyringe";
+import { LlmClient } from "../llm/LlmClient.ts";
+import { LlmClientResolver } from "../llm/LlmClientResolver.ts";
+import { LlmModelSettingsService } from "../llm/LlmModelSettingsService.ts";
 import { RealEstateApiSkipTraceResult } from "../../types/RealEstateApi.ts";
 import { SkipTraceData } from "./SkipTraceTypes.ts";
 import { SkipTracePromptService } from "./SkipTracePromptService.ts";
@@ -21,7 +23,12 @@ import { SkipTracePromptService } from "./SkipTracePromptService.ts";
  * deterministic, emoji-free reply built from the SAME data. Even on the LLM path
  * we strip stray emoji and force the exact footer, so the guardrails hold on the
  * OUTPUT too. The provider key is an app-level Doppler secret held inside the
- * injected {@link LlmClient} — NEVER hardcoded — and is never logged.
+ * resolved {@link LlmClient} — NEVER hardcoded — and is never logged.
+ *
+ * JAK-143: the provider+model this writer runs on is the skip-trace surface's own
+ * admin-configurable selection ({@link LlmModelSettingsService}), resolved per call
+ * against the JAK-141 global Doppler default by {@link LlmClientResolver}. Keys
+ * still live in Doppler — only the model is chosen.
  */
 @injectable()
 export class SkipTraceReportWriter {
@@ -50,7 +57,8 @@ export class SkipTraceReportWriter {
   ].join("\n");
 
   constructor(
-    @inject(LLM_CLIENT) private readonly llm: LlmClient,
+    private readonly llmResolver: LlmClientResolver,
+    private readonly modelSettings: LlmModelSettingsService,
     private readonly promptService: SkipTracePromptService
   ) {}
 
@@ -64,12 +72,16 @@ export class SkipTraceReportWriter {
     data: SkipTraceData,
     fullRecord?: RealEstateApiSkipTraceResult | null
   ): Promise<string> {
+    // JAK-143: resolve the skip-trace surface's own provider+model (falls back to
+    // the global Doppler default when unset) into a concrete client.
+    const selection = await this.modelSettings.getEffectiveSelection("skiptrace");
+    const llm = this.llmResolver.resolve(selection);
     // No key for the selected provider → straight to the deterministic fallback
     // (no network, no spend).
-    if (this.llm.isAvailable) {
+    if (llm.isAvailable) {
       try {
         const style = await this.promptService.getEffectivePrompt();
-        const raw = await this.generateWithLlm(data, style, fullRecord);
+        const raw = await this.generateWithLlm(llm, data, style, fullRecord);
         const clean = this.stripEmojis(raw).trim();
         if (clean) return this.enforceFooter(clean);
         console.warn("⚠️ SkipTraceReportWriter: empty LLM output — using deterministic fallback.");
@@ -83,14 +95,15 @@ export class SkipTraceReportWriter {
     return this.renderFallback(data);
   }
 
-  /** Generate via the LLM layer with the verified data. Throws on error/timeout (caught by {@link write}). */
+  /** Generate via the resolved LLM client with the verified data. Throws on error/timeout (caught by {@link write}). */
   protected async generateWithLlm(
+    llm: LlmClient,
     data: SkipTraceData,
     style: string,
     fullRecord?: RealEstateApiSkipTraceResult | null
   ): Promise<string> {
     const [system, user] = this.buildMessages(data, style, fullRecord);
-    return this.llm.generateText({
+    return llm.generateText({
       system: system.content,
       user: user.content,
       maxTokens: SkipTraceReportWriter.MAX_TOKENS,

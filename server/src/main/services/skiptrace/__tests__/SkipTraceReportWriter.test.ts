@@ -1,6 +1,9 @@
 import { SkipTraceReportWriter } from "../SkipTraceReportWriter";
 import { SkipTracePromptService } from "../SkipTracePromptService";
 import { LlmClient } from "../../llm/LlmClient";
+import { LlmClientResolver } from "../../llm/LlmClientResolver";
+import { LlmModelSettingsService } from "../../llm/LlmModelSettingsService";
+import { LlmSelection, LlmSelectionOverride } from "../../llm/LlmSelection";
 import { SkipTraceData } from "../SkipTraceTypes";
 
 /**
@@ -24,6 +27,7 @@ const promptServiceReturning = (style: string): SkipTracePromptService =>
 /** A fake LlmClient (no network) — controls availability + the generated text. */
 class FakeLlm implements LlmClient {
   readonly provider = "fake";
+  readonly model = "fake-model";
   isAvailable = true;
   readonly generateText: jest.Mock = jest.fn();
   async generateStructured(): Promise<string> {
@@ -31,14 +35,35 @@ class FakeLlm implements LlmClient {
   }
 }
 
+/** A stub resolver that always returns `llm` and records the selection it was asked for. */
+const resolverFor = (llm: LlmClient): LlmClientResolver & { lastOverride?: LlmSelectionOverride | null } => {
+  const stub = {
+    lastOverride: undefined as LlmSelectionOverride | null | undefined,
+    resolve(override?: LlmSelectionOverride | null) {
+      stub.lastOverride = override ?? null;
+      return llm;
+    },
+    effectiveSelection: () => ({ provider: "openai", model: "gpt-4o" }) as LlmSelection,
+  };
+  return stub as unknown as LlmClientResolver & { lastOverride?: LlmSelectionOverride | null };
+};
+
+/** A stub settings service returning a fixed effective selection for the skip-trace surface. */
+const settingsReturning = (
+  selection: LlmSelection = { provider: "openai", model: "gpt-4o" }
+): LlmModelSettingsService =>
+  ({ getEffectiveSelection: jest.fn().mockResolvedValue(selection) } as unknown as LlmModelSettingsService);
+
 /** Build a REAL writer with a fake LLM seam; returns both so tests can drive/inspect the seam. */
 const makeWriter = (
   style: string,
-  opts: { available?: boolean } = {}
-): { writer: SkipTraceReportWriter; llm: FakeLlm } => {
+  opts: { available?: boolean; selection?: LlmSelection } = {}
+): { writer: SkipTraceReportWriter; llm: FakeLlm; resolver: ReturnType<typeof resolverFor>; settings: LlmModelSettingsService } => {
   const llm = new FakeLlm();
   if (opts.available === false) llm.isAvailable = false;
-  return { writer: new SkipTraceReportWriter(llm, promptServiceReturning(style)), llm };
+  const resolver = resolverFor(llm);
+  const settings = settingsReturning(opts.selection);
+  return { writer: new SkipTraceReportWriter(resolver, settings, promptServiceReturning(style)), llm, resolver, settings };
 };
 
 const FOOTER = SkipTraceReportWriter.FOOTER;
@@ -122,6 +147,19 @@ describe("SkipTraceReportWriter (JAK-136)", () => {
       expect(llm.generateText).not.toHaveBeenCalled();
       expect(out).toContain("Homer Simpson");
       expect(out.endsWith(FOOTER)).toBe(true);
+    });
+  });
+
+  describe("per-surface model selection (JAK-143)", () => {
+    it("resolves the SKIPTRACE surface's selection and hands exactly it to the resolver", async () => {
+      const selection: LlmSelection = { provider: "anthropic", model: "claude-sonnet-4-6" };
+      const { writer, llm, resolver, settings } = makeWriter(DEFAULT_STYLE, { selection });
+      llm.generateText.mockResolvedValue(`Owner: Homer Simpson\n\n${FOOTER}`);
+
+      await writer.write(data, { match: true });
+
+      expect(settings.getEffectiveSelection).toHaveBeenCalledWith("skiptrace");
+      expect(resolver.lastOverride).toEqual(selection);
     });
   });
 });

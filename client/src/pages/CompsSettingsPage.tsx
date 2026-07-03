@@ -13,6 +13,7 @@ import CircularProgress from "@mui/material/CircularProgress";
 import SaveIcon from "@mui/icons-material/Save";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import { api, ApiError } from "../api";
+import { ModelPickerSection } from "../components/ModelPickerSection";
 import { CompParams, CompsCostView, CompsParamsView, CompsPromptView } from "../types";
 
 /** The editable default comp parameters, with labels + input hints for the form. */
@@ -212,6 +213,14 @@ export function CompsSettingsPage() {
           {error}
         </Alert>
       )}
+
+      <ModelPickerSection
+        load={api.getCompsModel}
+        save={api.updateCompsModel}
+        reset={api.resetCompsModel}
+        onToast={setToast}
+        onError={setError}
+      />
 
       <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 }, mb: 3 }}>
         <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1.5 }}>

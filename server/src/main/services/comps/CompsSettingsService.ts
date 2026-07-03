@@ -40,8 +40,8 @@ export interface CompsParamsView {
  * economics + the default search without a redeploy, with code defaults as the
  * single source of truth for the fallbacks.
  *
- * A comps pull costs MORE than a report (it hits the paid /v3/PropertyComps
- * endpoint), so cost is its own knob — default 3 credits. The default parameters
+ * A comps pull costs MORE than a report (it hits the paid /v2/PropertyDetail
+ * endpoint with comps:true), so cost is its own knob — default 3 credits. The default parameters
  * (radius, count, timeframe, bed/bath/sqft tolerance) are what the specialist uses
  * when the texter doesn't specify their own; a texter's in-message overrides still
  * win, and every value is clamped to sane bounds regardless. Short-TTL caches keep

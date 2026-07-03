@@ -13,6 +13,7 @@ import CircularProgress from "@mui/material/CircularProgress";
 import SaveIcon from "@mui/icons-material/Save";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import { api, ApiError } from "../api";
+import { ModelPickerSection } from "../components/ModelPickerSection";
 import { OrchestratorPromptView } from "../types";
 
 /**
@@ -118,6 +119,14 @@ export function OrchestratorSettingsPage() {
           {error}
         </Alert>
       )}
+
+      <ModelPickerSection
+        load={api.getOrchestratorModel}
+        save={api.updateOrchestratorModel}
+        reset={api.resetOrchestratorModel}
+        onToast={setToast}
+        onError={setError}
+      />
 
       <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 } }}>
         <TextField

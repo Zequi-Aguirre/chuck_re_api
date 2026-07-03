@@ -59,6 +59,12 @@ export interface LlmStructuredRequest {
 export interface LlmClient {
   /** Which provider this client talks to ("openai" | "anthropic"). For logs + tests. */
   readonly provider: string;
+  /**
+   * The exact model this client generates with (JAK-143). Resolved from the
+   * per-surface selection or the global default; exposed for logs + tests so a
+   * caller can assert the chosen model is honored.
+   */
+  readonly model: string;
   /** True when a usable API key is configured for this provider (else callers fall back). */
   readonly isAvailable: boolean;
   /** Generate free-form text. Throws on error/timeout/missing key (caller catches → fallback). */

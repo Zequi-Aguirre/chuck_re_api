@@ -13,6 +13,7 @@ import { SkipTracePromptService } from "../../../services/skiptrace/SkipTracePro
 import { SkipTraceSettingsService } from "../../../services/skiptrace/SkipTraceSettingsService";
 import { CompsPromptService } from "../../../services/comps/CompsPromptService";
 import { CompsSettingsService } from "../../../services/comps/CompsSettingsService";
+import { LlmModelSettingsService } from "../../../services/llm/LlmModelSettingsService";
 
 // Obviously-fake, low-entropy placeholder used by the reset-password tests.
 // Held in a constant (not inlined next to a `password:` key) so a secret
@@ -42,6 +43,7 @@ describe("AdminResource", () => {
   let skipTraceSettings: MockProxy<SkipTraceSettingsService>;
   let compsPrompt: MockProxy<CompsPromptService>;
   let compsSettings: MockProxy<CompsSettingsService>;
+  let modelSettings: MockProxy<LlmModelSettingsService>;
   let app: Express;
 
   beforeEach(() => {
@@ -55,6 +57,7 @@ describe("AdminResource", () => {
     skipTraceSettings = mock<SkipTraceSettingsService>();
     compsPrompt = mock<CompsPromptService>();
     compsSettings = mock<CompsSettingsService>();
+    modelSettings = mock<LlmModelSettingsService>();
     // Default: authenticated AS A SUPERADMIN so the admin-management tests reach
     // their handlers. Individual tests override to a plain admin / no session.
     auth.verifyToken.mockReturnValue({ sub: "admin-id", email: "admin@example.com", role: "superadmin" });
@@ -73,7 +76,8 @@ describe("AdminResource", () => {
         skipTracePrompt,
         skipTraceSettings,
         compsPrompt,
-        compsSettings
+        compsSettings,
+        modelSettings
       ).router
     );
   });
@@ -717,6 +721,116 @@ describe("AdminResource", () => {
     role: "admin" as const,
     createdAt: new Date("2026-07-01T00:00:00Z"),
     ...over,
+  });
+
+  // --- Per-prompt provider + model picker (JAK-143) -------------------------
+
+  describe("provider + model picker (JAK-143)", () => {
+    const modelView = (over: Record<string, unknown> = {}) => ({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      isDefault: false,
+      effectiveProvider: "anthropic",
+      effectiveModel: "claude-sonnet-4-6",
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o",
+      providerKeyConfigured: { openai: true, anthropic: false },
+      updatedAt: new Date("2026-07-03T00:00:00Z"),
+      updatedBy: "admin-id",
+      ...over,
+    });
+
+    // The four surfaces and their route segments (JAK-143).
+    const surfaces: Array<[string, string]> = [
+      ["report-model", "property_report"],
+      ["orchestrator-model", "orchestrator"],
+      ["skiptrace-model", "skiptrace"],
+      ["comps-model", "comps"],
+    ];
+
+    it.each(surfaces)("%s GET/PUT/reset is behind the auth gate", async (path) => {
+      auth.verifyToken.mockReturnValue(null);
+      expect((await request(app).get(`/api/admin/${path}`)).status).toBe(401);
+      expect(
+        (await request(app).put(`/api/admin/${path}`).send({ provider: "openai" })).status
+      ).toBe(401);
+      expect((await request(app).post(`/api/admin/${path}/reset`)).status).toBe(401);
+      expect(modelSettings.getView).not.toHaveBeenCalled();
+      expect(modelSettings.setSelection).not.toHaveBeenCalled();
+      expect(modelSettings.reset).not.toHaveBeenCalled();
+    });
+
+    it.each(surfaces)("%s is available to a REGULAR admin (not superadmin-gated)", async (path) => {
+      asPlainAdmin();
+      modelSettings.getView.mockResolvedValue(modelView() as never);
+      modelSettings.setSelection.mockResolvedValue(modelView() as never);
+      modelSettings.reset.mockResolvedValue(modelView({ isDefault: true }) as never);
+      expect((await asAdmin(request(app).get(`/api/admin/${path}`))).status).toBe(200);
+      expect(
+        (await asAdmin(request(app).put(`/api/admin/${path}`).send({ provider: "openai" }))).status
+      ).toBe(200);
+      expect((await asAdmin(request(app).post(`/api/admin/${path}/reset`))).status).toBe(200);
+    });
+
+    it.each(surfaces)("%s GET returns the surface's model view", async (path, surface) => {
+      modelSettings.getView.mockResolvedValue(modelView() as never);
+      const res = await asAdmin(request(app).get(`/api/admin/${path}`));
+      expect(res.status).toBe(200);
+      expect(res.body.effectiveModel).toBe("claude-sonnet-4-6");
+      expect(modelSettings.getView).toHaveBeenCalledWith(surface);
+    });
+
+    it.each(surfaces)("%s PUT pins a provider + trimmed model for its surface, attributed to the admin", async (path, surface) => {
+      modelSettings.setSelection.mockResolvedValue(modelView() as never);
+      const res = await asAdmin(
+        request(app).put(`/api/admin/${path}`).send({ provider: "Anthropic", model: "  claude-sonnet-4-6  " })
+      );
+      expect(res.status).toBe(200);
+      // Provider lower-cased, model trimmed, attributed to the logged-in admin.
+      expect(modelSettings.setSelection).toHaveBeenCalledWith(
+        surface,
+        "anthropic",
+        "claude-sonnet-4-6",
+        "admin-id"
+      );
+    });
+
+    it("PUT with a blank model stores null (inherit the provider's default model)", async () => {
+      modelSettings.setSelection.mockResolvedValue(modelView() as never);
+      await asAdmin(request(app).put("/api/admin/comps-model").send({ provider: "openai", model: "   " }));
+      expect(modelSettings.setSelection).toHaveBeenCalledWith("comps", "openai", null, "admin-id");
+    });
+
+    it("PUT 400s an unknown provider — never persists it", async () => {
+      const res = await asAdmin(
+        request(app).put("/api/admin/comps-model").send({ provider: "banana", model: "x" })
+      );
+      expect(res.status).toBe(400);
+      expect(modelSettings.setSelection).not.toHaveBeenCalled();
+    });
+
+    it("PUT 400s a missing provider", async () => {
+      const res = await asAdmin(request(app).put("/api/admin/comps-model").send({ model: "gpt-4o" }));
+      expect(res.status).toBe(400);
+      expect(modelSettings.setSelection).not.toHaveBeenCalled();
+    });
+
+    it("reset reverts a surface to the global default", async () => {
+      modelSettings.reset.mockResolvedValue(modelView({ isDefault: true }) as never);
+      const res = await asAdmin(request(app).post("/api/admin/skiptrace-model/reset"));
+      expect(res.status).toBe(200);
+      expect(res.body.isDefault).toBe(true);
+      expect(modelSettings.reset).toHaveBeenCalledWith("skiptrace");
+    });
+
+    it("no response ever carries an API key (only provider names + model ids + key-configured booleans)", async () => {
+      modelSettings.getView.mockResolvedValue(modelView() as never);
+      const res = await asAdmin(request(app).get("/api/admin/orchestrator-model"));
+      const body = JSON.stringify(res.body);
+      expect(body).not.toMatch(/apiKey|api_key|sk-|OPENAI_API_KEY|ANTHROPIC_API_KEY/i);
+      // The key-configured hint is booleans only.
+      expect(res.body.providerKeyConfigured).toEqual({ openai: true, anthropic: false });
+    });
   });
 
   // --- Superadmin gate (JAK-125) --------------------------------------------
