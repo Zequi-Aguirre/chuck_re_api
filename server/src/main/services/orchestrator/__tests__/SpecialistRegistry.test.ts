@@ -17,19 +17,19 @@ describe("SpecialistRegistry (JAK-135)", () => {
     });
     expect(registry.isAvailable(SpecialistRegistry.REPORT)).toBe(true);
 
-    // JAK-136: skip trace is now BUILT + confirm-before-spend (costs more than a report).
+    // JAK-136 built skip trace; JAK-144 made it run immediately (needsConfirmation false).
     expect(registry.get(SpecialistRegistry.SKIP_TRACE)).toEqual({
       name: "skip_trace",
-      needsConfirmation: true,
+      needsConfirmation: false,
       estimatedCredits: 3,
       available: true,
     });
     expect(registry.isAvailable(SpecialistRegistry.SKIP_TRACE)).toBe(true);
 
-    // JAK-137: comps is now BUILT + confirm-before-spend (costs more than a report).
+    // JAK-137 built comps; JAK-144 made it run immediately (needsConfirmation false).
     expect(registry.get(SpecialistRegistry.COMPS)).toEqual({
       name: "comps",
-      needsConfirmation: true,
+      needsConfirmation: false,
       estimatedCredits: 3,
       available: true,
     });

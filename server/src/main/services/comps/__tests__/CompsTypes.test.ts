@@ -139,5 +139,38 @@ describe("CompsTypes (JAK-137)", () => {
       // Still carries the parameters for the reply.
       expect(empty.paramsSummary).toBe(formatCompParams(DEFAULT_COMP_PARAMS));
     });
+
+    it("JAK-144: coerces the provider's string numerics and omits a $0 sale price", () => {
+      // Real (representative) shape: the provider ships comp numerics as strings, and
+      // some records carry lastSaleAmount "0" (no usable sale price).
+      const realShaped = {
+        subject: { bedrooms: 4, bathrooms: 3, squareFeet: 2253 },
+        comps: [
+          { address: { street: "489 Freeman Rd Nw", city: "Palm Bay", state: "FL", zip: "32907" }, lastSaleAmount: "250000", bedrooms: "4", bathrooms: 2, squareFeet: "2083", lastSaleDate: "2026-06-10" },
+          { address: { street: "238 Peckham St Ne", city: "Palm Bay", state: "FL", zip: "32907" }, lastSaleAmount: "0", bedrooms: "4", squareFeet: "2141" },
+        ],
+        reapiAvm: 356000,
+      } as unknown as RealEstateApiPropertyCompsResponse;
+
+      const data = assembleCompsData(realShaped, "358 Fernandina St Nw, Palm Bay, FL 32907", DEFAULT_COMP_PARAMS);
+
+      expect(data.comps).toHaveLength(2);
+      // String numerics coerced to numbers; structured address rendered to a line.
+      expect(data.comps[0]).toEqual({
+        address: "489 Freeman Rd Nw, Palm Bay FL 32907",
+        salePrice: 250000,
+        beds: 4,
+        baths: 2,
+        squareFeet: 2083,
+        saleDate: "06/10/2026",
+      });
+      // The "0" sale price is omitted (never rendered as $0), but the comp is kept.
+      expect(data.comps[1].salePrice).toBeUndefined();
+      expect(data.comps[1].address).toBe("238 Peckham St Ne, Palm Bay FL 32907");
+      // Average derives only from the comp that had a real price.
+      expect(data.averageSalePrice).toBe(250000);
+      expect(data.estimatedValue).toBe(356000);
+      expect(hasComps(data)).toBe(true);
+    });
   });
 });

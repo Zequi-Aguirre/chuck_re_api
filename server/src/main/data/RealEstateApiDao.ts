@@ -7,8 +7,12 @@ import { ExternalActionGuard } from "../safety/ExternalActionGuard.ts";
 import { EnrichmentResult } from "../types/LeadEnrichment.ts";
 import {
   MailerEnrichmentResponse,
+  RealEstateApiCompRecord,
+  RealEstateApiCompsSubject,
   RealEstateApiPropertyCompsResponse,
   RealEstateApiPropertyDetail,
+  RealEstateApiPropertyDetailComps,
+  RealEstateApiPropertyDetailCompsResponse,
   RealEstateApiPropertyDetailResponse,
   RealEstateApiPropertySearchResponse,
   RealEstateApiPropertySearchResult,
@@ -52,14 +56,19 @@ export class RealEstateApiDao {
    * owner/phone/PII), so off-prod skip-trace flows resolve to "no contact found"
    * and no credit is spent — the SAME dev-safety boundary as the property lookups.
    */
-  private static readonly DEV_MOCK_SKIPTRACE: RealEstateApiSkipTraceResponse = { data: null };
+  private static readonly DEV_MOCK_SKIPTRACE: RealEstateApiSkipTraceResponse = {
+    persons: [],
+    match: false,
+  };
   /**
    * Comps dev mock (JAK-137): a deterministic EMPTY result (never fabricated
    * comparable sales), so off-prod comps flows resolve to "no comparable sales
    * found" and no credit is spent — the SAME dev-safety boundary as the property
    * and skip-trace lookups.
    */
-  private static readonly DEV_MOCK_COMPS: RealEstateApiPropertyCompsResponse = { comps: [] };
+  private static readonly DEV_MOCK_COMPS: RealEstateApiPropertyDetailCompsResponse = {
+    data: { mlsActive: false, comps: [] },
+  };
 
   constructor(
     private readonly env: EnvConfig,
@@ -168,12 +177,18 @@ export class RealEstateApiDao {
       if (first) body.first_name = first;
       if (last) body.last_name = last;
 
-      const data = await this.paidPost<RealEstateApiSkipTraceResponse>(
+      const resp = await this.paidPost<RealEstateApiSkipTraceResponse>(
         "/v2/SkipTrace",
         body,
         RealEstateApiDao.DEV_MOCK_SKIPTRACE
       );
-      return data.data ?? null;
+      // JAK-144: the live provider returns matches at the TOP LEVEL (`persons[]` +
+      // `match`), NOT wrapped under `data`. The previous `data.data` read always got
+      // undefined → the specialist reported "no contact info" for real owners. Return
+      // the top-level body when it carries persons; else fall back to a legacy
+      // `data`-wrapped single result, then to the body itself.
+      if (!resp) return null;
+      return resp.persons ? resp : resp.data ?? resp;
     } catch (err: any) {
       console.error(`❌ SkipTrace error: ${err.message}`);
       return null;
@@ -181,44 +196,94 @@ export class RealEstateApiDao {
   }
 
   /**
-   * Pull COMPARABLE SALES for a property address (JAK-137) — the /v3/PropertyComps
-   * comparables/CMA lookup that backs the text-Jake comps specialist. Returns the
-   * raw response (comps + subject + AVM range) or null on failure. The three query
-   * knobs map to the endpoint's documented params: radius → max_radius_miles,
-   * count → max_results, timeframe → max_days_back (months × 30). The bed/bath/sqft
-   * tolerance filters are applied downstream against the returned subject.
+   * Pull COMPARABLE SALES for a property address (JAK-137 / JAK-144) — the
+   * comparables/CMA lookup that backs the text-Jake comps specialist. Returns a
+   * normalized response (comps + subject + AVM) or null on failure.
    *
-   * v2/PropertyComps was deprecated 2026-01-01, so this uses the current
-   * /v3/PropertyComps endpoint. It is a PAID, READ-ONLY lookup, so it funnels
-   * through the SAME {@link paidPost} chokepoint as PropertySearch/PropertyDetail/
-   * SkipTrace: off prod/staging it NEVER spends — the call is echoed and the
-   * deterministic empty dev mock is returned instead of hitting the provider.
+   * JAK-144 ROOT CAUSE + FIX: the old /v3/PropertyComps call returned 401
+   * AUTH_SCOPE_UNAUTHORIZED — this account's key is NOT scoped for the standalone
+   * PropertyComps endpoints (/v2 and /v3 both 401). The ONLY authorized way to pull
+   * comparables with this key is /v2/PropertyDetail with `comps: true`, which
+   * returns the SUBJECT property (its usual PropertyDetail fields + a top-level AVM
+   * `estimatedValue`) with the comparables nested under `data.comps`. We call that
+   * endpoint and reshape the result into the {@link RealEstateApiPropertyCompsResponse}
+   * the assembler consumes. The endpoint does not take radius/count/recency params —
+   * it returns REAPI's own curated set of recent, nearby comparable sales — so
+   * downstream assembleCompsData caps at `count` and applies the bed/bath/sqft
+   * tolerances against the returned subject (radius/recency stay as REAPI's
+   * selection, since the subject lat/long needed to compute distance isn't returned).
+   *
+   * It is a PAID, READ-ONLY lookup, so it funnels through the SAME {@link paidPost}
+   * chokepoint as PropertySearch/PropertyDetail/SkipTrace: off prod/staging it NEVER
+   * spends — the call is echoed and the deterministic empty dev mock is returned.
    */
   public async getCompsByAddress(
     addressString: string,
-    params: RealEstateApiCompsParams
+    _params: RealEstateApiCompsParams
   ): Promise<RealEstateApiPropertyCompsResponse | null> {
     try {
       const parsed = this.parseAddress(addressString);
-      const address = parsed
-        ? `${parsed.house} ${parsed.street}, ${parsed.city}, ${parsed.state} ${parsed.zip}`.trim()
-        : addressString;
-      const body: Record<string, string | number> = {
-        address,
-        max_radius_miles: params.radiusMiles,
-        max_results: params.count,
-        max_days_back: Math.round(params.monthsBack * 30),
-      };
+      const body: Record<string, string | number | boolean> = parsed
+        ? {
+            house: parsed.house,
+            street: parsed.street,
+            city: parsed.city,
+            state: parsed.state,
+            zip: parsed.zip,
+            comps: true,
+          }
+        : { address: addressString, comps: true };
 
-      return await this.paidPost<RealEstateApiPropertyCompsResponse>(
-        "/v3/PropertyComps",
+      const resp = await this.paidPost<RealEstateApiPropertyDetailCompsResponse>(
+        "/v2/PropertyDetail",
         body,
         RealEstateApiDao.DEV_MOCK_COMPS
       );
+      return this.toCompsResponse(resp);
     } catch (err: any) {
       console.error(`❌ PropertyComps error: ${err.message}`);
       return null;
     }
+  }
+
+  /**
+   * Reshape a /v2/PropertyDetail(comps:true) body (JAK-144) into the comps response
+   * the specialist assembler consumes: the comparables from `data.comps`, a SUBJECT
+   * built from the detail's `propertyInfo` (beds/baths/sqft — used for the tolerance
+   * filters), and the AVM point estimate from the detail's top-level
+   * `estimatedValue`. Pure + null-safe: never fabricates a comp or a value.
+   */
+  private toCompsResponse(
+    resp: RealEstateApiPropertyDetailCompsResponse | null
+  ): RealEstateApiPropertyCompsResponse {
+    const detail: RealEstateApiPropertyDetailComps | null = resp?.data ?? null;
+    if (!detail) return { comps: [] };
+
+    const comps: RealEstateApiCompRecord[] = Array.isArray(detail.comps) ? detail.comps : [];
+    const info = detail.propertyInfo ?? null;
+
+    const toNum = (v: unknown): number | null => {
+      if (typeof v === "number" && Number.isFinite(v)) return v;
+      if (typeof v === "string" && v.trim() && Number.isFinite(Number(v))) return Number(v);
+      return null;
+    };
+
+    const subject: RealEstateApiCompsSubject = {
+      bedrooms: info?.bedrooms ?? toNum(detail.bedrooms),
+      bathrooms: info?.bathrooms ?? toNum(detail.bathrooms),
+      squareFeet: info?.livingSquareFeet ?? toNum(detail.squareFeet),
+      livingSquareFeet: info?.livingSquareFeet ?? null,
+      lotSquareFeet: info?.lotSquareFeet ?? null,
+      yearBuilt: info?.yearBuilt ?? null,
+      estimatedValue: toNum(detail.estimatedValue),
+    };
+
+    return {
+      comps,
+      subject,
+      reapiAvm: toNum(detail.estimatedValue),
+      recordCount: comps.length,
+    };
   }
 
   /**

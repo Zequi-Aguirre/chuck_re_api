@@ -16,6 +16,7 @@ import {
     RealEstateApiPropertyCompsResponse,
     RealEstateApiPropertySearchResult,
     RealEstateApiSkipTraceEmail,
+    RealEstateApiSkipTracePerson,
     RealEstateApiSkipTracePhone,
     RealEstateApiSkipTraceResult,
 } from "../types/RealEstateApi.ts";
@@ -167,8 +168,8 @@ export class JakeAssistantService {
 
     /**
      * Execute a dispatch plan (JAK-135). Report intents keep the FULL JAK-134
-     * cache-and-free-reserve behavior; skip-trace (JAK-136) and comps (JAK-137) are
-     * both built with their own confirm-before-spend + cache-and-free-reserve;
+     * cache-and-free-reserve behavior; skip-trace (JAK-136) and comps (JAK-137) run
+     * immediately on ask (JAK-144, no confirm) with the SAME cache-and-free-reserve;
      * chitchat → guidance.
      */
     private async dispatch(
@@ -206,42 +207,11 @@ export class JakeAssistantService {
             }
         }
 
-        // Confirm-before-spend (JAK-136/137): a bare "OK"/"YES" right after a
-        // skip-trace or comps QUOTE (or a free re-serve of one) runs that PAID
-        // action. Checked BEFORE the switch so it takes precedence over
-        // report_refresh — the router classifies a bare affirmative as a report
-        // refresh, but a fresh pending specialist offer means the OK is confirming
-        // THAT action. At most one pending exists per phone (quoting one clears the
-        // other), so the order here can't misfire.
-        if (this.isAffirmativeOk(input.message)) {
-            const skipPending = await this.skipTrace.freshPending(phone);
-            if (skipPending) {
-                return this.runConfirmedSkipTrace({
-                    input,
-                    route,
-                    customer,
-                    accountId,
-                    phone,
-                    target: skipPending.target,
-                    credits: skipPending.credits,
-                    requestingMessageId,
-                });
-            }
-            const compsPending = await this.comps.freshPending(phone);
-            if (compsPending) {
-                return this.runConfirmedComps({
-                    input,
-                    route,
-                    customer,
-                    accountId,
-                    phone,
-                    target: compsPending.target,
-                    params: compsPending.params,
-                    credits: compsPending.credits,
-                    requestingMessageId,
-                });
-            }
-        }
+        // JAK-144: skip-trace and comps no longer gate on a "reply OK" confirmation
+        // — when the texter asks, the action runs immediately and charges on success
+        // (see handleSkipTrace / handleComps). So there is NO pending specialist
+        // offer to confirm here; a bare "OK" only ever means a property-report
+        // refresh, handled by the report_refresh case below.
 
         switch (plan.intent) {
             // A bare "OK"/"yes" confirming a fresh PAID copy of the last address
@@ -311,8 +281,8 @@ export class JakeAssistantService {
                 });
             }
 
-            // Owner skip trace (JAK-136): built + credit-gated + confirm-before-spend,
-            // with the SAME cache-and-free-reserve rule as reports.
+            // Owner skip trace (JAK-136): built + credit-gated, runs immediately on
+            // ask (JAK-144, no confirm), with the SAME cache-and-free-reserve rule.
             case "skip_trace":
                 return this.handleSkipTrace({
                     input,
@@ -324,8 +294,9 @@ export class JakeAssistantService {
                     requestingMessageId,
                 });
 
-            // Comps / CMA (JAK-137): built + credit-gated + confirm-before-spend,
-            // with texter-tunable parameters and the SAME cache-and-free-reserve rule.
+            // Comps / CMA (JAK-137): built + credit-gated, runs immediately on ask
+            // (JAK-144, no confirm), with texter-tunable parameters and the SAME
+            // cache-and-free-reserve rule.
             case "comps":
                 return this.handleComps({
                     input,
@@ -459,13 +430,14 @@ export class JakeAssistantService {
     // ── Skip trace (JAK-136) ─────────────────────────────────────────────────
 
     /**
-     * Handle a skip-trace request (JAK-136). Resolves the target address (the
-     * router's resolved entity, else the last address the texter sent). Then:
+     * Handle a skip-trace request (JAK-136 / JAK-144). Resolves the target address
+     * (the router's resolved entity, else the last address the texter sent). Then:
      *   - a repeat trace of the SAME target within the free window → re-serve the
-     *     stored result FREE, with a "reply OK for a fresh trace" notice (no spend);
-     *   - a fresh trace → CONFIRM-BEFORE-SPEND: check the balance, quote the cost,
-     *     and store a pending offer so a bare "OK" runs it. Nothing is spent here.
-     * Insufficient balance → a clear, no-charge message and no pending offer.
+     *     stored result FREE (no spend, no prompt);
+     *   - a fresh trace → run it IMMEDIATELY (JAK-144 removed the "reply OK" step):
+     *     credit-gate first, then call the paid trace and charge ONLY on a delivered
+     *     contact match.
+     * Insufficient balance → a clear, no-charge message; the trace does not run.
      */
     private async handleSkipTrace(ctx: {
         input: JakeInboundMessage;
@@ -527,8 +499,8 @@ export class JakeAssistantService {
             return this.reserveSkipTraceFromCache({ input, route, customer, phone, target, cached, cost });
         }
 
-        // Fresh trace → confirm-before-spend. Credit gate FIRST — never quote a
-        // price the customer can't pay, and never store a pending offer we can't run.
+        // JAK-144: run immediately — NO "reply OK" confirmation. Credit gate FIRST:
+        // insufficient balance → do NOT run, reply with the clear no-charge message.
         if (!(await this.credits.hasCreditsForSkipTrace(accountId, cost))) {
             const balance = await this.credits.getBalance(accountId);
             const reply = [
@@ -545,29 +517,25 @@ export class JakeAssistantService {
             return { ok: false, address: target, reply, mode: route.mode, charged: 0, outOfCredits: true };
         }
 
-        // Sufficient balance → QUOTE the cost + park a pending offer. Clear any
-        // comps quote so a following bare "OK" is unambiguous. No spend yet.
-        await this.clearCompsPending(phone);
-        await this.skipTrace.setPending({ phone, customerId: customer.id, target, credits: cost });
-        const reply = [
-            `Skip-tracing the owner of ${target} pulls their phone and contact info. ` +
-                `It costs ${cost} credit${cost === 1 ? "" : "s"}. Reply OK to run it.`,
-            PropertyReportWriter.FOOTER,
-        ].join("\n\n");
-        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
-        await this.writeStatusNote(
+        // Sufficient balance → run the paid trace right now. Charged ONLY on a
+        // delivered contact match (no charge on failure / no data).
+        return this.runSkipTrace({
+            input,
             route,
-            input.contactId,
-            `Jake (text): quoted skip trace for "${target}" at ${cost} credit(s) — awaiting OK, no charge yet.`
-        );
-        return { ok: true, address: target, reply, mode: route.mode, charged: 0 };
+            customer,
+            accountId,
+            phone,
+            target,
+            credits: cost,
+            requestingMessageId: ctx.requestingMessageId,
+        });
     }
 
     /**
-     * Free re-serve (JAK-136) of a skip trace: a repeat of the same target within
-     * the free window. Return the STORED reply verbatim — no paid API call, no LLM
-     * call, no credit — with an appended line telling the texter it's on record and
-     * to reply OK for a FRESH trace. We park a pending offer so that OK spends. The
+     * Free re-serve (JAK-136 / JAK-144) of a skip trace: a repeat of the same target
+     * within the free window. Return the STORED reply verbatim — no paid API call, no
+     * LLM call, no credit — with an appended line noting it's already on record and
+     * free. No "reply OK" prompt (JAK-144 removed confirm-before-spend). The
      * GoTextJake.com footer stays last.
      */
     private async reserveSkipTraceFromCache(ctx: {
@@ -579,10 +547,8 @@ export class JakeAssistantService {
         cached: SkipTraceRow;
         cost: number;
     }): Promise<JakeInboundResult> {
-        const { input, route, customer, phone, target, cached, cost } = ctx;
-        await this.clearCompsPending(phone);
-        await this.skipTrace.setPending({ phone, customerId: customer.id, target, credits: cost });
-        const reply = this.withSkipTraceReserveNotice(cached.report_text, cost);
+        const { input, route, customer, phone, target, cached } = ctx;
+        const reply = this.withSkipTraceReserveNotice(cached.report_text);
         await this.sendAndRemember(route, input.contactId, customer, phone, reply);
         await this.writeStatusNote(
             route,
@@ -593,14 +559,14 @@ export class JakeAssistantService {
     }
 
     /**
-     * Run a CONFIRMED skip trace (JAK-136) — reached only after the texter replied
-     * OK to a quote (or a free re-serve). Consumes the pending offer, re-checks the
-     * balance, calls the paid /v2/SkipTrace (mock/no-spend off prod), and charges
-     * the quoted cost ONLY when the trace delivered usable contact info — mirroring
-     * the report's "no match, no charge" policy. On a hit it snapshots the result
-     * so a repeat within the free window re-serves for free.
+     * Run a skip trace (JAK-136 / JAK-144) — reached directly from handleSkipTrace
+     * once the credit gate passes (NO "reply OK" step anymore). Calls the paid
+     * /v2/SkipTrace (mock/no-spend off prod) and charges the cost ONLY when the trace
+     * delivered usable contact info — the "no data, no charge" safety is preserved.
+     * On a hit it snapshots the result so a repeat within the free window re-serves
+     * for free. The caller has already verified the balance, so this does not re-gate.
      */
-    private async runConfirmedSkipTrace(ctx: {
+    private async runSkipTrace(ctx: {
         input: JakeInboundMessage;
         route: TextRoute;
         customer: TextJakeCustomer;
@@ -611,26 +577,6 @@ export class JakeAssistantService {
         requestingMessageId: string | null;
     }): Promise<JakeInboundResult> {
         const { input, route, customer, accountId, phone, target, credits } = ctx;
-
-        // Consume the offer up front so a duplicate "OK" can't run it twice.
-        await this.clearSkipTracePending(phone);
-
-        // Re-check the balance — it may have drained between the quote and the OK.
-        if (!(await this.credits.hasCreditsForSkipTrace(accountId, credits))) {
-            const balance = await this.credits.getBalance(accountId);
-            const reply = [
-                `A skip trace on ${target} costs ${credits} credit${credits === 1 ? "" : "s"}, but you have ${balance}. ` +
-                    "Top up and text me again — I haven't charged you anything.",
-                PropertyReportWriter.FOOTER,
-            ].join("\n\n");
-            await this.sendAndRemember(route, input.contactId, customer, phone, reply);
-            await this.writeStatusNote(
-                route,
-                input.contactId,
-                `Jake (text): OK'd skip trace for "${target}" but balance ${balance} < ${credits} — no charge.`
-            );
-            return { ok: false, address: target, reply, mode: route.mode, charged: 0, outOfCredits: true };
-        }
 
         // The paid trace + the LLM writer can take a moment; ack now and deliver the
         // result in a follow-up so the texter isn't left waiting silently (JAK-138).
@@ -691,10 +637,8 @@ export class JakeAssistantService {
      * Append the skip-trace free-re-serve notice to a stored reply, KEEPING the
      * GoTextJake.com footer last (mirrors {@link withReserveNotice}).
      */
-    private withSkipTraceReserveNotice(reportText: string, cost: number): string {
-        const notice =
-            "This owner is already on record, so this copy is free. " +
-            `Reply OK for a fresh trace (costs ${cost} credit${cost === 1 ? "" : "s"}).`;
+    private withSkipTraceReserveNotice(reportText: string): string {
+        const notice = "This owner is already on record, so this copy is free.";
         const footer = PropertyReportWriter.FOOTER;
         const trimmed = reportText.trimEnd();
         const body = trimmed.endsWith(footer)
@@ -750,26 +694,35 @@ export class JakeAssistantService {
         if (target.trim()) data.targetAddress = target.trim();
         if (!record) return data;
 
+        // JAK-144: the LIVE provider returns matches under a top-level `persons[]`
+        // array; older/other account shapes nest a single identity under
+        // `output.identity` or flatten phones/emails onto the record. Read all of
+        // them defensively so every shape resolves — never fabricating a value.
+        const persons = record.persons ?? [];
         const identity = record.output?.identity ?? null;
 
-        const ownerName = this.skipTraceOwnerName(record, identity);
+        const ownerName = this.skipTraceOwnerName(record, identity, persons);
         if (ownerName) data.ownerName = ownerName;
 
         const rawPhones: RealEstateApiSkipTracePhone[] = [
+            ...persons.flatMap((p) => p.phones ?? []),
             ...(identity?.phones ?? []),
             ...(record.phones ?? []),
         ];
         const phones = this.dedupe(rawPhones.map((p) => this.phoneDisplay(p)));
         if (phones.length) data.phones = phones;
 
-        const rawEmails: RealEstateApiSkipTraceEmail[] = [
+        const rawEmails: Array<string | RealEstateApiSkipTraceEmail> = [
+            ...persons.flatMap((p) => p.emails ?? []),
             ...(identity?.emails ?? []),
             ...(record.emails ?? []),
         ];
-        const emails = this.dedupe(rawEmails.map((e) => this.text(e?.email ?? e?.address) ?? ""));
+        const emails = this.dedupe(rawEmails.map((e) => this.emailDisplay(e)));
         if (emails.length) data.emails = emails;
 
-        const mailing = this.mailingDisplay(identity?.address ?? record.mailAddress ?? null);
+        const mailing = this.mailingDisplay(
+            persons[0]?.address ?? identity?.address ?? record.mailAddress ?? null
+        );
         if (mailing) data.mailingAddress = mailing;
 
         return data;
@@ -777,8 +730,17 @@ export class JakeAssistantService {
 
     private skipTraceOwnerName(
         record: RealEstateApiSkipTraceResult,
-        identity: NonNullable<NonNullable<RealEstateApiSkipTraceResult["output"]>["identity"]> | null
+        identity: NonNullable<NonNullable<RealEstateApiSkipTraceResult["output"]>["identity"]> | null,
+        persons: RealEstateApiSkipTracePerson[]
     ): string | null {
+        // Prefer the first matched person's name (live shape).
+        const person = persons[0];
+        if (person) {
+            const full = this.text(person.fullName) ?? this.text(person.name);
+            if (full) return full;
+            const composed = [person.firstName, person.lastName].filter(Boolean).join(" ").trim();
+            if (composed) return composed;
+        }
         const top = this.text(record.name) ?? this.text(identity?.name);
         if (top) return top;
         const first = identity?.names?.[0];
@@ -790,6 +752,12 @@ export class JakeAssistantService {
             return composed || null;
         }
         return null;
+    }
+
+    /** A skip-trace email may be a plain string (live shape) or an `{ email }`/`{ address }` object. */
+    private emailDisplay(e: string | RealEstateApiSkipTraceEmail): string {
+        if (typeof e === "string") return this.text(e) ?? "";
+        return this.text(e?.email ?? e?.address) ?? "";
     }
 
     private phoneDisplay(p: RealEstateApiSkipTracePhone): string {
@@ -830,16 +798,16 @@ export class JakeAssistantService {
     // ── Comps / CMA (JAK-137) ────────────────────────────────────────────────
 
     /**
-     * Handle a comps request (JAK-137). Resolves the target address (the router's
-     * resolved entity, else the last address the texter sent) and the effective
-     * parameters (admin defaults overlaid with any texter overrides the router
-     * extracted, then clamped). Then, mirroring skip-trace:
+     * Handle a comps request (JAK-137 / JAK-144). Resolves the target address (the
+     * router's resolved entity, else the last address the texter sent) and the
+     * effective parameters (admin defaults overlaid with any texter overrides the
+     * router extracted, then clamped). Then, mirroring skip-trace:
      *   - a repeat request for the SAME target AND parameter-set within the free
-     *     window → re-serve the stored result FREE, with a "reply OK for fresh
-     *     comps" notice (no spend);
-     *   - a fresh request → CONFIRM-BEFORE-SPEND: check the balance, quote the cost
-     *     AND the parameters, and store a pending offer so a bare "OK" runs it.
-     *     Nothing is spent here. Insufficient balance → a clear no-charge message.
+     *     window → re-serve the stored result FREE (no spend, no prompt);
+     *   - a fresh request → run it IMMEDIATELY (JAK-144 removed the "reply OK" step):
+     *     credit-gate first, then pull comps and charge ONLY when at least one
+     *     comparable sale is delivered. Insufficient balance → a clear no-charge
+     *     message; the pull does not run.
      */
     private async handleComps(ctx: {
         input: JakeInboundMessage;
@@ -894,8 +862,8 @@ export class JakeAssistantService {
             return this.reserveCompsFromCache({ input, route, customer, phone, target, params, cached, cost });
         }
 
-        // Fresh request → confirm-before-spend. Credit gate FIRST — never quote a
-        // price the customer can't pay, and never store a pending offer we can't run.
+        // JAK-144: run immediately — NO "reply OK" confirmation. Credit gate FIRST:
+        // insufficient balance → do NOT run, reply with the clear no-charge message.
         if (!(await this.credits.hasCreditsForComps(accountId, cost))) {
             const balance = await this.credits.getBalance(accountId);
             const reply = [
@@ -912,30 +880,27 @@ export class JakeAssistantService {
             return { ok: false, address: target, reply, mode: route.mode, charged: 0, outOfCredits: true };
         }
 
-        // Sufficient balance → QUOTE the cost + parameters + park a pending offer.
-        // Clear any skip-trace quote so a following bare "OK" is unambiguous. No spend.
-        await this.clearSkipTracePending(phone);
-        await this.comps.setPending({ phone, customerId: customer.id, target, params, credits: cost });
-        const reply = [
-            `Pulling comparable sales for ${target} using ${formatCompParams(params)}. ` +
-                `It costs ${cost} credit${cost === 1 ? "" : "s"}. Reply OK to run it.`,
-            PropertyReportWriter.FOOTER,
-        ].join("\n\n");
-        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
-        await this.writeStatusNote(
+        // Sufficient balance → pull comps right now. Charged ONLY when at least one
+        // comparable sale was delivered (no charge on failure / no data).
+        return this.runComps({
+            input,
             route,
-            input.contactId,
-            `Jake (text): quoted comps for "${target}" at ${cost} credit(s) [${formatCompParams(params)}] — awaiting OK, no charge yet.`
-        );
-        return { ok: true, address: target, reply, mode: route.mode, charged: 0 };
+            customer,
+            accountId,
+            phone,
+            target,
+            params,
+            credits: cost,
+            requestingMessageId: ctx.requestingMessageId,
+        });
     }
 
     /**
-     * Free re-serve (JAK-137) of a comps pull: a repeat of the same target AND
-     * parameter-set within the free window. Return the STORED reply verbatim — no
-     * paid API call, no LLM call, no credit — with an appended line telling the
-     * texter it's on record and to reply OK for FRESH comps. We park a pending offer
-     * so that OK spends. The GoTextJake.com footer stays last.
+     * Free re-serve (JAK-137 / JAK-144) of a comps pull: a repeat of the same target
+     * AND parameter-set within the free window. Return the STORED reply verbatim — no
+     * paid API call, no LLM call, no credit — with an appended line noting it's
+     * already on record and free. No "reply OK" prompt (JAK-144 removed
+     * confirm-before-spend). The GoTextJake.com footer stays last.
      */
     private async reserveCompsFromCache(ctx: {
         input: JakeInboundMessage;
@@ -947,10 +912,8 @@ export class JakeAssistantService {
         cached: CompsRow;
         cost: number;
     }): Promise<JakeInboundResult> {
-        const { input, route, customer, phone, target, params, cached, cost } = ctx;
-        await this.clearSkipTracePending(phone);
-        await this.comps.setPending({ phone, customerId: customer.id, target, params, credits: cost });
-        const reply = this.withCompsReserveNotice(cached.report_text, cost);
+        const { input, route, customer, phone, target, cached } = ctx;
+        const reply = this.withCompsReserveNotice(cached.report_text);
         await this.sendAndRemember(route, input.contactId, customer, phone, reply);
         await this.writeStatusNote(
             route,
@@ -961,15 +924,15 @@ export class JakeAssistantService {
     }
 
     /**
-     * Run a CONFIRMED comps pull (JAK-137) — reached only after the texter replied
-     * OK to a quote (or a free re-serve). Consumes the pending offer, re-checks the
-     * balance, calls the paid /v3/PropertyComps (mock/no-spend off prod) with the
-     * quoted parameters, and charges the quoted cost ONLY when at least one
-     * comparable sale was delivered — mirroring the report's "no match, no charge"
-     * policy. On a hit it snapshots the result (keyed per target + parameter-set) so
-     * a repeat within the free window re-serves for free.
+     * Run a comps pull (JAK-137 / JAK-144) — reached directly from handleComps once
+     * the credit gate passes (NO "reply OK" step anymore). Calls the paid comps
+     * lookup (mock/no-spend off prod) with the resolved parameters and charges the
+     * cost ONLY when at least one comparable sale was delivered — the "no data, no
+     * charge" safety is preserved. On a hit it snapshots the result (keyed per target
+     * + parameter-set) so a repeat within the free window re-serves for free. The
+     * caller has already verified the balance, so this does not re-gate.
      */
-    private async runConfirmedComps(ctx: {
+    private async runComps(ctx: {
         input: JakeInboundMessage;
         route: TextRoute;
         customer: TextJakeCustomer;
@@ -981,26 +944,6 @@ export class JakeAssistantService {
         requestingMessageId: string | null;
     }): Promise<JakeInboundResult> {
         const { input, route, customer, accountId, phone, target, params, credits } = ctx;
-
-        // Consume the offer up front so a duplicate "OK" can't run it twice.
-        await this.clearCompsPending(phone);
-
-        // Re-check the balance — it may have drained between the quote and the OK.
-        if (!(await this.credits.hasCreditsForComps(accountId, credits))) {
-            const balance = await this.credits.getBalance(accountId);
-            const reply = [
-                `Pulling comparable sales for ${target} costs ${credits} credit${credits === 1 ? "" : "s"}, but you have ${balance}. ` +
-                    "Top up and text me again — I haven't charged you anything.",
-                PropertyReportWriter.FOOTER,
-            ].join("\n\n");
-            await this.sendAndRemember(route, input.contactId, customer, phone, reply);
-            await this.writeStatusNote(
-                route,
-                input.contactId,
-                `Jake (text): OK'd comps for "${target}" but balance ${balance} < ${credits} — no charge.`
-            );
-            return { ok: false, address: target, reply, mode: route.mode, charged: 0, outOfCredits: true };
-        }
 
         // The paid comps pull + the LLM writer can take a moment; ack now and deliver
         // the result in a follow-up so the texter isn't left waiting silently (JAK-138).
@@ -1062,10 +1005,8 @@ export class JakeAssistantService {
      * Append the comps free-re-serve notice to a stored reply, KEEPING the
      * GoTextJake.com footer last (mirrors {@link withSkipTraceReserveNotice}).
      */
-    private withCompsReserveNotice(reportText: string, cost: number): string {
-        const notice =
-            "These comps are already on record, so this copy is free. " +
-            `Reply OK for fresh comps (costs ${cost} credit${cost === 1 ? "" : "s"}).`;
+    private withCompsReserveNotice(reportText: string): string {
+        const notice = "These comps are already on record, so this copy is free.";
         const footer = PropertyReportWriter.FOOTER;
         const trimmed = reportText.trimEnd();
         const body = trimmed.endsWith(footer)
@@ -1337,10 +1278,20 @@ export class JakeAssistantService {
     private skipTracePeople(record: unknown): string[] {
         const rec = (record ?? null) as RealEstateApiSkipTraceResult | null;
         if (!rec) return [];
+        const persons = rec.persons ?? [];
         const identity = rec.output?.identity ?? null;
         const names: string[] = [];
-        const primary = this.skipTraceOwnerName(rec, identity);
+        const primary = this.skipTraceOwnerName(rec, identity, persons);
         if (primary) names.push(primary);
+        // JAK-144: each additional matched person (live `persons[]` shape) is a
+        // distinct name the texter could mean.
+        for (const p of persons) {
+            const full =
+                this.text(p.fullName) ??
+                this.text(p.name) ??
+                [p.firstName, p.lastName].filter(Boolean).join(" ").trim();
+            if (full) names.push(full);
+        }
         for (const n of identity?.names ?? []) {
             if (typeof n === "string") {
                 const t = this.text(n);
