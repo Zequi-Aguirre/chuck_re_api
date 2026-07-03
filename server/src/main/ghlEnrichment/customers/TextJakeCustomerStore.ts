@@ -10,9 +10,21 @@ export interface TextJakeCustomerRow {
   id: string;
   phone: string;
   ghl_contact_id: string | null;
+  // Optional profile (JAK-146). Phone stays the mandatory identity; these are
+  // nullable so a customer can be saved with a blank email / no name.
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
   created_at: Date;
   modified_at: Date;
   deleted_at: Date | null;
+}
+
+/** The editable profile fields on a text-Jake customer (JAK-146). */
+export interface TextJakeCustomerProfile {
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
 }
 
 /**
@@ -43,6 +55,49 @@ export class TextJakeCustomerStore {
       [phone, ghlContactId]
     );
     return result.rows[0];
+  }
+
+  /**
+   * Create a text-Jake customer from the admin dashboard (JAK-146), with an
+   * optional name + email captured up front. Phone is the required, unique
+   * identity — a duplicate raises Postgres 23505, which the resource maps to a
+   * 409. Distinct from {@link upsertByPhone}, the passive first-contact path.
+   */
+  async create(
+    phone: string,
+    profile: TextJakeCustomerProfile
+  ): Promise<TextJakeCustomerRow> {
+    const result = await this.db.query<TextJakeCustomerRow>(
+      `INSERT INTO text_jake_customers (phone, first_name, last_name, email)
+       VALUES ($1, $2, $3, $4)
+       RETURNING *`,
+      [phone, profile.firstName, profile.lastName, profile.email]
+    );
+    return result.rows[0];
+  }
+
+  /**
+   * Update a customer's phone + profile from the admin dashboard (JAK-146).
+   * Returns the updated row, or null if no live customer has that id. Phone stays
+   * required and unique — changing it to another customer's number raises 23505.
+   */
+  async updateProfile(
+    id: string,
+    phone: string,
+    profile: TextJakeCustomerProfile
+  ): Promise<TextJakeCustomerRow | null> {
+    const result = await this.db.query<TextJakeCustomerRow>(
+      `UPDATE text_jake_customers
+       SET phone = $2,
+           first_name = $3,
+           last_name = $4,
+           email = $5,
+           modified_at = now()
+       WHERE id = $1 AND deleted_at IS NULL
+       RETURNING *`,
+      [id, phone, profile.firstName, profile.lastName, profile.email]
+    );
+    return result.rows[0] ?? null;
   }
 
   /** Look up a customer by phone without creating one. */

@@ -1,8 +1,8 @@
 import { injectable } from "tsyringe";
 import { CreditLedgerRow, CreditLedgerStore } from "../metering/CreditLedgerStore";
 import { CreditService } from "../metering/CreditService";
-import { TextJakeCustomerService } from "../customers/TextJakeCustomerService";
-import { TextJakeCustomerStore } from "../customers/TextJakeCustomerStore";
+import { normalizePhone, TextJakeCustomerService } from "../customers/TextJakeCustomerService";
+import { TextJakeCustomerRow, TextJakeCustomerStore } from "../customers/TextJakeCustomerStore";
 import { AdminTextCustomerView } from "./AdminTypes";
 
 /** The new balance plus the ledger entry a grant produced. */
@@ -10,6 +10,14 @@ export interface TextCustomerGrantResult {
   customer: AdminTextCustomerView;
   entry: CreditLedgerRow;
   balance: number;
+}
+
+/** The admin-editable identity + profile for a text customer (JAK-146). */
+export interface TextCustomerInput {
+  phone: string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
 }
 
 /**
@@ -52,14 +60,38 @@ export class AdminTextCustomerService {
       this.ledger.listBalances(),
     ]);
     const balanceByAccount = new Map(balances.map((b) => [b.location_id, b.balance]));
-    return rows.map((row) => ({
-      id: row.id,
-      phone: row.phone,
-      ghlContactId: row.ghl_contact_id,
-      creditBalance: balanceByAccount.get(row.id) ?? 0,
-      createdAt: row.created_at,
-      lastSeenAt: row.modified_at,
-    }));
+    return rows.map((row) => toView(row, balanceByAccount.get(row.id) ?? 0));
+  }
+
+  /**
+   * Create a text customer from the admin dashboard (JAK-146) with an optional
+   * name + email. The phone is normalized to the same stable key the billing
+   * path uses, so a later text from that number maps to this same customer. A
+   * brand-new customer has a 0 balance (no ledger activity yet).
+   */
+  async create(input: TextCustomerInput): Promise<AdminTextCustomerView> {
+    const row = await this.customerStore.create(normalizePhone(input.phone), {
+      firstName: input.firstName,
+      lastName: input.lastName,
+      email: input.email,
+    });
+    return toView(row, 0);
+  }
+
+  /**
+   * Update a text customer's phone + profile from the admin dashboard (JAK-146).
+   * Returns the updated view with the current credit balance, or null if no live
+   * customer has that id. Credits are untouched here — that's the grant path.
+   */
+  async update(id: string, input: TextCustomerInput): Promise<AdminTextCustomerView | null> {
+    const row = await this.customerStore.updateProfile(id, normalizePhone(input.phone), {
+      firstName: input.firstName,
+      lastName: input.lastName,
+      email: input.email,
+    });
+    if (!row) return null;
+    const balance = await this.credits.getBalance(row.id);
+    return toView(row, balance);
   }
 
   /**
@@ -84,6 +116,9 @@ export class AdminTextCustomerService {
       customer: {
         id: customer.id,
         phone: customer.phone,
+        firstName: customer.firstName,
+        lastName: customer.lastName,
+        email: customer.email,
         ghlContactId: customer.ghlContactId,
         creditBalance: entry.balance_after,
         createdAt: customer.createdAt,
@@ -93,4 +128,19 @@ export class AdminTextCustomerService {
       balance: entry.balance_after,
     };
   }
+}
+
+/** Fold a raw customer row + its resolved balance into the safe admin view. */
+function toView(row: TextJakeCustomerRow, creditBalance: number): AdminTextCustomerView {
+  return {
+    id: row.id,
+    phone: row.phone,
+    firstName: row.first_name,
+    lastName: row.last_name,
+    email: row.email,
+    ghlContactId: row.ghl_contact_id,
+    creditBalance,
+    createdAt: row.created_at,
+    lastSeenAt: row.modified_at,
+  };
 }

@@ -68,10 +68,22 @@ export interface LocationStatusDetail {
 export interface TextCustomerView {
   id: string;
   phone: string;
+  /** Optional profile (JAK-146) — captured in the admin UI; null when unset. */
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
   ghlContactId: string | null;
   creditBalance: number;
   createdAt: string;
   lastSeenAt: string;
+}
+
+/** The editable identity + profile for a text customer (JAK-146). */
+export interface TextCustomerInput {
+  phone: string;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
 }
 
 /** Admin privilege level (JAK-125). Mirrors the server's AdminRole. */

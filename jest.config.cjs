@@ -8,7 +8,9 @@
  */
 module.exports = {
   testEnvironment: "node",
-  roots: ["<rootDir>/server"],
+  // server holds the app's unit tests; client holds pure (no-DOM) UI-logic tests
+  // such as the JAK-146 mobile-breakpoint helper.
+  roots: ["<rootDir>/server", "<rootDir>/client"],
   testMatch: ["**/*.test.ts"],
   setupFiles: ["reflect-metadata"],
   transform: {

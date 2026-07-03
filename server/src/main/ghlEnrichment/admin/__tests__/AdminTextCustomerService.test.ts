@@ -58,6 +58,9 @@ const customer = (over: Partial<TextJakeCustomer> = {}): TextJakeCustomer => ({
   id: "cust-1",
   phone: "+17865274077",
   ghlContactId: null,
+  firstName: null,
+  lastName: null,
+  email: null,
   // The credit account key IS the customer id (JAK-115).
   creditAccountId: "cust-1",
   createdAt: new Date("2026-07-01T00:00:00Z"),
@@ -69,6 +72,9 @@ const customerRow = (over: Partial<TextJakeCustomerRow> = {}): TextJakeCustomerR
   id: "cust-1",
   phone: "+17865274077",
   ghl_contact_id: null,
+  first_name: null,
+  last_name: null,
+  email: null,
   created_at: new Date("2026-07-01T00:00:00Z"),
   modified_at: new Date("2026-07-02T00:00:00Z"),
   deleted_at: null,
@@ -118,6 +124,64 @@ describe("AdminTextCustomerService", () => {
 
     expect(result.balance).toBe(3);
     expect(await credits.hasCreditsForTextLookup("new-cust")).toBe(true);
+  });
+
+  it("creates a customer with a normalized phone + profile, at balance 0 (JAK-146)", async () => {
+    customerStore.create.mockResolvedValue(
+      customerRow({ first_name: "Ada", last_name: "Lovelace", email: "ada@example.com" })
+    );
+
+    const view = await service.create({
+      phone: " +1 786 527 4077 ",
+      firstName: "Ada",
+      lastName: "Lovelace",
+      email: "ada@example.com",
+    });
+
+    // Phone normalized (whitespace stripped) before it hits the store.
+    expect(customerStore.create).toHaveBeenCalledWith("+17865274077", {
+      firstName: "Ada",
+      lastName: "Lovelace",
+      email: "ada@example.com",
+    });
+    expect(view.firstName).toBe("Ada");
+    expect(view.email).toBe("ada@example.com");
+    // A brand-new customer has no ledger activity yet.
+    expect(view.creditBalance).toBe(0);
+  });
+
+  it("updates a customer's profile and returns the view with its current balance (JAK-146)", async () => {
+    customerStore.updateProfile.mockResolvedValue(
+      customerRow({ id: "cust-1", first_name: "Grace", email: "grace@example.com" })
+    );
+    // Balance is read from the ledger, not reset by the profile edit.
+    await ledger.grant({ locationId: "cust-1", amount: 6, reason: "manual_grant" });
+
+    const view = await service.update("cust-1", {
+      phone: "+17865274077",
+      firstName: "Grace",
+      lastName: "Hopper",
+      email: "grace@example.com",
+    });
+
+    expect(customerStore.updateProfile).toHaveBeenCalledWith("cust-1", "+17865274077", {
+      firstName: "Grace",
+      lastName: "Hopper",
+      email: "grace@example.com",
+    });
+    expect(view?.firstName).toBe("Grace");
+    expect(view?.creditBalance).toBe(6);
+  });
+
+  it("returns null when updating an unknown customer (JAK-146)", async () => {
+    customerStore.updateProfile.mockResolvedValue(null);
+    const view = await service.update("nope", {
+      phone: "+17865274077",
+      firstName: null,
+      lastName: null,
+      email: null,
+    });
+    expect(view).toBeNull();
   });
 
   it("lists customers with their credit balances joined by account key", async () => {

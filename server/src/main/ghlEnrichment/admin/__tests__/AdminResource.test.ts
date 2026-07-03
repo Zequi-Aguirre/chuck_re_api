@@ -211,6 +211,9 @@ describe("AdminResource", () => {
   const textCustomerView = (over: Partial<AdminTextCustomerView> = {}): AdminTextCustomerView => ({
     id: "cust-1",
     phone: "+17865274077",
+    firstName: null,
+    lastName: null,
+    email: null,
     ghlContactId: null,
     creditBalance: 0,
     createdAt: new Date("2026-07-01T00:00:00Z"),
@@ -276,6 +279,155 @@ describe("AdminResource", () => {
       expect(res.status).toBe(200);
       expect(res.body.balance).toBe(5);
       expect(textCustomers.grantCredits).toHaveBeenCalledWith("+17865274077", 5, "manual_grant");
+    });
+  });
+
+  // --- Text-customer profile create/update (JAK-146) ------------------------
+
+  describe("POST /text-customers", () => {
+    it("is behind the auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app)
+        .post("/api/admin/text-customers")
+        .send({ phone: "+17865274077", firstName: "Ada" });
+      expect(res.status).toBe(401);
+      expect(textCustomers.create).not.toHaveBeenCalled();
+    });
+
+    it("creates a customer, persisting name + email", async () => {
+      textCustomers.create.mockResolvedValue(
+        textCustomerView({ firstName: "Ada", lastName: "Lovelace", email: "ada@example.com" })
+      );
+      const res = await asAdmin(
+        request(app).post("/api/admin/text-customers").send({
+          phone: "+17865274077",
+          firstName: "Ada",
+          lastName: "Lovelace",
+          email: "ada@example.com",
+        })
+      );
+      expect(res.status).toBe(201);
+      expect(res.body.customer.firstName).toBe("Ada");
+      expect(res.body.customer.email).toBe("ada@example.com");
+      expect(textCustomers.create).toHaveBeenCalledWith({
+        phone: "+17865274077",
+        firstName: "Ada",
+        lastName: "Lovelace",
+        email: "ada@example.com",
+      });
+    });
+
+    it("allows saving WITHOUT an email (email optional → null)", async () => {
+      textCustomers.create.mockResolvedValue(textCustomerView({ firstName: "Ada" }));
+      const res = await asAdmin(
+        request(app).post("/api/admin/text-customers").send({ phone: "+17865274077", firstName: "Ada" })
+      );
+      expect(res.status).toBe(201);
+      expect(textCustomers.create).toHaveBeenCalledWith({
+        phone: "+17865274077",
+        firstName: "Ada",
+        lastName: null,
+        email: null,
+      });
+    });
+
+    it("400s a blank phone (phone stays required)", async () => {
+      const res = await asAdmin(
+        request(app).post("/api/admin/text-customers").send({ firstName: "Ada", phone: "   " })
+      );
+      expect(res.status).toBe(400);
+      expect(textCustomers.create).not.toHaveBeenCalled();
+    });
+
+    it("400s a non-blank but invalid email", async () => {
+      const res = await asAdmin(
+        request(app)
+          .post("/api/admin/text-customers")
+          .send({ phone: "+17865274077", email: "not-an-email" })
+      );
+      expect(res.status).toBe(400);
+      expect(textCustomers.create).not.toHaveBeenCalled();
+    });
+
+    it("409s a duplicate phone (unique violation)", async () => {
+      textCustomers.create.mockRejectedValue(Object.assign(new Error("dup"), { code: "23505" }));
+      const res = await asAdmin(
+        request(app).post("/api/admin/text-customers").send({ phone: "+17865274077" })
+      );
+      expect(res.status).toBe(409);
+    });
+  });
+
+  describe("PUT /text-customers/:id", () => {
+    it("is behind the auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app)
+        .put("/api/admin/text-customers/cust-1")
+        .send({ phone: "+17865274077" });
+      expect(res.status).toBe(401);
+      expect(textCustomers.update).not.toHaveBeenCalled();
+    });
+
+    it("updates name + email and returns the refreshed view", async () => {
+      textCustomers.update.mockResolvedValue(
+        textCustomerView({ firstName: "Grace", email: "grace@example.com", creditBalance: 4 })
+      );
+      const res = await asAdmin(
+        request(app).put("/api/admin/text-customers/cust-1").send({
+          phone: "+17865274077",
+          firstName: "Grace",
+          lastName: "Hopper",
+          email: "grace@example.com",
+        })
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.customer.firstName).toBe("Grace");
+      expect(res.body.customer.creditBalance).toBe(4);
+      expect(textCustomers.update).toHaveBeenCalledWith("cust-1", {
+        phone: "+17865274077",
+        firstName: "Grace",
+        lastName: "Hopper",
+        email: "grace@example.com",
+      });
+    });
+
+    it("allows clearing the email on edit (blank → null)", async () => {
+      textCustomers.update.mockResolvedValue(textCustomerView());
+      await asAdmin(
+        request(app)
+          .put("/api/admin/text-customers/cust-1")
+          .send({ phone: "+17865274077", firstName: "Grace", email: "" })
+      );
+      expect(textCustomers.update).toHaveBeenCalledWith("cust-1", {
+        phone: "+17865274077",
+        firstName: "Grace",
+        lastName: null,
+        email: null,
+      });
+    });
+
+    it("400s a blank phone", async () => {
+      const res = await asAdmin(
+        request(app).put("/api/admin/text-customers/cust-1").send({ firstName: "Grace" })
+      );
+      expect(res.status).toBe(400);
+      expect(textCustomers.update).not.toHaveBeenCalled();
+    });
+
+    it("404s an unknown customer", async () => {
+      textCustomers.update.mockResolvedValue(null);
+      const res = await asAdmin(
+        request(app).put("/api/admin/text-customers/nope").send({ phone: "+17865274077" })
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("409s when the new phone collides with another customer", async () => {
+      textCustomers.update.mockRejectedValue(Object.assign(new Error("dup"), { code: "23505" }));
+      const res = await asAdmin(
+        request(app).put("/api/admin/text-customers/cust-1").send({ phone: "+15559998888" })
+      );
+      expect(res.status).toBe(409);
     });
   });
 

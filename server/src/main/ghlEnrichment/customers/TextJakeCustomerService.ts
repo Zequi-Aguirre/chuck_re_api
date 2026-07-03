@@ -45,6 +45,9 @@ function toCustomer(row: TextJakeCustomerRow): TextJakeCustomer {
     id: row.id,
     phone: row.phone,
     ghlContactId: row.ghl_contact_id,
+    firstName: row.first_name,
+    lastName: row.last_name,
+    email: row.email,
     // The credit account key IS the customer id — stable per customer.
     creditAccountId: row.id,
     createdAt: row.created_at,
