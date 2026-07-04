@@ -1772,6 +1772,144 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     });
   });
 
+  // JAK-156 — an address typed INSIDE a skip/comps command ("skip 123 Main St, Tampa
+  // FL", "comps 123 ...") must target THAT exact address, not an older one resolved
+  // from conversation history. Before the fix the leading "skip" made the deterministic
+  // parser skip the message, the address was discarded, and the router picked a stale
+  // historical address (and JAK-154's most-recent fallback missed it too).
+  describe("JAK-156 explicit address typed inside a skip / comps command", () => {
+    const A = "111 First Ave, Springfield, IL 62701";
+    const B = "222 Second St, Springfield, IL 62702";
+    const C = "333 Third Blvd, Springfield, IL 62703";
+    const EXPLICIT = "123 Main St, Tampa, FL 33601";
+
+    const personsHit = {
+      match: true,
+      persons: [
+        { fullName: "Homer Simpson", phones: [{ phone: "+15550101" }], emails: ["homer@example.com"] },
+      ],
+    };
+    const compsHit = {
+      comps: [{ address: "123 Nearby St", lastSaleAmount: 400000, bedrooms: 3, bathrooms: 2, squareFeet: 1500 }],
+      subject: { bedrooms: 3, bathrooms: 2, squareFeet: 1500 },
+    };
+
+    // Mirror the JAK-156 orchestrator wiring: a real inline parsedAddress OUTRANKS the
+    // router's history-derived target, so plan.targetEntity is the typed address. (The
+    // precedence itself is pinned in JakeOrchestrator.test.ts; here we prove the
+    // assistant parses the inline address, remembers it, and acts on it end-to-end.)
+    const planFromParsed = (intent: "skip_trace" | "comps"): void => {
+      orchestrator.plan.mockImplementation(async ({ parsedAddress }): Promise<DispatchPlan> => ({
+        intent,
+        targetEntity: parsedAddress,
+        specialists: intent === "skip_trace" ? skipTraceSpecialist() : compsSpecialist(),
+        userFacingNote: "",
+        compParams: null,
+      }));
+    };
+
+    beforeEach(() => {
+      // History is full of OLDER addresses; the newest engaged-with one is C. A correct
+      // fix must ignore ALL of them in favor of the freshly-typed EXPLICIT address.
+      memory.resolvedAddressList.mockResolvedValue([A, B, C]);
+      memory.lastResolvedAddress.mockResolvedValue(C);
+    });
+
+    it("'skip 123 ...' traces the TYPED address, not a historical one", async () => {
+      planFromParsed("skip_trace");
+      realEstate.searchPropertyByAddress.mockResolvedValue({
+        owner1FirstName: "Homer",
+        owner1LastName: "Simpson",
+      } as never);
+      realEstate.skipTraceByAddress.mockResolvedValue(personsHit as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: `skip ${EXPLICIT}`,
+      });
+
+      // The assistant parsed the inline address and fed it to the router as parsedAddress.
+      expect(orchestrator.plan).toHaveBeenCalledWith(
+        expect.objectContaining({ message: `skip ${EXPLICIT}`, parsedAddress: EXPLICIT })
+      );
+      // Traced the TYPED address — never the historical A / B / C.
+      expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith(EXPLICIT, {
+        firstName: "Homer",
+        lastName: "Simpson",
+      });
+      expect(realEstate.skipTraceByAddress).not.toHaveBeenCalledWith(C, expect.anything());
+      expect(realEstate.skipTraceByAddress).not.toHaveBeenCalledWith(A, expect.anything());
+      // A "skip {new address}" is a NEW lookup, keyed on the new address — not a stale
+      // re-serve of a cached older trace.
+      expect(skipTrace.checkCache).toHaveBeenCalledWith("+15559990000", EXPLICIT, "homer simpson");
+      expect(result.charged).toBe(3);
+    });
+
+    it("records the TYPED address to memory so it becomes the most-recent + ordinal entry", async () => {
+      planFromParsed("skip_trace");
+      realEstate.searchPropertyByAddress.mockResolvedValue({ owner1FirstName: "Homer" } as never);
+      realEstate.skipTraceByAddress.mockResolvedValue(personsHit as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: `skip ${EXPLICIT}`,
+      });
+
+      // Persisted the inbound WITH the resolved address — the store surfaces this as
+      // lastResolvedAddress / the ordinal list, so a following bare "skip" hits EXPLICIT.
+      expect(memory.appendInbound).toHaveBeenCalledWith(
+        expect.objectContaining({ body: `skip ${EXPLICIT}`, resolvedAddress: EXPLICIT })
+      );
+    });
+
+    it("'comps 123 ...' pulls comps for the TYPED address, not a historical one", async () => {
+      planFromParsed("comps");
+      realEstate.getCompsByAddress.mockResolvedValue(compsHit as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: `comps ${EXPLICIT}`,
+      });
+
+      expect(orchestrator.plan).toHaveBeenCalledWith(
+        expect.objectContaining({ parsedAddress: EXPLICIT })
+      );
+      expect(realEstate.getCompsByAddress).toHaveBeenCalledWith(EXPLICIT, DEFAULT_COMP_PARAMS);
+      expect(realEstate.getCompsByAddress).not.toHaveBeenCalledWith(C, expect.anything());
+      expect(memory.appendInbound).toHaveBeenCalledWith(
+        expect.objectContaining({ resolvedAddress: EXPLICIT })
+      );
+      expect(result.charged).toBe(3);
+    });
+
+    it("a BARE 'skip trace' (no typed address) still targets the most-recent C (JAK-154 intact)", async () => {
+      // No inline address → parsedAddress is null → the router's bare plan + the
+      // JAK-154 most-recent fallback still apply.
+      orchestrator.plan.mockResolvedValue({
+        intent: "skip_trace",
+        targetEntity: null,
+        specialists: skipTraceSpecialist(),
+        userFacingNote: "",
+      });
+      realEstate.skipTraceByAddress.mockResolvedValue(personsHit as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "skip trace",
+      });
+
+      expect(orchestrator.plan).toHaveBeenCalledWith(
+        expect.objectContaining({ parsedAddress: null })
+      );
+      expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith(C);
+      expect(realEstate.skipTraceByAddress).not.toHaveBeenCalledWith(EXPLICIT, expect.anything());
+    });
+  });
+
   describe("JAK-144 no confirm-before-spend (clean cancel)", () => {
     it("a bare 'Y' no longer triggers a paid specialist run (no pending to confirm)", async () => {
       // JAK-144 removed the skip-trace/comps confirmation, so there is no pending

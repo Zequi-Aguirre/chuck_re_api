@@ -306,6 +306,29 @@ describe("JakeOrchestrator (JAK-135 router)", () => {
       expect(plan.targetEntity).toBeNull();
     });
 
+    it("JAK-156: a real inline parsedAddress OUTRANKS the LLM's history targetAddress + ordinal", async () => {
+      // The texter typed "skip 123 Main St, Tampa FL" — the assistant parsed that
+      // inline address deterministically. Even if the router mis-resolves the target
+      // to an OLD address from history (targetAddress) or an ordinal into the list,
+      // the typed address must win so the RIGHT property is traced.
+      llm.classify.mockResolvedValue(
+        classification({
+          intent: "skip_trace",
+          targetAddress: "1 First St, Town, CA 90000", // history mis-read
+          addressOrdinal: 1, // history mis-read
+        })
+      );
+
+      const plan = await orchestrator.plan({
+        phone: "+15559990000",
+        message: "skip 123 Main St, Tampa, FL 33601",
+        parsedAddress: "123 Main St, Tampa, FL 33601",
+        isAffirmative: false,
+      });
+
+      expect(plan.targetEntity).toBe("123 Main St, Tampa, FL 33601");
+    });
+
     it("prefers an explicit new address over an ordinal, and falls back to the parsed address", async () => {
       llm.classify.mockResolvedValue(
         classification({ intent: "property_report", targetAddress: "42 Galaxy Way, Town, CA 90000", addressOrdinal: 1 })

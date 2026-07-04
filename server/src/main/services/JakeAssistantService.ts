@@ -9,7 +9,7 @@ import { TextJakeCustomerService } from "../ghlEnrichment/customers/TextJakeCust
 import { ConversationMemoryService } from "../ghlEnrichment/conversation/ConversationMemoryService.ts";
 import { LookupRow } from "../ghlEnrichment/conversation/ConversationTypes.ts";
 import { TextJakeCustomer } from "../ghlEnrichment/customers/TextJakeCustomerTypes.ts";
-import { normalizeInboundAddress } from "../util/address.ts";
+import { parseCommandAddress } from "../util/address.ts";
 import { JakeInboundMessage, JakeInboundResult, JakeTextMode } from "../types/Jake.ts";
 import {
     RealEstateApiAddress,
@@ -168,10 +168,18 @@ export class JakeAssistantService {
             return this.replyAccountHeld(input, route, customer, phone);
         }
 
-        const address = normalizeInboundAddress(input.message);
+        // JAK-156: parse the address whether it's bare ("123 Main St, Tampa FL") OR
+        // typed INSIDE a command ("skip 123 Main St, Tampa FL", "comps 123 ..."). The
+        // command-aware parser strips a leading command word before parsing, so an
+        // explicitly-typed address is captured instead of being discarded and the
+        // target silently resolved from OLD conversation history. A bare address with
+        // no command word still parses exactly as before (the report path is intact).
+        const address = parseCommandAddress(input.message);
 
         // 3. Persist EVERY inbound message in ordered per-phone memory (JAK-134),
-        //    with the address we resolved from it (null when it wasn't one). The
+        //    with the address we resolved from it (null when it wasn't one). A typed
+        //    inline address is recorded here too, so it becomes the new MOST RECENT
+        //    address (JAK-154) and enters the ordinal list for later references. The
         //    returned id links any resulting lookup snapshot back to this message.
         const inboundId = await this.rememberInbound(customer, phone, input.message, address, route);
 
