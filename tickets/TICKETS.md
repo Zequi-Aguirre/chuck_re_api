@@ -37,7 +37,7 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-152** (P3) [LATER] Onboarding: white-glove + self-serve field-mapping guide — depends: JAK-105
 - [ ] **JAK-153** (P3) [LATER] Privacy Policy + Terms pages for Jake
 
-## Done (29)
+## Done (30)
 - [x] **JAK-100** (P0) Project ticket store (SQLite in-repo)
 - [x] **JAK-101** (P0) GHL app scaffolding + Doppler config + env helper — depends: JAK-100
 - [x] **JAK-102** (P0) Encrypted connection/credential store — depends: JAK-101
@@ -67,3 +67,4 @@ Epic: `ghl-enrichment`
 - [x] **JAK-147** (P0) Sync text customer to Jake GHL sub-account + set 'text Jake' approval field — depends: JAK-146, JAK-104, JAK-102, JAK-110
 - [x] **JAK-148** (P0) Two-level hold for text customers (soft on-hold + hard deactivate) with GHL 'text Jake' field flip — depends: JAK-147, JAK-146, JAK-110
 - [x] **JAK-154** (P0) Bare skip-trace/comps default to the MOST RECENT address (fix: re-ran an older/already-handled property) — depends: JAK-135, JAK-138, JAK-145
+- [x] **JAK-156** (P0) Explicit address typed inside a skip/comps command targets THAT address (not a historical one) — depends: JAK-135, JAK-154, JAK-145

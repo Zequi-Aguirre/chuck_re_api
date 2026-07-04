@@ -95,9 +95,11 @@ export class JakeOrchestrator {
 
   /**
    * Resolve the concrete entity the plan acts on. property_report, skip_trace
-   * (JAK-136), AND comps (JAK-137) all act on an address: prefer a fresh explicit
-   * address, else an ordinal reference into the resolved-address list (out-of-range
-   * → null so the assistant can clarify), else the deterministically-parsed address.
+   * (JAK-136), AND comps (JAK-137) all act on an address. Precedence: a REAL
+   * deterministically-parsed INLINE address typed in this message wins first
+   * (JAK-156 — even a "skip {address}" / "comps {address}" command), then a fresh
+   * explicit address from the LLM, then an ordinal reference into the resolved-address
+   * list (out-of-range → null so the assistant can clarify), else the parsed address.
    * When none resolves here, the assistant falls back to the last resolved address
    * at execution time (e.g. a bare "pull comps"). report_refresh's target is the
    * last address, also resolved by the assistant. chitchat carries no target.
@@ -109,6 +111,15 @@ export class JakeOrchestrator {
     input: OrchestratorInput
   ): string | null {
     if (intent !== "property_report" && intent !== "skip_trace" && intent !== "comps") return null;
+
+    // JAK-156: a REAL, deterministically-parsed INLINE address the texter typed in
+    // THIS message ("skip 123 Main St, Tampa FL") is authoritative — it OUTRANKS the
+    // LLM's history-derived targetAddress/ordinal. Without this, a typed address loses
+    // to an OLD address the router picked from conversation history, and the wrong
+    // property gets skip-traced / comped. This also hardens the bare case: an LLM
+    // mis-read ordinal can't override the JAK-154 most-recent fallback, because a bare
+    // command carries no parsedAddress and this branch simply doesn't fire.
+    if (input.parsedAddress) return input.parsedAddress;
 
     if (classification.targetAddress) return classification.targetAddress;
 
