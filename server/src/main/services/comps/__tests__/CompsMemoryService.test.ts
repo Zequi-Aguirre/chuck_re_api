@@ -34,7 +34,7 @@ describe("CompsMemoryService (JAK-137)", () => {
     target_key: compsCacheKey(TARGET, PARAMS),
     params: PARAMS,
     comps_record: { comps: [] },
-    report_text: "Comparable sales\n\nEvery lead deserves a Jake Report.\nGoTextJake.com/crm",
+    report_text: "Comparable sales\n\nEvery Lead Deserves Jake.\nGoTextJake.com/CRM",
     fetched_at: fetchedAt,
     created_at: fetchedAt,
   });

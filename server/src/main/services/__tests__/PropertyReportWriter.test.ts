@@ -143,8 +143,8 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
             expect(system.content).toMatch(/NO EMOJIS/);
             expect(system.content).toMatch(/only the exact values/i);
             expect(system.content).toMatch(/never invent/i);
-            expect(system.content).toContain("Every lead deserves a Jake Report.");
-            expect(system.content).toContain("GoTextJake.com/crm");
+            expect(system.content).toContain("Every Lead Deserves Jake.");
+            expect(system.content).toContain("GoTextJake.com/CRM");
             // The editable style is present too:
             expect(system.content).toContain("Jake Property Report");
             expect(system.content).toContain("Estimated Market Value");
@@ -197,26 +197,55 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
             // ...but the guardrails are STILL appended by code and cannot be edited away.
             expect(system).toMatch(/NO EMOJIS/);
             expect(system).toMatch(/never invent/i);
-            expect(system).toContain("Every lead deserves a Jake Report.");
-            expect(system).toContain("GoTextJake.com/crm");
+            expect(system).toContain("Every Lead Deserves Jake.");
+            expect(system).toContain("GoTextJake.com/CRM");
         });
     });
 
-    describe("canonical footer (JAK-157)", () => {
+    describe("canonical footer (JAK-158)", () => {
         it("is EXACTLY the new two-line footer: tagline then URL, emoji-free, URL last with no trailing punctuation", () => {
             expect(PropertyReportWriter.FOOTER).toBe(
-                "Every lead deserves a Jake Report.\nGoTextJake.com/crm"
+                "Every Lead Deserves Jake.\nGoTextJake.com/CRM"
             );
 
             const lines = PropertyReportWriter.FOOTER.split("\n");
             expect(lines).toHaveLength(2);
             // Line 1 = the tagline, WITH its period.
-            expect(lines[0]).toBe("Every lead deserves a Jake Report.");
+            expect(lines[0]).toBe("Every Lead Deserves Jake.");
             // Line 2 = the URL, in brand casing, as the LAST line with NO trailing punctuation.
-            expect(lines[1]).toBe("GoTextJake.com/crm");
+            expect(lines[1]).toBe("GoTextJake.com/CRM");
             expect(lines[1]).not.toMatch(/[.!?/]$/);
+            // Exactly ONE newline between the two lines — a real line break, not a blank line.
+            expect(PropertyReportWriter.FOOTER).not.toContain("\n\n");
+            // No trailing/leading whitespace on either line.
+            expect(PropertyReportWriter.FOOTER).toBe(PropertyReportWriter.FOOTER.trim());
             // Emoji-free.
             expect(PropertyReportWriter.FOOTER).not.toMatch(EMOJI);
+        });
+
+        // JAK-158: Eric flagged the rendered spacing. Pin the ACTUAL outbound string
+        // so the footer renders as two clean lines — a single blank-line separator
+        // before it, a real newline between the two lines, and NO trailing space or
+        // blank line after it.
+        it("renders in the outbound message as two clean lines with clean spacing", async () => {
+            const { writer, llm } = makeWriter(DEFAULT_STYLE);
+            llm.generateText.mockResolvedValue(
+                "Jake Property Report\n\n742 Evergreen Terrace"
+            );
+
+            const out = await writer.write(fullData);
+
+            // Ends with EXACTLY the footer — no trailing space or newline after it.
+            expect(out.endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
+            expect(out).toBe(out.trimEnd());
+            // The footer is separated from the body by exactly ONE blank line (\n\n),
+            // never a double blank line.
+            expect(out).toContain("\n\nEvery Lead Deserves Jake.\nGoTextJake.com/CRM");
+            expect(out).not.toContain("\n\n\nEvery Lead Deserves Jake.");
+            // The two footer lines are joined by a single real newline (no blank line between).
+            expect(out).not.toContain("Every Lead Deserves Jake.\n\nGoTextJake.com/CRM");
+            // No trailing space on any line.
+            expect(out).not.toMatch(/ \n/);
         });
     });
 
@@ -225,7 +254,7 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
             const customStyle = "SUPER TERSE MODE: one line only, all caps.";
             const { writer, llm } = makeWriter(customStyle);
             llm.generateText.mockResolvedValue(
-                "742 EVERGREEN TERRACE\n\nEvery lead deserves a Jake Report.\nGoTextJake.com/crm"
+                "742 EVERGREEN TERRACE\n\nEvery Lead Deserves Jake.\nGoTextJake.com/CRM"
             );
 
             await writer.write(fullData);
@@ -244,13 +273,13 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
         it("strips a stray emoji the model slips in; footer survives", async () => {
             const { writer, llm } = makeWriter(DEFAULT_STYLE);
             llm.generateText.mockResolvedValue(
-                "Jake Property Report 🏠\n\n742 Evergreen Terrace\n\nEvery lead deserves a Jake Report.\nGoTextJake.com/crm"
+                "Jake Property Report 🏠\n\n742 Evergreen Terrace\n\nEvery Lead Deserves Jake.\nGoTextJake.com/CRM"
             );
 
             const out = await writer.write(fullData);
 
             expect(out).not.toMatch(EMOJI);
-            expect(out).toContain("GoTextJake.com");
+            expect(out.endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
         });
 
         it("forces the exact footer even if the model omits it entirely", async () => {
@@ -259,17 +288,33 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
 
             const out = await writer.write(fullData);
 
-            expect(out.endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
+            expect(out.endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
         });
 
         it("does not double the footer when the model already ended with it", async () => {
             const { writer, llm } = makeWriter(DEFAULT_STYLE);
+            llm.generateText.mockResolvedValue(
+                "742 Evergreen Terrace\n\nEvery Lead Deserves Jake.\nGoTextJake.com/CRM"
+            );
+
+            const out = await writer.write(fullData);
+
+            expect(out.match(/GoTextJake\.com/g)?.length).toBe(1);
+        });
+
+        it("normalizes an echoed OLD JAK-157 footer to the new JAK-158 footer", async () => {
+            const { writer, llm } = makeWriter(DEFAULT_STYLE);
+            // Model echoes the prior tagline/URL — the strip-regex must remove it
+            // and append the new footer, never leaving the old copy in the message.
             llm.generateText.mockResolvedValue(
                 "742 Evergreen Terrace\n\nEvery lead deserves a Jake Report.\nGoTextJake.com/crm"
             );
 
             const out = await writer.write(fullData);
 
+            expect(out.endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
+            expect(out).not.toContain("Every lead deserves a Jake Report.");
+            expect(out).not.toContain("GoTextJake.com/crm");
             expect(out.match(/GoTextJake\.com/g)?.length).toBe(1);
         });
     });
@@ -282,7 +327,7 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
             const out = await writer.write(fullData);
 
             expect(out).not.toMatch(EMOJI);
-            expect(out.endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
+            expect(out.endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
 
             // Rendered from the SAME verified data.
             expect(out).toContain("Jake Property Report");
@@ -315,7 +360,7 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
             const out = await writer.write(fullData);
 
             expect(out).toContain("Jake Property Report");
-            expect(out).toContain("GoTextJake.com");
+            expect(out.endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
         });
 
         it("is used — WITHOUT ever calling the seam — when the provider has no key", async () => {
@@ -326,7 +371,7 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
             expect(llm.generateText).not.toHaveBeenCalled();
             expect(out).toContain("Jake Property Report");
             expect(out).toContain("742 Evergreen Terrace");
-            expect(out.endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
+            expect(out.endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
         });
 
         it("omits sections/fields with no data and never prints null/undefined", async () => {
@@ -345,7 +390,7 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
             expect(out).not.toContain("History");
             expect(out).not.toContain("Additional Information");
             expect(out).toContain("Ownership\n• Jane Doe");
-            expect(out.endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
+            expect(out.endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
             expect(out).not.toMatch(EMOJI);
         });
 
@@ -371,7 +416,7 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
             expect(out).not.toMatch(/Judgment/); // judgment:false -> absent
             expect(out).not.toMatch(/\bfalse\b|\btrue\b|null|undefined/);
             expect(out).not.toMatch(EMOJI);
-            expect(out.endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
+            expect(out.endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
         });
 
         it("shows one reassuring line when every distress/lien flag is a known false (JAK-132)", async () => {
@@ -411,7 +456,7 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
         it("resolves the PROPERTY_REPORT surface's selection and hands exactly it to the resolver", async () => {
             const selection: LlmSelection = { provider: "anthropic", model: "claude-sonnet-4-6" };
             const { writer, llm, resolver, settings } = makeWriter(DEFAULT_STYLE, { selection });
-            llm.generateText.mockResolvedValue("Jake Property Report\n\nEvery lead deserves a Jake Report.\nGoTextJake.com/crm");
+            llm.generateText.mockResolvedValue("Jake Property Report\n\nEvery Lead Deserves Jake.\nGoTextJake.com/CRM");
 
             await writer.write(fullData);
 
