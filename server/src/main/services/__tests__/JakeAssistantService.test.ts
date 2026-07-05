@@ -68,7 +68,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     params: DEFAULT_COMP_PARAMS,
     comps_record: { comps: [{ lastSaleAmount: 400000 }] },
     report_text:
-      "Comparable sales for 742 Evergreen Terrace\n123 Nearby St — $400,000\n\nEvery lead deserves a Jake Report.\nGoTextJake.com/crm",
+      "Comparable sales for 742 Evergreen Terrace\n123 Nearby St — $400,000\n\nEvery Lead Deserves Jake.\nGoTextJake.com/CRM",
     fetched_at: new Date("2026-07-01T00:00:00Z"),
     created_at: new Date("2026-07-01T00:00:00Z"),
     ...over,
@@ -93,7 +93,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     target_key: "742 evergreen terrace, springfield, il 62704",
     trace_record: { match: true },
     report_text:
-      "Owner of 742 Evergreen Terrace: Homer Simpson\n\nPhone\n• +15550101\n\nEvery lead deserves a Jake Report.\nGoTextJake.com/crm",
+      "Owner of 742 Evergreen Terrace: Homer Simpson\n\nPhone\n• +15550101\n\nEvery Lead Deserves Jake.\nGoTextJake.com/CRM",
     fetched_at: new Date("2026-07-01T00:00:00Z"),
     created_at: new Date("2026-07-01T00:00:00Z"),
     ...over,
@@ -127,7 +127,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     order_index: 1,
     property_id: "p1",
     property_record: { address: "123 Main St, Springfield, IL 62704" },
-    report_text: "Jake Property Report\n123 Main St\n\nEvery lead deserves a Jake Report.\nGoTextJake.com/crm",
+    report_text: "Jake Property Report\n123 Main St\n\nEvery Lead Deserves Jake.\nGoTextJake.com/CRM",
     fetched_at: new Date("2026-07-01T00:00:00Z"),
     created_at: new Date("2026-07-01T00:00:00Z"),
     ...over,
@@ -232,7 +232,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     skipTrace.recordTrace.mockResolvedValue(skipTraceRow());
     skipTraceSettings.costOfSkipTrace.mockResolvedValue(3);
     skipTraceWriter.write.mockResolvedValue(
-      "Owner of 742 Evergreen Terrace: Homer Simpson\n\nPhone\n• +15550101\n\nEvery lead deserves a Jake Report.\nGoTextJake.com/crm"
+      "Owner of 742 Evergreen Terrace: Homer Simpson\n\nPhone\n• +15550101\n\nEvery Lead Deserves Jake.\nGoTextJake.com/CRM"
     );
     credits.hasCreditsForSkipTrace.mockResolvedValue(true);
     credits.chargeForSkipTrace.mockResolvedValue({ ok: true, balanceAfter: 7, entries: [] });
@@ -248,7 +248,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     compsSettings.defaultParams.mockResolvedValue(DEFAULT_COMP_PARAMS);
     compsSettings.costOfComps.mockResolvedValue(3);
     compsWriter.write.mockResolvedValue(
-      "Comparable sales for 742 Evergreen Terrace\n123 Nearby St — $400,000\n\nEvery lead deserves a Jake Report.\nGoTextJake.com/crm"
+      "Comparable sales for 742 Evergreen Terrace\n123 Nearby St — $400,000\n\nEvery Lead Deserves Jake.\nGoTextJake.com/CRM"
     );
     credits.hasCreditsForComps.mockResolvedValue(true);
     credits.chargeForComps.mockResolvedValue({ ok: true, balanceAfter: 7, entries: [] });
@@ -783,7 +783,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(sent).toContain("123 Main St");
       expect(sent).toContain("already on record");
       expect(sent).toMatch(/reply ok for a fresh copy \(costs 1 credit\)/i);
-      expect(sent.endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
+      expect(sent.endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
       // No emojis in the re-served copy.
       expect(sent).not.toMatch(/\p{Extended_Pictographic}/u);
     });
@@ -926,7 +926,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(result.charged).toBe(0);
       expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
       const sent = (gateway.sendSms.mock.calls[0]![0] as { message: string }).message;
-      expect(sent.endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
+      expect(sent.endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
       expect(sent).not.toMatch(/\p{Extended_Pictographic}/u);
     });
   });
@@ -999,7 +999,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(sent()).toContain("Homer Simpson");
       // No "reply OK" prompt anymore.
       expect(sent().toLowerCase()).not.toContain("reply ok");
-      expect(sent().endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
+      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
       expect(sent()).not.toMatch(/\p{Extended_Pictographic}/u);
     });
 
@@ -1120,7 +1120,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(realEstate.skipTraceByAddress).not.toHaveBeenCalled();
       expect(credits.chargeForSkipTrace).not.toHaveBeenCalled();
       expect(sent()).toContain("3 credit");
-      expect(sent().endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
+      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
     });
 
     it("a run that finds NO contact info → no charge, no snapshot", async () => {
@@ -1138,7 +1138,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(result.charged).toBe(0);
       expect(skipTrace.recordTrace).not.toHaveBeenCalled();
       expect(sent().toLowerCase()).toContain("couldn't find");
-      expect(sent().endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
+      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
     });
 
     it("repeat trace within the free window → FREE re-serve, NO paid API, NO charge, NO prompt", async () => {
@@ -1159,7 +1159,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(sent()).toContain("Homer Simpson");
       expect(sent().toLowerCase()).toContain("already on record");
       expect(sent().toLowerCase()).not.toContain("reply ok");
-      expect(sent().endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
+      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
       // No pending offer is ever parked now.
       expect(skipTrace.setPending).not.toHaveBeenCalled();
     });
@@ -1346,7 +1346,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(result.charged).toBe(3);
       expect(comps.recordComps).toHaveBeenCalled();
       expect(sent().toLowerCase()).not.toContain("reply ok");
-      expect(sent().endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
+      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
       expect(sent()).not.toMatch(/\p{Extended_Pictographic}/u);
     });
 
@@ -1399,7 +1399,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(realEstate.getCompsByAddress).not.toHaveBeenCalled();
       expect(credits.chargeForComps).not.toHaveBeenCalled();
       expect(sent()).toContain("3 credit");
-      expect(sent().endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
+      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
     });
 
     it("a run that finds NO comparable sales → no charge, no snapshot", async () => {
@@ -1417,7 +1417,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(result.charged).toBe(0);
       expect(comps.recordComps).not.toHaveBeenCalled();
       expect(sent().toLowerCase()).toContain("couldn't find");
-      expect(sent().endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
+      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
     });
 
     it("repeat request (same address + params) within the free window → FREE re-serve, NO paid API, NO charge, NO prompt", async () => {
@@ -1439,7 +1439,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       // Free copy re-served verbatim with an "on record, free" note — NO OK prompt.
       expect(sent().toLowerCase()).toContain("already on record");
       expect(sent().toLowerCase()).not.toContain("reply ok");
-      expect(sent().endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
+      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
       // No pending offer is ever parked now.
       expect(comps.setPending).not.toHaveBeenCalled();
     });
@@ -1497,7 +1497,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(sent()).toContain(`1. ${A1}`);
       expect(sent()).toContain(`2. ${A2}`);
       expect(sent().toLowerCase()).toContain("which one");
-      expect(sent().endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
+      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
       expect(sent()).not.toMatch(/\p{Extended_Pictographic}/u);
     });
 
@@ -1973,7 +1973,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(sent()).toContain("Property report (2 credits)");
       expect(sent()).toContain("skip trace (4 credits)");
       expect(sent()).toContain("comps (6 credits)");
-      expect(sent().endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
+      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
       expect(sent()).not.toMatch(/\p{Extended_Pictographic}/u);
     });
 

@@ -34,7 +34,7 @@ export class CompsReportWriter {
   private static readonly MAX_TOKENS = 500;
 
   /** Footer the reply always ends with (two lines). Same canonical footer. */
-  static readonly FOOTER = "Every lead deserves a Jake Report.\nGoTextJake.com/crm";
+  static readonly FOOTER = "Every Lead Deserves Jake.\nGoTextJake.com/CRM";
 
   /** Persona line prepended to every system prompt. */
   private static readonly PERSONA =
@@ -52,8 +52,8 @@ export class CompsReportWriter {
     "- Use ONLY the exact values in the provided comps data. NEVER invent, guess, or alter any comp, address, sale price, or figure. If a value is not present, do not mention it at all. Never print null, undefined, or blanks.",
     "- State the search parameters that were used (radius, number of comps, timeframe, bed/bath/sqft tolerance) — they are provided.",
     "- End the message with EXACTLY these two lines and nothing after them:",
-    "Every lead deserves a Jake Report.",
-    "GoTextJake.com/crm",
+    "Every Lead Deserves Jake.",
+    "GoTextJake.com/CRM",
   ].join("\n");
 
   constructor(
@@ -210,7 +210,7 @@ export class CompsReportWriter {
     const trimmed = text.trimEnd();
     if (trimmed.endsWith(CompsReportWriter.FOOTER)) return trimmed;
     const withoutTail = trimmed
-      .replace(/\n*(every lead deserves a jake report|get more property info)[\s\S]*$/i, "")
+      .replace(/\n*(every lead deserves|get more property info)[\s\S]*$/i, "")
       .trimEnd();
     return `${withoutTail}\n\n${CompsReportWriter.FOOTER}`;
   }

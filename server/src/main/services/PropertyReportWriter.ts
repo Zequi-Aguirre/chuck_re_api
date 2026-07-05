@@ -41,7 +41,7 @@ export class PropertyReportWriter {
     private static readonly MAX_TOKENS = 500;
 
     /** Footer the report always ends with (two lines). */
-    static readonly FOOTER = "Every lead deserves a Jake Report.\nGoTextJake.com/crm";
+    static readonly FOOTER = "Every Lead Deserves Jake.\nGoTextJake.com/CRM";
 
     /** Persona line prepended to every system prompt. */
     private static readonly PERSONA =
@@ -58,8 +58,8 @@ export class PropertyReportWriter {
         "- Write plain text only. NO EMOJIS, pictographs, or decorative symbols. The only non-letter symbols allowed are the bullet characters, $, %, |, commas, and periods.",
         "- Use ONLY the exact values in the provided property data. NEVER invent, guess, estimate, or alter any number, name, price, date, or fact. If a value is not present, do not mention it at all. Never print null, undefined, or blanks.",
         "- End the message with EXACTLY these two lines and nothing after them:",
-        "Every lead deserves a Jake Report.",
-        "GoTextJake.com/crm",
+        "Every Lead Deserves Jake.",
+        "GoTextJake.com/CRM",
     ].join("\n");
 
     constructor(
@@ -300,8 +300,10 @@ export class PropertyReportWriter {
         const withoutTail = trimmed
             // Drop a trailing footer-ish block if the model emitted a
             // partial/altered one, so we never double it up. Matches the current
-            // tagline and the legacy "Get more property info" one during rollout.
-            .replace(/\n*(every lead deserves a jake report|get more property info)[\s\S]*$/i, "")
+            // tagline ("Every Lead Deserves Jake."), the prior JAK-157 tagline
+            // ("Every lead deserves a Jake Report."), and the legacy
+            // "Get more property info" one during rollout.
+            .replace(/\n*(every lead deserves|get more property info)[\s\S]*$/i, "")
             .trimEnd();
         return `${withoutTail}\n\n${PropertyReportWriter.FOOTER}`;
     }
