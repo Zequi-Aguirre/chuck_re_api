@@ -143,8 +143,8 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
             expect(system.content).toMatch(/NO EMOJIS/);
             expect(system.content).toMatch(/only the exact values/i);
             expect(system.content).toMatch(/never invent/i);
-            expect(system.content).toContain("Get more property info");
-            expect(system.content).toContain("GoTextJake.com");
+            expect(system.content).toContain("Every lead deserves a Jake Report.");
+            expect(system.content).toContain("GoTextJake.com/crm");
             // The editable style is present too:
             expect(system.content).toContain("Jake Property Report");
             expect(system.content).toContain("Estimated Market Value");
@@ -197,8 +197,26 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
             // ...but the guardrails are STILL appended by code and cannot be edited away.
             expect(system).toMatch(/NO EMOJIS/);
             expect(system).toMatch(/never invent/i);
-            expect(system).toContain("Get more property info");
-            expect(system).toContain("GoTextJake.com");
+            expect(system).toContain("Every lead deserves a Jake Report.");
+            expect(system).toContain("GoTextJake.com/crm");
+        });
+    });
+
+    describe("canonical footer (JAK-157)", () => {
+        it("is EXACTLY the new two-line footer: tagline then URL, emoji-free, URL last with no trailing punctuation", () => {
+            expect(PropertyReportWriter.FOOTER).toBe(
+                "Every lead deserves a Jake Report.\nGoTextJake.com/crm"
+            );
+
+            const lines = PropertyReportWriter.FOOTER.split("\n");
+            expect(lines).toHaveLength(2);
+            // Line 1 = the tagline, WITH its period.
+            expect(lines[0]).toBe("Every lead deserves a Jake Report.");
+            // Line 2 = the URL, in brand casing, as the LAST line with NO trailing punctuation.
+            expect(lines[1]).toBe("GoTextJake.com/crm");
+            expect(lines[1]).not.toMatch(/[.!?/]$/);
+            // Emoji-free.
+            expect(PropertyReportWriter.FOOTER).not.toMatch(EMOJI);
         });
     });
 
@@ -207,7 +225,7 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
             const customStyle = "SUPER TERSE MODE: one line only, all caps.";
             const { writer, llm } = makeWriter(customStyle);
             llm.generateText.mockResolvedValue(
-                "742 EVERGREEN TERRACE\n\nGet more property info\nGoTextJake.com"
+                "742 EVERGREEN TERRACE\n\nEvery lead deserves a Jake Report.\nGoTextJake.com/crm"
             );
 
             await writer.write(fullData);
@@ -226,7 +244,7 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
         it("strips a stray emoji the model slips in; footer survives", async () => {
             const { writer, llm } = makeWriter(DEFAULT_STYLE);
             llm.generateText.mockResolvedValue(
-                "Jake Property Report 🏠\n\n742 Evergreen Terrace\n\nGet more property info\nGoTextJake.com"
+                "Jake Property Report 🏠\n\n742 Evergreen Terrace\n\nEvery lead deserves a Jake Report.\nGoTextJake.com/crm"
             );
 
             const out = await writer.write(fullData);
@@ -241,13 +259,13 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
 
             const out = await writer.write(fullData);
 
-            expect(out.endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+            expect(out.endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
         });
 
         it("does not double the footer when the model already ended with it", async () => {
             const { writer, llm } = makeWriter(DEFAULT_STYLE);
             llm.generateText.mockResolvedValue(
-                "742 Evergreen Terrace\n\nGet more property info\nGoTextJake.com"
+                "742 Evergreen Terrace\n\nEvery lead deserves a Jake Report.\nGoTextJake.com/crm"
             );
 
             const out = await writer.write(fullData);
@@ -264,7 +282,7 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
             const out = await writer.write(fullData);
 
             expect(out).not.toMatch(EMOJI);
-            expect(out.endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+            expect(out.endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
 
             // Rendered from the SAME verified data.
             expect(out).toContain("Jake Property Report");
@@ -308,7 +326,7 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
             expect(llm.generateText).not.toHaveBeenCalled();
             expect(out).toContain("Jake Property Report");
             expect(out).toContain("742 Evergreen Terrace");
-            expect(out.endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+            expect(out.endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
         });
 
         it("omits sections/fields with no data and never prints null/undefined", async () => {
@@ -327,7 +345,7 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
             expect(out).not.toContain("History");
             expect(out).not.toContain("Additional Information");
             expect(out).toContain("Ownership\n• Jane Doe");
-            expect(out.endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+            expect(out.endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
             expect(out).not.toMatch(EMOJI);
         });
 
@@ -353,7 +371,7 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
             expect(out).not.toMatch(/Judgment/); // judgment:false -> absent
             expect(out).not.toMatch(/\bfalse\b|\btrue\b|null|undefined/);
             expect(out).not.toMatch(EMOJI);
-            expect(out.endsWith("Get more property info\nGoTextJake.com")).toBe(true);
+            expect(out.endsWith("Every lead deserves a Jake Report.\nGoTextJake.com/crm")).toBe(true);
         });
 
         it("shows one reassuring line when every distress/lien flag is a known false (JAK-132)", async () => {
@@ -393,7 +411,7 @@ describe("PropertyReportWriter (JAK-130/131)", () => {
         it("resolves the PROPERTY_REPORT surface's selection and hands exactly it to the resolver", async () => {
             const selection: LlmSelection = { provider: "anthropic", model: "claude-sonnet-4-6" };
             const { writer, llm, resolver, settings } = makeWriter(DEFAULT_STYLE, { selection });
-            llm.generateText.mockResolvedValue("Jake Property Report\n\nGet more property info\nGoTextJake.com");
+            llm.generateText.mockResolvedValue("Jake Property Report\n\nEvery lead deserves a Jake Report.\nGoTextJake.com/crm");
 
             await writer.write(fullData);
 

@@ -30,7 +30,7 @@ describe("SkipTraceMemoryService (JAK-136)", () => {
     normalized_target: "742 Evergreen Terrace",
     target_key: "742 evergreen terrace",
     trace_record: { match: true },
-    report_text: "Owner: Homer\n\nGet more property info\nGoTextJake.com",
+    report_text: "Owner: Homer\n\nEvery lead deserves a Jake Report.\nGoTextJake.com/crm",
     fetched_at: fetchedAt,
     created_at: fetchedAt,
   });
