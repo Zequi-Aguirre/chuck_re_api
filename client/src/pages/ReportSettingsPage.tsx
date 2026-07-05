@@ -109,7 +109,7 @@ export function ReportSettingsPage() {
         <AlertTitle>Always enforced automatically</AlertTitle>
         No matter what you write here, Jake will never use emojis, will use only the verified
         property data (never inventing values), and always ends every report with
-        “Get more property info / GoTextJake.com”. These rules can’t be edited away.
+        “Every lead deserves a Jake Report. / GoTextJake.com/crm”. These rules can’t be edited away.
       </Alert>
 
       {error && (

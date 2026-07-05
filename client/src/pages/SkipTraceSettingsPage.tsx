@@ -136,7 +136,7 @@ export function SkipTraceSettingsPage() {
       <Alert severity="info" sx={{ mb: 2 }}>
         <AlertTitle>Always enforced automatically</AlertTitle>
         No matter what you write here, Jake still uses only the contact values the trace returned,
-        never invents a name or number, sends no emojis, and ends with the GoTextJake.com footer.
+        never invents a name or number, sends no emojis, and ends with the GoTextJake.com/crm footer.
         These guardrails are enforced by the server and can’t be edited away.
       </Alert>
 
