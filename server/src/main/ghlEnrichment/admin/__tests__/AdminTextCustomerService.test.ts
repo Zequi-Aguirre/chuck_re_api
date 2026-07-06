@@ -322,6 +322,52 @@ describe("AdminTextCustomerService", () => {
     expect(byId.get("cust-2")?.creditBalance).toBe(0);
   });
 
+  // --- Per-feature grant + balances (JAK-161/JAK-162) -----------------------
+
+  it("grants into ONE bucket only — a skiptrace grant never touches report/comps", async () => {
+    customers.resolveByPhone.mockResolvedValue(customer());
+
+    const result = await service.grantCredits("+17865274077", 4, "manual_grant", "skiptrace");
+
+    // The grant landed in the skiptrace bucket; the other two stay at 0.
+    expect(result.entry.credit_type).toBe("skiptrace");
+    expect(result.balance).toBe(4);
+    expect(result.customer.credits).toEqual({ report: 0, skiptrace: 4, comps: 0 });
+    expect(await credits.getBalance("cust-1", "skiptrace")).toBe(4);
+    expect(await credits.getBalance("cust-1", "report")).toBe(0);
+    expect(await credits.getBalance("cust-1", "comps")).toBe(0);
+  });
+
+  it("defaults an untyped grant to the report bucket (back-compat)", async () => {
+    customers.resolveByPhone.mockResolvedValue(customer());
+
+    const result = await service.grantCredits("+17865274077", 5);
+
+    expect(result.entry.credit_type).toBe("report");
+    expect(result.customer.credits.report).toBe(5);
+    expect(result.customer.credits.skiptrace).toBe(0);
+  });
+
+  it("list surfaces all three per-feature balances per customer (JAK-161)", async () => {
+    customerStore.listAll.mockResolvedValue([
+      customerRow({ id: "cust-1", phone: "+17865274077" }),
+      customerRow({ id: "cust-2", phone: "+15559998888" }),
+    ]);
+    // cust-1 has distinct balances in each bucket; cust-2 has none yet.
+    await ledger.grant({ locationId: "cust-1", creditType: "report", amount: 8, reason: "manual_grant" });
+    await ledger.grant({ locationId: "cust-1", creditType: "skiptrace", amount: 3, reason: "manual_grant" });
+    await ledger.grant({ locationId: "cust-1", creditType: "comps", amount: 1, reason: "manual_grant" });
+
+    const list = await service.list();
+
+    const byId = new Map(list.map((c) => [c.id, c]));
+    expect(byId.get("cust-1")?.credits).toEqual({ report: 8, skiptrace: 3, comps: 1 });
+    // Legacy single balance still mirrors the report bucket.
+    expect(byId.get("cust-1")?.creditBalance).toBe(8);
+    // A customer with no ledger rows reads all three buckets as 0, not undefined.
+    expect(byId.get("cust-2")?.credits).toEqual({ report: 0, skiptrace: 0, comps: 0 });
+  });
+
   // --- Two-level hold status changes (JAK-148) ------------------------------
 
   describe("changeStatus (JAK-148)", () => {

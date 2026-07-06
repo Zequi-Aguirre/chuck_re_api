@@ -1,6 +1,7 @@
 import { injectable } from "tsyringe";
 import { CreditLedgerRow, CreditLedgerStore } from "../metering/CreditLedgerStore";
-import { CreditService } from "../metering/CreditService";
+import { CreditBalances, CreditService } from "../metering/CreditService";
+import { CREDIT_TYPES, CreditType } from "../metering/CreditCosts";
 import { normalizePhone, TextJakeCustomerService } from "../customers/TextJakeCustomerService";
 import { TextJakeCustomerRow, TextJakeCustomerStore } from "../customers/TextJakeCustomerStore";
 import { TextCustomerStatus } from "../customers/TextJakeCustomerTypes";
@@ -78,12 +79,22 @@ export class AdminTextCustomerService {
    * account key, so a customer with no ledger activity yet reads as balance 0.
    */
   async list(): Promise<AdminTextCustomerView[]> {
-    const [rows, balances] = await Promise.all([
+    // One customer scan + one balance scan PER bucket (JAK-161: report / skiptrace
+    // / comps), all in parallel, folded in memory — still no per-customer query.
+    const [rows, ...perType] = await Promise.all([
       this.customerStore.listAll(),
-      this.ledger.listBalances(),
+      ...CREDIT_TYPES.map((type) => this.ledger.listBalances(type)),
     ]);
-    const balanceByAccount = new Map(balances.map((b) => [b.location_id, b.balance]));
-    return rows.map((row) => toView(row, balanceByAccount.get(row.id) ?? 0));
+    // account id → { report, skiptrace, comps }, defaulting each unseen bucket to 0.
+    const byAccount = new Map<string, CreditBalances>();
+    CREDIT_TYPES.forEach((type, i) => {
+      for (const b of perType[i]) {
+        const bucket = byAccount.get(b.location_id) ?? zeroBalances();
+        bucket[type] = b.balance;
+        byAccount.set(b.location_id, bucket);
+      }
+    });
+    return rows.map((row) => toView(row, byAccount.get(row.id) ?? zeroBalances()));
   }
 
   /**
@@ -110,8 +121,8 @@ export class AdminTextCustomerService {
     await this.credits.seedNewCustomer(row.id);
     const sync = await this.sync.syncCustomer({ phone, ...profileOf(input) });
     const finalRow = await this.persistContactId(row, sync);
-    const balance = await this.credits.getBalance(finalRow.id, "report");
-    return { customer: toView(finalRow, balance), sync };
+    const credits = await this.credits.getBalances(finalRow.id);
+    return { customer: toView(finalRow, credits), sync };
   }
 
   /**
@@ -129,8 +140,8 @@ export class AdminTextCustomerService {
     if (!row) return null;
     const sync = await this.sync.syncCustomer({ phone, ...profileOf(input) });
     const finalRow = await this.persistContactId(row, sync);
-    const balance = await this.credits.getBalance(finalRow.id);
-    return { customer: toView(finalRow, balance), sync };
+    const credits = await this.credits.getBalances(finalRow.id);
+    return { customer: toView(finalRow, credits), sync };
   }
 
   /**
@@ -159,22 +170,29 @@ export class AdminTextCustomerService {
 
   /**
    * Grant (or, via a negative amount + `adjustment`, correct) a text customer's
-   * credit balance by their sender phone — the tier-1 beta top-up path. The
-   * customer is resolved-or-created first, so an admin can credit a number that
-   * hasn't texted in yet. Credits are granted against the customer's OWN
-   * credit-account id, never a connection locationId. Returns the new balance.
+   * credit balance in ONE feature bucket (JAK-161/JAK-162) — report, skiptrace,
+   * or comps — by their sender phone, the tier-1 beta top-up path. The customer
+   * is resolved-or-created first, so an admin can credit a number that hasn't
+   * texted in yet. Credits are granted against the customer's OWN credit-account
+   * id, never a connection locationId. `type` defaults to report so pre-split
+   * callers are unchanged. Returns the granted bucket's new balance plus the
+   * customer view carrying all three balances.
    */
   async grantCredits(
     phone: string,
     amount: number,
-    reason?: string
+    reason?: string,
+    type: CreditType = "report"
   ): Promise<TextCustomerGrantResult> {
     const customer = await this.customers.resolveByPhone(phone);
-    const entry = await this.credits.grantCredits(
+    const entry = await this.credits.grant(
       customer.creditAccountId,
+      type,
       amount,
       reason === "adjustment" ? "adjustment" : "manual_grant"
     );
+    // Read back all three so the card refreshes every bucket, not just the one edited.
+    const credits = await this.credits.getBalances(customer.creditAccountId);
     return {
       customer: {
         id: customer.id,
@@ -184,7 +202,8 @@ export class AdminTextCustomerService {
         email: customer.email,
         ghlContactId: customer.ghlContactId,
         status: customer.status,
-        creditBalance: entry.balance_after,
+        creditBalance: credits.report,
+        credits,
         createdAt: customer.createdAt,
         lastSeenAt: customer.modifiedAt,
       },
@@ -226,9 +245,14 @@ export class AdminTextCustomerService {
 
     const finalRow = sync ? await this.persistContactId(row, sync) : row;
     // Read-only balance fetch for the view — the ledger is never mutated here.
-    const balance = await this.credits.getBalance(finalRow.id);
-    return { customer: toView(finalRow, balance), sync };
+    const credits = await this.credits.getBalances(finalRow.id);
+    return { customer: toView(finalRow, credits), sync };
   }
+}
+
+/** A fresh all-zero per-bucket balance set — the default for a customer with no ledger yet. */
+function zeroBalances(): CreditBalances {
+  return { report: 0, skiptrace: 0, comps: 0 };
 }
 
 /** The name/email slice of an input, for the GHL sync payload (phone added by caller). */
@@ -240,8 +264,8 @@ function profileOf(input: TextCustomerInput): {
   return { firstName: input.firstName, lastName: input.lastName, email: input.email };
 }
 
-/** Fold a raw customer row + its resolved balance into the safe admin view. */
-function toView(row: TextJakeCustomerRow, creditBalance: number): AdminTextCustomerView {
+/** Fold a raw customer row + its three resolved balances into the safe admin view. */
+function toView(row: TextJakeCustomerRow, credits: CreditBalances): AdminTextCustomerView {
   return {
     id: row.id,
     phone: row.phone,
@@ -251,7 +275,9 @@ function toView(row: TextJakeCustomerRow, creditBalance: number): AdminTextCusto
     ghlContactId: row.ghl_contact_id,
     // Two-level hold state (JAK-148); a pre-ticket row with no column reads active.
     status: row.status ?? "active",
-    creditBalance,
+    // Legacy single balance mirrors the report bucket (JAK-161).
+    creditBalance: credits.report,
+    credits,
     createdAt: row.created_at,
     lastSeenAt: row.modified_at,
   };

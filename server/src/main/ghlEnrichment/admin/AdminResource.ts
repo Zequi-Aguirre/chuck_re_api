@@ -433,8 +433,15 @@ export class AdminResource {
       if (!Number.isInteger(amount) || amount === 0) {
         return res.status(400).json({ error: "amount must be a non-zero integer" });
       }
+      // Which feature bucket to credit (JAK-162): report / skiptrace / comps.
+      // Absent → report, so pre-split callers are unchanged; a present-but-bad
+      // value is a 400 rather than a silent grant into the wrong bucket.
+      const type = req.body?.type == null ? "report" : creditType(req.body.type);
+      if (!type) {
+        return res.status(400).json({ error: "type must be one of report, skiptrace, comps" });
+      }
       const reason = req.body?.reason === "adjustment" ? "adjustment" : "manual_grant";
-      const result = await this.textCustomers.grantCredits(phone, amount, reason);
+      const result = await this.textCustomers.grantCredits(phone, amount, reason, type);
       return res.status(200).json({
         balance: result.balance,
         customer: result.customer,

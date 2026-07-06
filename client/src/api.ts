@@ -8,6 +8,9 @@ import {
   CompsCostView,
   CompsParamsView,
   CompsPromptView,
+  CreditDefaultView,
+  CreditType,
+  OutOfCreditsMessageView,
   LlmModelSettingView,
   LlmProvider,
   LocationStatusSummary,
@@ -174,14 +177,17 @@ export const api = {
       method: "POST",
     });
   },
+  // Grant/adjust credits in ONE feature bucket (JAK-161/JAK-162): report /
+  // skiptrace / comps. The server credits the texter's own account by phone.
   async grantTextCustomerCredits(
     phone: string,
     amount: number,
-    reason: "manual_grant" | "adjustment"
+    reason: "manual_grant" | "adjustment",
+    type: CreditType
   ): Promise<{ balance: number; customer: TextCustomerView }> {
     return request("/text-customers/credits", {
       method: "POST",
-      body: JSON.stringify({ phone, amount, reason }),
+      body: JSON.stringify({ phone, amount, reason, type }),
     });
   },
 
@@ -275,6 +281,43 @@ export const api = {
   },
   async resetCompsParams(): Promise<CompsParamsView> {
     return request<CompsParamsView>("/comps-params/reset", { method: "POST" });
+  },
+
+  // --- Per-feature credit settings (JAK-161/JAK-162) ---
+  // The NEW-CUSTOMER default grants + the OUT-OF-CREDITS messages for each of the
+  // three buckets (report / skiptrace / comps). Each GET returns all three; PUT /
+  // reset act on ONE bucket keyed by `type`. Session-guarded, no secrets.
+  async getCreditDefaults(): Promise<CreditDefaultView[]> {
+    const body = await request<{ defaults: CreditDefaultView[] }>("/credit-defaults");
+    return body.defaults;
+  },
+  async updateCreditDefault(type: CreditType, credits: number): Promise<CreditDefaultView> {
+    return request<CreditDefaultView>("/credit-defaults", {
+      method: "PUT",
+      body: JSON.stringify({ type, credits }),
+    });
+  },
+  async resetCreditDefault(type: CreditType): Promise<CreditDefaultView> {
+    return request<CreditDefaultView>("/credit-defaults/reset", {
+      method: "POST",
+      body: JSON.stringify({ type }),
+    });
+  },
+  async getOutOfCreditsMessages(): Promise<OutOfCreditsMessageView[]> {
+    const body = await request<{ messages: OutOfCreditsMessageView[] }>("/out-of-credits-messages");
+    return body.messages;
+  },
+  async updateOutOfCreditsMessage(type: CreditType, message: string): Promise<OutOfCreditsMessageView> {
+    return request<OutOfCreditsMessageView>("/out-of-credits-messages", {
+      method: "PUT",
+      body: JSON.stringify({ type, message }),
+    });
+  },
+  async resetOutOfCreditsMessage(type: CreditType): Promise<OutOfCreditsMessageView> {
+    return request<OutOfCreditsMessageView>("/out-of-credits-messages/reset", {
+      method: "POST",
+      body: JSON.stringify({ type }),
+    });
   },
 
   // --- Per-prompt provider + model picker (JAK-143) ---

@@ -223,6 +223,7 @@ describe("AdminResource", () => {
     ghlContactId: null,
     status: "active",
     creditBalance: 0,
+    credits: { report: 0, skiptrace: 0, comps: 0 },
     createdAt: new Date("2026-07-01T00:00:00Z"),
     lastSeenAt: new Date("2026-07-02T00:00:00Z"),
     ...over,
@@ -296,7 +297,46 @@ describe("AdminResource", () => {
       );
       expect(res.status).toBe(200);
       expect(res.body.balance).toBe(5);
-      expect(textCustomers.grantCredits).toHaveBeenCalledWith("+17865274077", 5, "manual_grant");
+      // No type in the body defaults to the report bucket (JAK-162 back-compat).
+      expect(textCustomers.grantCredits).toHaveBeenCalledWith("+17865274077", 5, "manual_grant", "report");
+    });
+
+    it("grants into the chosen bucket (JAK-162): a skiptrace grant hits the skiptrace bucket", async () => {
+      textCustomers.grantCredits.mockResolvedValue({
+        customer: textCustomerView({ credits: { report: 0, skiptrace: 7, comps: 0 } }),
+        entry: {
+          id: "led-2",
+          location_id: "cust-1",
+          credit_type: "skiptrace",
+          amount: 7,
+          balance_after: 7,
+          reason: "manual_grant",
+          contact_id: null,
+          created_at: new Date(),
+          modified_at: new Date(),
+          deleted_at: null,
+        },
+        balance: 7,
+      });
+      const res = await asAdmin(
+        request(app)
+          .post("/api/admin/text-customers/credits")
+          .send({ phone: "+17865274077", amount: 7, type: "skiptrace" })
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.balance).toBe(7);
+      expect(res.body.customer.credits).toEqual({ report: 0, skiptrace: 7, comps: 0 });
+      expect(textCustomers.grantCredits).toHaveBeenCalledWith("+17865274077", 7, "manual_grant", "skiptrace");
+    });
+
+    it("400s an unknown credit type without touching the ledger", async () => {
+      const res = await asAdmin(
+        request(app)
+          .post("/api/admin/text-customers/credits")
+          .send({ phone: "+17865274077", amount: 5, type: "bogus" })
+      );
+      expect(res.status).toBe(400);
+      expect(textCustomers.grantCredits).not.toHaveBeenCalled();
     });
   });
 
@@ -1003,6 +1043,154 @@ describe("AdminResource", () => {
       expect(res.status).toBe(200);
       expect(res.body.isDefault).toBe(true);
       expect(compsSettings.resetParams).toHaveBeenCalled();
+    });
+  });
+
+  // --- Per-feature credit settings (JAK-161/JAK-162) ------------------------
+  // The admin surface the JAK-162 UI reads/writes: new-customer default grants +
+  // out-of-credits messages, each session-guarded and secret-free.
+
+  describe("credit-defaults", () => {
+    const defView = (over: Record<string, unknown> = {}) => ({
+      type: "report",
+      value: 100,
+      isDefault: true,
+      updatedAt: null,
+      updatedBy: null,
+      ...over,
+    });
+
+    it("is behind the auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app).get("/api/admin/credit-defaults");
+      expect(res.status).toBe(401);
+      expect(creditSettings.getDefaultViews).not.toHaveBeenCalled();
+    });
+
+    it("GET returns all three default grants", async () => {
+      creditSettings.getDefaultViews.mockResolvedValue([
+        defView({ type: "report", value: 100 }),
+        defView({ type: "skiptrace", value: 10 }),
+        defView({ type: "comps", value: 10 }),
+      ] as never);
+      const res = await asAdmin(request(app).get("/api/admin/credit-defaults"));
+      expect(res.status).toBe(200);
+      expect(res.body.defaults).toHaveLength(3);
+      expect(res.body.defaults.map((d: { type: string }) => d.type)).toEqual([
+        "report",
+        "skiptrace",
+        "comps",
+      ]);
+    });
+
+    it("PUT saves one bucket's default (0 allowed) with the editing admin id", async () => {
+      creditSettings.setDefaultGrant.mockResolvedValue(
+        defView({ type: "comps", value: 0, isDefault: false }) as never
+      );
+      const res = await asAdmin(
+        request(app).put("/api/admin/credit-defaults").send({ type: "comps", credits: 0 })
+      );
+      expect(res.status).toBe(200);
+      expect(creditSettings.setDefaultGrant).toHaveBeenCalledWith("comps", 0, "admin-id");
+    });
+
+    it("PUT 400s an unknown type or a negative / non-integer amount", async () => {
+      expect(
+        (await asAdmin(request(app).put("/api/admin/credit-defaults").send({ type: "bogus", credits: 5 }))).status
+      ).toBe(400);
+      expect(
+        (await asAdmin(request(app).put("/api/admin/credit-defaults").send({ type: "report", credits: -1 }))).status
+      ).toBe(400);
+      expect(
+        (await asAdmin(request(app).put("/api/admin/credit-defaults").send({ type: "report", credits: 2.5 }))).status
+      ).toBe(400);
+      expect(creditSettings.setDefaultGrant).not.toHaveBeenCalled();
+    });
+
+    it("reset reverts one bucket to its code default", async () => {
+      creditSettings.resetDefaultGrant.mockResolvedValue(
+        defView({ type: "skiptrace", value: 10, isDefault: true }) as never
+      );
+      const res = await asAdmin(
+        request(app).post("/api/admin/credit-defaults/reset").send({ type: "skiptrace" })
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.isDefault).toBe(true);
+      expect(creditSettings.resetDefaultGrant).toHaveBeenCalledWith("skiptrace");
+    });
+  });
+
+  describe("out-of-credits-messages", () => {
+    const msgView = (over: Record<string, unknown> = {}) => ({
+      type: "report",
+      value: "You're out of report credits. To get more, contact an admin.",
+      isDefault: true,
+      updatedAt: null,
+      updatedBy: null,
+      ...over,
+    });
+
+    it("is behind the auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app).get("/api/admin/out-of-credits-messages");
+      expect(res.status).toBe(401);
+      expect(creditSettings.getMessageViews).not.toHaveBeenCalled();
+    });
+
+    it("GET returns all three messages", async () => {
+      creditSettings.getMessageViews.mockResolvedValue([
+        msgView({ type: "report" }),
+        msgView({ type: "skiptrace" }),
+        msgView({ type: "comps" }),
+      ] as never);
+      const res = await asAdmin(request(app).get("/api/admin/out-of-credits-messages"));
+      expect(res.status).toBe(200);
+      expect(res.body.messages).toHaveLength(3);
+    });
+
+    it("PUT saves one bucket's message with the editing admin id", async () => {
+      creditSettings.setMessage.mockResolvedValue(
+        msgView({ type: "comps", value: "No comps left — text an admin.", isDefault: false }) as never
+      );
+      const res = await asAdmin(
+        request(app)
+          .put("/api/admin/out-of-credits-messages")
+          .send({ type: "comps", message: "No comps left — text an admin." })
+      );
+      expect(res.status).toBe(200);
+      expect(creditSettings.setMessage).toHaveBeenCalledWith(
+        "comps",
+        "No comps left — text an admin.",
+        "admin-id"
+      );
+    });
+
+    it("PUT 400s an unknown type or an empty message", async () => {
+      expect(
+        (
+          await asAdmin(
+            request(app).put("/api/admin/out-of-credits-messages").send({ type: "bogus", message: "hi" })
+          )
+        ).status
+      ).toBe(400);
+      expect(
+        (
+          await asAdmin(
+            request(app).put("/api/admin/out-of-credits-messages").send({ type: "report", message: "   " })
+          )
+        ).status
+      ).toBe(400);
+      expect(creditSettings.setMessage).not.toHaveBeenCalled();
+    });
+
+    it("reset reverts one bucket's message to the default", async () => {
+      creditSettings.resetMessage.mockResolvedValue(msgView({ type: "report", isDefault: true }) as never);
+      const res = await asAdmin(
+        request(app).post("/api/admin/out-of-credits-messages/reset").send({ type: "report" })
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.isDefault).toBe(true);
+      expect(creditSettings.resetMessage).toHaveBeenCalledWith("report");
     });
   });
 
