@@ -7,8 +7,13 @@ import TextField from "@mui/material/TextField";
 import Button from "@mui/material/Button";
 import Alert from "@mui/material/Alert";
 import Stack from "@mui/material/Stack";
+import Box from "@mui/material/Box";
 import Typography from "@mui/material/Typography";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import { api, ApiError } from "../api";
+import { CreditType } from "../types";
+import { CREDIT_TYPES, creditTypeLabel } from "../pages/creditsLayout";
 
 interface Props {
   open: boolean;
@@ -19,19 +24,22 @@ interface Props {
    */
   phone?: string;
   onClose: () => void;
-  onSaved: (phone: string, balance: number) => void;
+  onSaved: (phone: string, balance: number, type: CreditType) => void;
 }
 
 /**
- * Grant / adjust a tier-1 text-Jake customer's credits BY PHONE (JAK-129). A
- * positive amount tops up; a negative amount is a correcting adjustment. Credits
- * land on the customer's OWN credit account (keyed by phone), not a connection —
- * so a gateway texter who ran out of Jake credits can be topped up here.
+ * Grant / adjust a tier-1 text-Jake customer's credits BY PHONE (JAK-129) into
+ * ONE feature bucket (JAK-161/JAK-162: report / skiptrace / comps). A positive
+ * amount tops up; a negative amount is a correcting adjustment. Credits land on
+ * the customer's OWN credit account (keyed by phone), not a connection — and only
+ * the chosen bucket moves, so topping up comps never touches report or skip-trace.
  */
 export function GrantTextCreditsDialog({ open, phone, onClose, onSaved }: Props) {
   const locked = phone !== undefined;
   const [phoneInput, setPhoneInput] = useState(phone ?? "");
   const [amount, setAmount] = useState("");
+  // Which bucket to credit — the admin must pick one (defaults to report).
+  const [type, setType] = useState<CreditType>("report");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -40,6 +48,7 @@ export function GrantTextCreditsDialog({ open, phone, onClose, onSaved }: Props)
     if (open) {
       setPhoneInput(phone ?? "");
       setAmount("");
+      setType("report");
       setError(null);
     }
   }, [open, phone]);
@@ -61,9 +70,10 @@ export function GrantTextCreditsDialog({ open, phone, onClose, onSaved }: Props)
       const res = await api.grantTextCustomerCredits(
         cleanPhone,
         n,
-        n > 0 ? "manual_grant" : "adjustment"
+        n > 0 ? "manual_grant" : "adjustment",
+        type
       );
-      onSaved(cleanPhone, res.balance);
+      onSaved(cleanPhone, res.balance, type);
       handleClose();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Grant failed. Please try again.");
@@ -75,6 +85,7 @@ export function GrantTextCreditsDialog({ open, phone, onClose, onSaved }: Props)
   function handleClose() {
     setPhoneInput(phone ?? "");
     setAmount("");
+    setType("report");
     setError(null);
     onClose();
   }
@@ -86,8 +97,31 @@ export function GrantTextCreditsDialog({ open, phone, onClose, onSaved }: Props)
         <Stack spacing={2} sx={{ mt: 1 }}>
           {error && <Alert severity="error">{error}</Alert>}
           <Typography variant="body2" color="text.secondary">
-            Credits go to this texter&apos;s own account (by phone). Positive adds; negative deducts.
+            Credits go to this texter&apos;s own account (by phone), into the bucket you pick.
+            Positive adds; negative deducts. Each feature spends its own bucket.
           </Typography>
+          <Box>
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.5 }}>
+              Credit type
+            </Typography>
+            <ToggleButtonGroup
+              exclusive
+              fullWidth
+              size="small"
+              color="primary"
+              value={type}
+              onChange={(_e, next) => {
+                if (next) setType(next as CreditType);
+              }}
+              disabled={busy}
+            >
+              {CREDIT_TYPES.map((t) => (
+                <ToggleButton key={t} value={t}>
+                  {creditTypeLabel(t)}
+                </ToggleButton>
+              ))}
+            </ToggleButtonGroup>
+          </Box>
           <TextField
             label="Phone (E.164)"
             fullWidth

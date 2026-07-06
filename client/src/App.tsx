@@ -11,6 +11,7 @@ import { ReportSettingsPage } from "./pages/ReportSettingsPage";
 import { OrchestratorSettingsPage } from "./pages/OrchestratorSettingsPage";
 import { SkipTraceSettingsPage } from "./pages/SkipTraceSettingsPage";
 import { CompsSettingsPage } from "./pages/CompsSettingsPage";
+import { CreditSettingsPage } from "./pages/CreditSettingsPage";
 import { AdminsPage } from "./pages/AdminsPage";
 import { ReactNode } from "react";
 
@@ -69,6 +70,8 @@ export function App() {
         <Route path="/skiptrace-settings" element={<SkipTraceSettingsPage />} />
         {/* Comps (JAK-137) — available to ANY logged-in admin, not gated. */}
         <Route path="/comps-settings" element={<CompsSettingsPage />} />
+        {/* Credits (JAK-162) — per-feature default grants + out-of-credits messages. */}
+        <Route path="/credit-settings" element={<CreditSettingsPage />} />
         <Route
           path="/admins"
           element={

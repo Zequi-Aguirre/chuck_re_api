@@ -20,6 +20,7 @@ import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import CallSplitIcon from "@mui/icons-material/CallSplit";
 import PersonSearchIcon from "@mui/icons-material/PersonSearch";
 import HomeWorkIcon from "@mui/icons-material/HomeWork";
+import PaidIcon from "@mui/icons-material/Paid";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import LogoutIcon from "@mui/icons-material/Logout";
 import { useAuth } from "../auth";
@@ -49,6 +50,8 @@ export function Layout() {
     { label: "Skip-Trace", to: "/skiptrace-settings", icon: <PersonSearchIcon />, show: true },
     // Comps (JAK-137) — every logged-in admin can tune the reply, cost + parameters.
     { label: "Comps", to: "/comps-settings", icon: <HomeWorkIcon />, show: true },
+    // Credits (JAK-162) — per-feature default grants + out-of-credits messages.
+    { label: "Credits", to: "/credit-settings", icon: <PaidIcon />, show: true },
     {
       label: "Admins",
       to: "/admins",

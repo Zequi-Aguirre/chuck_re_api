@@ -75,10 +75,23 @@ export interface TextCustomerView {
   ghlContactId: string | null;
   /** Two-level hold state (JAK-148). Mirrors the server's TextCustomerStatus. */
   status: TextCustomerStatus;
+  /** Legacy single balance = the REPORT bucket (JAK-161). Prefer {@link credits}. */
   creditBalance: number;
+  /** The three independent per-feature balances (JAK-161): report / skiptrace / comps. */
+  credits: CreditBalances;
   createdAt: string;
   lastSeenAt: string;
 }
+
+/**
+ * The three independent per-feature credit buckets (JAK-161). Each text-Jake
+ * feature checks + charges ONLY its own bucket, so a texter can be out of comps
+ * credits while still having report credits.
+ */
+export type CreditType = "report" | "skiptrace" | "comps";
+
+/** A customer's balance in each bucket (JAK-161). Mirrors the server's CreditBalances. */
+export type CreditBalances = Record<CreditType, number>;
 
 /**
  * The two-level hold state of a text customer (JAK-148):
@@ -260,6 +273,35 @@ export interface CompParams {
  */
 export interface CompsParamsView {
   params: CompParams;
+  isDefault: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+/**
+ * One bucket's NEW-CUSTOMER default grant (JAK-161/JAK-162) — the credits a
+ * brand-new texter is seeded with in that bucket. `value` is the effective
+ * amount (the stored edit, or the code default when `isDefault`). Mirrors the
+ * server's CreditDefaultView. Zero is valid (a paid feature may start empty).
+ */
+export interface CreditDefaultView {
+  type: CreditType;
+  value: number;
+  isDefault: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+/**
+ * One bucket's OUT-OF-CREDITS message (JAK-161/JAK-162) — the reply Jake sends
+ * when that bucket is empty. `value` is the effective copy (the stored edit, or
+ * the code default when `isDefault`); the GoTextJake.com footer (JAK-158) is
+ * appended by the sender, never part of the stored message. Mirrors the server's
+ * OutOfCreditsMessageView.
+ */
+export interface OutOfCreditsMessageView {
+  type: CreditType;
+  value: string;
   isDefault: boolean;
   updatedAt: string | null;
   updatedBy: string | null;

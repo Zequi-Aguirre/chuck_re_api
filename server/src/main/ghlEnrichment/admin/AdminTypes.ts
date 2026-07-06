@@ -8,6 +8,7 @@
  */
 
 import { TextCustomerStatus } from "../customers/TextJakeCustomerTypes";
+import { CreditBalances } from "../metering/CreditService";
 
 /**
  * Admin privilege level (JAK-125).
@@ -118,8 +119,17 @@ export interface AdminTextCustomerView {
    * affects the credit balance below.
    */
   status: TextCustomerStatus;
-  /** Current spendable credit balance for this customer (0 if none yet). */
+  /**
+   * Legacy single balance = the REPORT bucket (JAK-161). Kept so pre-split
+   * callers keep reading the primary balance; the admin UI shows {@link credits}.
+   */
   creditBalance: number;
+  /**
+   * The three independent per-feature balances (JAK-161): report / skiptrace /
+   * comps. The admin card/table renders all three so an operator sees exactly
+   * which bucket a texter is low on.
+   */
+  credits: CreditBalances;
   createdAt: Date;
   /** Last time we saw activity from this customer (row `modified_at`). */
   lastSeenAt: Date;

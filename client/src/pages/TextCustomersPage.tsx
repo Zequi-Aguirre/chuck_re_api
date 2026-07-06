@@ -28,6 +28,7 @@ import {
   customerStatusColor,
   customerStatusLabel,
 } from "./textCustomersLayout";
+import { CREDIT_TYPES, balanceOf, creditTypeLabel, creditTypeShort } from "./creditsLayout";
 
 /**
  * Tier-1 text-Jake customers (JAK-129 + JAK-146 + JAK-148): every texter keyed by
@@ -136,6 +137,23 @@ export function TextCustomersPage() {
     );
   };
 
+  // The three per-feature balances (JAK-161/JAK-162) as compact chips — a green
+  // chip when the bucket has credits, a muted one at 0 so a low bucket stands out.
+  // `dense` uses the short glyphs (Report/Skip/Comps) for the tight table cell.
+  const creditChips = (c: TextCustomerView, dense: boolean) =>
+    CREDIT_TYPES.map((t) => {
+      const n = balanceOf(c.credits, t);
+      return (
+        <Chip
+          key={t}
+          size="small"
+          variant="outlined"
+          label={`${dense ? creditTypeShort(t) : creditTypeLabel(t)} ${n}`}
+          color={n > 0 ? "success" : "default"}
+        />
+      );
+    });
+
   const renderCards = (list: TextCustomerView[]) => (
     <Stack spacing={1.5}>
       {list.map((c) => (
@@ -155,15 +173,11 @@ export function TextCustomersPage() {
                   </Typography>
                 )}
               </Box>
-              {/* Status + credits chips stack so they never push the card wide. */}
+              {/* Status + the three per-feature credit chips stack so they never
+                  push the card wide on a phone (JAK-162 mobile-first). */}
               <Stack spacing={0.5} alignItems="flex-end" sx={{ flexShrink: 0 }}>
                 <Chip size="small" label={customerStatusLabel(c.status)} color={customerStatusColor(c.status)} />
-                <Chip
-                  size="small"
-                  variant="outlined"
-                  label={`${c.creditBalance} credits`}
-                  color={c.creditBalance > 0 ? "success" : "default"}
-                />
+                {creditChips(c, false)}
               </Stack>
             </Box>
             {/* flexWrap + useFlexGap keeps every action on-screen on a phone. */}
@@ -191,7 +205,7 @@ export function TextCustomersPage() {
             <TableCell>Phone</TableCell>
             <TableCell>Email</TableCell>
             <TableCell>Status</TableCell>
-            <TableCell align="right">Credits</TableCell>
+            <TableCell>Credits (report / skip / comps)</TableCell>
             <TableCell>First seen</TableCell>
             <TableCell>Last seen</TableCell>
             <TableCell align="right">Actions</TableCell>
@@ -206,12 +220,10 @@ export function TextCustomersPage() {
               <TableCell>
                 <Chip size="small" label={customerStatusLabel(c.status)} color={customerStatusColor(c.status)} />
               </TableCell>
-              <TableCell align="right">
-                <Chip
-                  size="small"
-                  label={c.creditBalance}
-                  color={c.creditBalance > 0 ? "success" : "default"}
-                />
+              <TableCell>
+                <Stack direction="row" spacing={0.5} useFlexGap flexWrap="wrap">
+                  {creditChips(c, true)}
+                </Stack>
               </TableCell>
               <TableCell>{new Date(c.createdAt).toLocaleDateString()}</TableCell>
               <TableCell>{new Date(c.lastSeenAt).toLocaleDateString()}</TableCell>
@@ -291,8 +303,8 @@ export function TextCustomersPage() {
         open={grantPhone !== undefined}
         phone={grantPhone === "" ? undefined : grantPhone}
         onClose={() => setGrantPhone(undefined)}
-        onSaved={(phone, balance) => {
-          setToast(`${phone} now has ${balance} credits.`);
+        onSaved={(phone, balance, type) => {
+          setToast(`${phone} now has ${balance} ${creditTypeLabel(type).toLowerCase()} credits.`);
           load();
         }}
       />
