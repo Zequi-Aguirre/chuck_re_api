@@ -7,7 +7,7 @@
 
 Epic: `ghl-enrichment`
 
-## In progress (16)
+## In progress (15)
 - [ ] **JAK-115** (P0) Master GHL gateway key + mode-aware text-Jake (gateway vs own_number) — depends: JAK-102, JAK-109, JAK-114
 - [ ] **JAK-118** (P2) Remove dead scaffold-clone env vars (VITE_ASKZACK_CLIENT_URL/SERVER_URL, VITE_ASKZOE_SERVER_URL, LOCAL_NGROK_URL)
 - [ ] **JAK-120** (P1) Comprehensive DEPLOY.md refresh: single up-to-date staging setup doc — depends: JAK-116, JAK-117, JAK-118, JAK-119
@@ -23,7 +23,6 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-131** (P1) Admin-editable AI prompt for the Jake Property Report — depends: JAK-130
 - [ ] **JAK-132** (P1) Feed FULL PropertySearch response to AI report writer; guarantee mortgage/foreclosure/lien flags surface — depends: JAK-130, JAK-131
 - [ ] **JAK-133** (P0) HOTFIX: restore edited-in-place applied migration (unbreak staging deploy) + adopt real-timestamp migration tooling — depends: JAK-132
-- [ ] **JAK-164** (P1) Comparable-sales SELECTION ENGINE with a real up-to-10-mile pool: pull a genuine sold-comp candidate pool via /v2/PropertySearch geo-radius (NOT the ~1mi PropertyDetail cluster, NOT paid v3), then select the strongest true comps (admin-editable LLM prompt + model picker, deterministic reject/score fallback; numeric fields code-derived). Addendum: kills subject-price/date bleed onto comps + renders days-on-market/PPSF — depends: JAK-160, JAK-137, JAK-144, JAK-143, JAK-161
 
 ## Open (5)
 - [ ] **JAK-103** (P0) Token refresh service — depends: JAK-102
@@ -38,7 +37,7 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-152** (P3) [LATER] Onboarding: white-glove + self-serve field-mapping guide — depends: JAK-105
 - [ ] **JAK-153** (P3) [LATER] Privacy Policy + Terms pages for Jake
 
-## Done (37)
+## Done (39)
 - [x] **JAK-100** (P0) Project ticket store (SQLite in-repo)
 - [x] **JAK-101** (P0) GHL app scaffolding + Doppler config + env helper — depends: JAK-100
 - [x] **JAK-102** (P0) Encrypted connection/credential store — depends: JAK-101
@@ -76,3 +75,5 @@ Epic: `ghl-enrichment`
 - [x] **JAK-161** (P1) Split single Jake credit pool into 3 per-feature buckets (report/skiptrace/comps) — backend of credit-split epic — depends: JAK-109, JAK-136, JAK-137, JAK-144
 - [x] **JAK-162** (P1) Admin UI for the per-feature credit-bucket split (grant-by-type, 3 balances, editable default grants + out-of-credits messages) — depends: JAK-161, JAK-129, JAK-131
 - [x] **JAK-163** (P0) Fix customer-editor 'Find contact'/GHL sync failing in gateway mode: text-customer sync now auths the gateway location with the config.gateway Doppler creds (same key SMS uses) instead of the empty JAK-102 connection store — depends: JAK-115, JAK-104, JAK-147
+- [x] **JAK-164** (P1) Comparable-sales SELECTION ENGINE with a real up-to-10-mile pool: pull a genuine sold-comp candidate pool via /v2/PropertySearch geo-radius (NOT the ~1mi PropertyDetail cluster, NOT paid v3), then select the strongest true comps (admin-editable LLM prompt + model picker, deterministic reject/score fallback; numeric fields code-derived). Addendum: kills subject-price/date bleed onto comps + renders days-on-market/PPSF — depends: JAK-160, JAK-137, JAK-144, JAK-143, JAK-161
+- [x] **JAK-165** (P1) Fix bare comps/skip running on an OLD address instead of the most-recent property: for a bare skip_trace/comps (no inline address, no ordinal, no 'last') the router LLM's history-derived targetAddress guess no longer overrides the deterministic most-recent fallback (JAK-154) — resolveTarget only honors targetAddress for skip/comps when corroborated (ordinal/'last') or unambiguous (0-1 addresses). Inline-address (JAK-156), ordinals (JAK-135/138), 'last' (JAK-159) and property_report disambiguation unchanged — depends: JAK-154, JAK-156, JAK-159, JAK-135, JAK-138, JAK-137, JAK-136
