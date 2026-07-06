@@ -86,6 +86,18 @@ export class ConversationMemoryService {
     return this.store.resolvedAddresses(phone);
   }
 
+  /**
+   * Mark the address a command ACTUALLY acted on as this conversation's active
+   * property (JAK-166): backfill it onto the requesting inbound message so it
+   * becomes the most-recent resolved address. This closes the gap where a
+   * successful lookup resolved via the LLM (from a message the insert-time regex
+   * couldn't parse) never updated memory, leaving follow-up comps/skip pointed at
+   * a stale older address. One source of truth, updated on every resolved lookup.
+   */
+  async markResolvedAddress(messageId: string, resolvedAddress: string): Promise<void> {
+    return this.store.updateResolvedAddress(messageId, resolvedAddress);
+  }
+
   /** Snapshot a paid PropertySearch result so a repeat within the window is free. */
   async recordLookup(input: {
     customerId: string;
