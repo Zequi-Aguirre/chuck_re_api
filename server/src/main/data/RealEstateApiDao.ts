@@ -277,6 +277,11 @@ export class RealEstateApiDao {
       lotSquareFeet: info?.lotSquareFeet ?? null,
       yearBuilt: info?.yearBuilt ?? null,
       estimatedValue: toNum(detail.estimatedValue),
+      // JAK-160: origin coords for the haversine distance to each comp. The
+      // provider ships them under `propertyInfo`; fall back to the detail's
+      // top-level lat/long if that's where a given account puts them.
+      latitude: toNum(info?.latitude ?? detail.latitude),
+      longitude: toNum(info?.longitude ?? detail.longitude),
     };
 
     return {

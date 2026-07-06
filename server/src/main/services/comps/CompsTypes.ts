@@ -11,6 +11,7 @@ import {
   RealEstateApiCompsSubject,
   RealEstateApiPropertyCompsResponse,
 } from "../../types/RealEstateApi";
+import { haversineMiles } from "./haversine";
 
 /**
  * The comp PARAMETERS that shape a comps pull (JAK-137). Zequi wants these
@@ -147,7 +148,12 @@ export interface CompSaleData {
   beds?: number;
   baths?: number;
   squareFeet?: number;
+  /** JAK-160: real great-circle miles from the subject; unset if either lacks coords. */
   distanceMiles?: number;
+  /** JAK-160: the comp's year built, when the provider returned one. */
+  yearBuilt?: number;
+  /** JAK-160: MLS days on market — present only on MLS-tracked comps (~20-30%). */
+  daysOnMarket?: number;
   saleDate?: string;
 }
 
@@ -244,8 +250,19 @@ function withinTolerance(
   return true;
 }
 
-/** Map one raw comp record into the verified SMS shape (only present values). */
-function toCompSale(comp: RealEstateApiCompRecord): CompSaleData {
+/** The subject's geo-coordinates, when both are present — the haversine origin. */
+interface SubjectCoords {
+  lat: number;
+  lon: number;
+}
+
+/**
+ * Map one raw comp record into the verified SMS shape (only present values).
+ * JAK-160: when the subject AND this comp both carry coordinates, the real
+ * great-circle distance (miles) is computed here — the provider ships no distance
+ * field on this endpoint, so the old `comp.distance` mapping was always empty.
+ */
+function toCompSale(comp: RealEstateApiCompRecord, subjectCoords: SubjectCoords | null): CompSaleData {
   const out: CompSaleData = {};
   const address = addressDisplay(comp.address);
   if (address) out.address = address;
@@ -262,8 +279,20 @@ function toCompSale(comp: RealEstateApiCompRecord): CompSaleData {
   if (baths != null) out.baths = baths;
   const sqft = num(comp.squareFeet);
   if (sqft != null) out.squareFeet = sqft;
-  const distance = num(comp.distance);
-  if (distance != null) out.distanceMiles = Math.round(distance * 100) / 100;
+  // JAK-160: real haversine distance from the subject. Requires coords on BOTH
+  // sides; a comp missing coords simply carries no distance (never fabricated).
+  if (subjectCoords) {
+    const compLat = num(comp.latitude);
+    const compLon = num(comp.longitude);
+    const miles = haversineMiles(subjectCoords.lat, subjectCoords.lon, compLat, compLon);
+    if (miles != null) out.distanceMiles = Math.round(miles * 100) / 100;
+  }
+  // JAK-160: year built (provider ships it as a string) and MLS days on market
+  // (present only on MLS-tracked comps). Set ONLY when present — never invented.
+  const yearBuilt = num(comp.yearBuilt);
+  if (yearBuilt != null) out.yearBuilt = yearBuilt;
+  const daysOnMarket = num(comp.mlsDaysOnMarket);
+  if (daysOnMarket != null) out.daysOnMarket = daysOnMarket;
   const saleDate = text(comp.lastSaleDate) ?? text(comp.mlsLastStatusDate);
   if (saleDate) out.saleDate = formatSaleDate(saleDate);
   return out;
@@ -273,9 +302,12 @@ function toCompSale(comp: RealEstateApiCompRecord): CompSaleData {
  * Assemble the clean, verified {@link CompsData} from the normalized comps
  * response (JAK-137 / JAK-144). Pure + null-safe: it reads comps from `comps` or `data`,
  * filters them to the bed/bath/sqft tolerance against the returned subject (skipping
- * any dimension either side is missing), caps at `params.count`, and derives the
- * average sale price + AVM range ONLY from values the provider returned. Never
- * fabricates a comp, price, or range. Mirrors assembleSkipTraceData.
+ * any dimension either side is missing), computes each comp's real great-circle
+ * distance from the subject (JAK-160: haversine, no maps API), SORTS by that
+ * distance nearest-first (comps with no distance sort last), takes the closest
+ * `params.count`, and derives the average sale price + AVM range ONLY from values
+ * the provider returned. Never fabricates a comp, price, or range. Mirrors
+ * assembleSkipTraceData.
  */
 export function assembleCompsData(
   response: RealEstateApiPropertyCompsResponse | null,
@@ -293,10 +325,25 @@ export function assembleCompsData(
   const subject = response.subject ?? null;
   const rawComps: RealEstateApiCompRecord[] = response.comps ?? response.data ?? [];
 
+  // JAK-160: the subject's coordinates are the origin for every comp's distance.
+  const subjLat = subject ? num(subject.latitude) : null;
+  const subjLon = subject ? num(subject.longitude) : null;
+  const subjectCoords: SubjectCoords | null =
+    subjLat != null && subjLon != null ? { lat: subjLat, lon: subjLon } : null;
+
+  // Tolerance-filter, compute distances, then order NEAREST-FIRST and take the
+  // closest `count`. Comps with no computed distance sort last (stable order),
+  // so a missing-coords comp is kept but never jumps ahead of a real neighbor.
   const filtered = rawComps
     .filter((c) => withinTolerance(c, subject, params))
-    .slice(0, params.count)
-    .map(toCompSale);
+    .map((c) => toCompSale(c, subjectCoords))
+    .sort((a, b) => {
+      if (a.distanceMiles == null && b.distanceMiles == null) return 0;
+      if (a.distanceMiles == null) return 1;
+      if (b.distanceMiles == null) return -1;
+      return a.distanceMiles - b.distanceMiles;
+    })
+    .slice(0, params.count);
   data.comps = filtered;
 
   const prices = filtered.map((c) => c.salePrice).filter((p): p is number => typeof p === "number");

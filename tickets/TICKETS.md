@@ -71,3 +71,6 @@ Epic: `ghl-enrichment`
 - [x] **JAK-157** (P1) Universal SMS footer -> 'Every lead deserves a Jake Report. / GoTextJake.com/crm' (replace GoTextJake.com)
 - [x] **JAK-158** (P1) Universal SMS footer copy update -> 'Every Lead Deserves Jake. / GoTextJake.com/CRM' — depends: JAK-157
 - [x] **JAK-159** (P0) Phrase "last" (the last one / last property) in skip/comps resolves to genuinely MOST-RECENT address, not the end of the first-appearance ordinal list — depends: JAK-154, JAK-156
+
+## in progress (1)
+- [ ] **JAK-160** (P1) Comps output overhaul: year-built + days-on-market, REAL haversine distance, closest-5 sorted nearest-first — depends: JAK-137, JAK-144

@@ -74,8 +74,8 @@ const data: CompsData = {
   params: DEFAULT_COMP_PARAMS,
   paramsSummary: formatCompParams(DEFAULT_COMP_PARAMS),
   comps: [
-    { address: "123 Nearby St", salePrice: 400000, beds: 3, baths: 2, squareFeet: 1500, distanceMiles: 0.4, saleDate: "03/01/2026" },
-    { address: "456 Close Ave", salePrice: 420000, beds: 3, baths: 2, squareFeet: 1600 },
+    { address: "123 Nearby St", salePrice: 400000, beds: 3, baths: 2, squareFeet: 1500, distanceMiles: 0.4, yearBuilt: 2004, daysOnMarket: 12, saleDate: "03/01/2026" },
+    { address: "456 Close Ave", salePrice: 420000, beds: 3, baths: 2, squareFeet: 1600, distanceMiles: 0.6, yearBuilt: 1998 },
   ],
   averageSalePrice: 410000,
   estimatedValueLow: 395000,
@@ -135,6 +135,22 @@ describe("CompsReportWriter (JAK-137)", () => {
       expect(out).toContain("$395,000 - $430,000");
       expect(out.endsWith(FOOTER)).toBe(true);
       expect(out).not.toMatch(EMOJI);
+    });
+
+    it("JAK-160: renders distance, year built, and days on market when present — omitting DOM when absent", () => {
+      const { writer } = makeWriter(DEFAULT_STYLE);
+      const out = writer.renderFallback(data);
+
+      // Nearest comp shows all three; the sub-mile distance reads honestly.
+      expect(out).toContain("0.4 mi away");
+      expect(out).toContain("built 2004");
+      expect(out).toContain("12 days on market");
+      // The second comp has no DOM (non-MLS) — its block must not invent one.
+      expect(out).toContain("built 1998");
+      const secondBlock = out.slice(out.indexOf("456 Close Ave"));
+      expect(secondBlock).not.toMatch(/day.*on market/i);
+      expect(out).not.toMatch(/null|undefined/i);
+      expect(out.endsWith(FOOTER)).toBe(true);
     });
 
     it("renders a clean no-comps message when none were found", () => {
