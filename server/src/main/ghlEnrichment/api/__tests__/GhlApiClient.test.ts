@@ -8,6 +8,7 @@ import {
 } from "../GhlApiClient";
 import { GhlConnectionService } from "../../connections/GhlConnectionService";
 import { GhlConnection } from "../../connections/GhlConnectionTypes";
+import { GhlEnrichmentConfig } from "../../config/GhlEnrichmentConfig";
 import { ExternalActionGuard } from "../../../safety/ExternalActionGuard";
 
 /** A fake axios transport whose `request` we control per test. */
@@ -72,6 +73,21 @@ const prodGuard = guardWith(true);
 const stagingGuard = guardWith(true);
 const devGuard = guardWith(false);
 
+/**
+ * A config exposing only the gateway surface the client reads (JAK-163). The
+ * default is an UNCONFIGURED gateway so existing per-location tests exercise the
+ * pure store path — the fallback never triggers for a non-gateway location.
+ */
+const configWith = (
+  gateway: Partial<{ apiKey: string; locationId: string; baseUrl: string }> = {}
+): GhlEnrichmentConfig =>
+  ({
+    gateway: { apiKey: "", locationId: "", baseUrl: "", ...gateway },
+  } as unknown as GhlEnrichmentConfig);
+
+/** No gateway configured — the JAK-163 fallback stays dormant. */
+const noGateway = configWith();
+
 describe("GhlApiClient", () => {
   let connections: MockProxy<GhlConnectionService>;
 
@@ -85,7 +101,7 @@ describe("GhlApiClient", () => {
     it("builds the client from the connection store's decrypted key + base_url", async () => {
       const c = conn({ apiKey: `pit-${randomUUID()}`, baseUrl: "https://tenant-a.example.com" });
       connections.getByLocationId.mockResolvedValue(c);
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request.mockResolvedValue(ok({ contact: { id: "ct_1" } }));
 
       await client.getContact("loc_1", "ct_1");
@@ -102,7 +118,7 @@ describe("GhlApiClient", () => {
       connections.getByLocationId.mockImplementation(async (loc) =>
         loc === "loc_a" ? a : b
       );
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request.mockResolvedValue(ok({ contact: { id: "x" } }));
 
       await client.getContact("loc_a", "ct");
@@ -116,7 +132,7 @@ describe("GhlApiClient", () => {
 
     it("caches the client per location (builds once across calls)", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request.mockResolvedValue(ok({ customFields: [] }));
 
       await client.listCustomFields("loc_1");
@@ -127,7 +143,7 @@ describe("GhlApiClient", () => {
     });
 
     it("sets a Bearer header and base URL from the connection (real builder)", () => {
-      const client = new GhlApiClient(connections, prodGuard);
+      const client = new GhlApiClient(connections, prodGuard, noGateway);
       const c = conn({ baseUrl: "https://tenant.example.com" });
       // Exercise the real createHttpClient (protected) to prove auth wiring.
       const http = (client as unknown as {
@@ -139,7 +155,7 @@ describe("GhlApiClient", () => {
 
     it("throws GhlConnectionUnavailableError when the location is unknown", async () => {
       connections.getByLocationId.mockResolvedValue(null);
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       await expect(client.getContact("missing", "ct")).rejects.toBeInstanceOf(
         GhlConnectionUnavailableError
       );
@@ -147,17 +163,151 @@ describe("GhlApiClient", () => {
 
     it("refuses to use an inactive (uninstalled) connection", async () => {
       connections.getByLocationId.mockResolvedValue(conn({ status: "inactive" }));
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       await expect(client.getContact("loc_1", "ct")).rejects.toBeInstanceOf(
         GhlConnectionUnavailableError
       );
     });
   });
 
+  describe("gateway-location credential fallback (JAK-163)", () => {
+    const GW_LOC = "jake_gw";
+    // Shape-matches a GHL master token but generated at runtime — nothing secret
+    // is ever committed. This is the SAME key the SMS gateway uses.
+    const gwKey = `pit-${randomUUID()}`;
+    const GW_BASE = "https://gateway.example.com";
+    const gatewayConfig = configWith({
+      apiKey: gwKey,
+      locationId: GW_LOC,
+      baseUrl: GW_BASE,
+    });
+
+    it("READS reach GHL on the gateway Doppler creds when the store has no connection", async () => {
+      // Gateway mode: creds live in Doppler, never pasted into the JAK-102 store.
+      connections.getByLocationId.mockResolvedValue(null);
+      const client = new TestGhlApiClient(connections, prodGuard, gatewayConfig);
+      client.transport.request.mockResolvedValue(ok({ contact: { id: "ct_1" } }));
+
+      const contact = await client.findContactByPhone(GW_LOC, "+17865274077");
+
+      // No GhlConnectionUnavailableError — the call reached GHL...
+      expect(contact?.id).toBe("ct_1");
+      // ...authed with the gateway master key + base URL (the SMS key), not a
+      // store connection.
+      expect(client.builtFor).toHaveLength(1);
+      expect(client.builtFor[0].apiKey).toBe(gwKey);
+      expect(client.builtFor[0].baseUrl).toBe(GW_BASE);
+      expect(client.builtFor[0].locationId).toBe(GW_LOC);
+    });
+
+    it("WRITES (upsert/sync-on-save) reach GHL on the gateway creds in production", async () => {
+      connections.getByLocationId.mockResolvedValue(null);
+      const client = new TestGhlApiClient(connections, prodGuard, gatewayConfig);
+      client.transport.request.mockResolvedValue(ok({ contact: { id: "ct_1" } }));
+
+      const contact = await client.upsertContact(GW_LOC, {
+        phone: "+17865274077",
+        firstName: "Ada",
+        lastName: null,
+        email: null,
+        customFields: [{ id: "f_textjake", value: true }],
+      });
+
+      expect(contact?.id).toBe("ct_1");
+      expect(client.builtFor[0].apiKey).toBe(gwKey);
+      expect(client.transport.request.mock.calls[0][0].url).toBe("/contacts/upsert");
+    });
+
+    it("lists custom fields on the gateway location via the gateway creds", async () => {
+      connections.getByLocationId.mockResolvedValue(null);
+      const client = new TestGhlApiClient(connections, prodGuard, gatewayConfig);
+      client.transport.request.mockResolvedValue(ok({ customFields: [{ id: "cf" }] }));
+
+      expect(await client.listCustomFields(GW_LOC)).toHaveLength(1);
+      expect(client.builtFor[0].apiKey).toBe(gwKey);
+    });
+
+    it("a REAL store connection for the gateway location WINS over the Doppler creds", async () => {
+      // If the gateway location ever has its own pasted connection, that per-
+      // location key must be used — the Doppler creds are only a fallback.
+      const stored = conn({
+        locationId: GW_LOC,
+        apiKey: `pit-${randomUUID()}`,
+        baseUrl: "https://own.example.com",
+      });
+      connections.getByLocationId.mockResolvedValue(stored);
+      const client = new TestGhlApiClient(connections, prodGuard, gatewayConfig);
+      client.transport.request.mockResolvedValue(ok({ contact: { id: "ct_1" } }));
+
+      await client.findContactByPhone(GW_LOC, "+17865274077");
+
+      expect(client.builtFor[0].apiKey).toBe(stored.apiKey);
+      expect(client.builtFor[0].baseUrl).toBe("https://own.example.com");
+      expect(client.builtFor[0].apiKey).not.toBe(gwKey);
+    });
+
+    it("does NOT fall back for a non-gateway location (own_number path unaffected)", async () => {
+      // An own_number tenant with no store connection must still fail cleanly —
+      // the fallback is gateway-location-only, never a blanket master key.
+      connections.getByLocationId.mockResolvedValue(null);
+      const client = new TestGhlApiClient(connections, prodGuard, gatewayConfig);
+
+      await expect(client.findContactByPhone("some_other_loc", "+1")).rejects.toBeInstanceOf(
+        GhlConnectionUnavailableError
+      );
+      expect(client.builtFor).toHaveLength(0);
+    });
+
+    it("stays graceful (not-connected error, no crash) when the gateway apiKey is unset", async () => {
+      // Gateway location configured but the master key truly isn't set up.
+      const halfConfigured = configWith({ locationId: GW_LOC, baseUrl: GW_BASE, apiKey: "" });
+      connections.getByLocationId.mockResolvedValue(null);
+      const client = new TestGhlApiClient(connections, prodGuard, halfConfigured);
+
+      await expect(client.findContactByPhone(GW_LOC, "+1")).rejects.toBeInstanceOf(
+        GhlConnectionUnavailableError
+      );
+      // No transport built — nothing crashes trying to auth with an empty key.
+      expect(client.builtFor).toHaveLength(0);
+    });
+
+    it("still READS on the gateway location in DEV (reads pass through)", async () => {
+      // find-contact must work locally too — it's a read, so the write gate
+      // never blocks it, and the gateway creds resolve it.
+      connections.getByLocationId.mockResolvedValue(null);
+      const client = new TestGhlApiClient(connections, devGuard, gatewayConfig);
+      client.transport.request.mockResolvedValue(ok({ contact: { id: "ct_1" } }));
+
+      const contact = await client.findContactByPhone(GW_LOC, "+17865274077");
+
+      expect(contact?.id).toBe("ct_1");
+      expect(client.builtFor[0].apiKey).toBe(gwKey);
+    });
+
+    it("SKIPS gateway-location writes in DEV — no POST, no creds resolved (JAK-110 intact)", async () => {
+      connections.getByLocationId.mockResolvedValue(null);
+      const client = new TestGhlApiClient(connections, devGuard, gatewayConfig);
+
+      const contact = await client.upsertContact(GW_LOC, {
+        phone: "+17865274077",
+        firstName: "Ada",
+        lastName: null,
+        email: null,
+      });
+
+      // The write gate short-circuits BEFORE the gateway fallback — dev never
+      // POSTs to the real gateway sub-account.
+      expect(contact).toBeNull();
+      expect(client.transport.request).not.toHaveBeenCalled();
+      expect(client.builtFor).toHaveLength(0);
+      expect(connections.getByLocationId).not.toHaveBeenCalled();
+    });
+  });
+
   describe("reads", () => {
     it("returns the contact on success", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request.mockResolvedValue(ok({ contact: { id: "ct_1", firstName: "A" } }));
 
       const contact = await client.getContact("loc_1", "ct_1");
@@ -166,7 +316,7 @@ describe("GhlApiClient", () => {
 
     it("returns null when the contact 404s", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request.mockRejectedValue(axiosError(404));
 
       expect(await client.getContact("loc_1", "missing")).toBeNull();
@@ -176,14 +326,14 @@ describe("GhlApiClient", () => {
 
     it("lists custom fields (empty array when none)", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request.mockResolvedValue(ok({}));
       expect(await client.listCustomFields("loc_1")).toEqual([]);
     });
 
     it("finds a contact by phone via the duplicate-search endpoint (JAK-147)", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request.mockResolvedValue(
         ok({ contact: { id: "ct_1", firstName: "Ada", phone: "+17865274077" } })
       );
@@ -199,7 +349,7 @@ describe("GhlApiClient", () => {
 
     it("returns null (not an error) when no contact matches the phone", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request.mockRejectedValue(axiosError(404));
 
       expect(await client.findContactByPhone("loc_1", "+15550000000")).toBeNull();
@@ -209,7 +359,7 @@ describe("GhlApiClient", () => {
 
     it("still finds a contact by phone in DEV (a read, not a write)", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, devGuard);
+      const client = new TestGhlApiClient(connections, devGuard, noGateway);
       client.transport.request.mockResolvedValue(ok({ contact: { id: "ct_1" } }));
 
       const contact = await client.findContactByPhone("loc_1", "+17865274077");
@@ -221,7 +371,7 @@ describe("GhlApiClient", () => {
   describe("writes + SPEC §8 dev safety", () => {
     it("performs the write in production", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request.mockResolvedValue(ok({}));
 
       await client.updateContactCustomFields("loc_1", "ct_1", [
@@ -236,7 +386,7 @@ describe("GhlApiClient", () => {
 
     it("performs the write in staging (dedicated test sub-account)", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, stagingGuard);
+      const client = new TestGhlApiClient(connections, stagingGuard, noGateway);
       client.transport.request.mockResolvedValue(ok({}));
 
       await client.updateContactCustomFields("loc_1", "ct_1", [
@@ -249,7 +399,7 @@ describe("GhlApiClient", () => {
 
     it("echoes and SKIPS every write in dev (never hits a real location)", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, devGuard);
+      const client = new TestGhlApiClient(connections, devGuard, noGateway);
 
       await client.updateContactCustomFields("loc_1", "ct_1", [{ key: "x", value: 1 }]);
       const note = await client.createNote("loc_1", "ct_1", "hi");
@@ -266,7 +416,7 @@ describe("GhlApiClient", () => {
 
     it("still allows READS in dev (only writes are gated)", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, devGuard);
+      const client = new TestGhlApiClient(connections, devGuard, noGateway);
       client.transport.request.mockResolvedValue(ok({ contact: { id: "ct_1" } }));
 
       const contact = await client.getContact("loc_1", "ct_1");
@@ -277,7 +427,7 @@ describe("GhlApiClient", () => {
 
     it("creates a note and returns it in production", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request.mockResolvedValue(ok({ note: { id: "n_1", body: "hi" } }));
 
       const note = await client.createNote("loc_1", "ct_1", "hi");
@@ -287,7 +437,7 @@ describe("GhlApiClient", () => {
 
     it("creates a custom field on the location endpoint", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request.mockResolvedValue(ok({ customField: { id: "cf_1", name: "F" } }));
 
       const field = await client.createCustomField("loc_1", { name: "F", dataType: "TEXT" });
@@ -299,7 +449,7 @@ describe("GhlApiClient", () => {
 
     it("upserts a contact by phone with profile + custom fields in production (JAK-147)", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request.mockResolvedValue(ok({ contact: { id: "ct_1" } }));
 
       const contact = await client.upsertContact("loc_1", {
@@ -326,7 +476,7 @@ describe("GhlApiClient", () => {
 
     it("omits absent name/email from the upsert payload (never blanks a value)", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request.mockResolvedValue(ok({ contact: { id: "ct_1" } }));
 
       await client.upsertContact("loc_1", {
@@ -344,7 +494,7 @@ describe("GhlApiClient", () => {
 
     it("echoes and SKIPS the contact upsert in dev (no real create/update)", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, devGuard);
+      const client = new TestGhlApiClient(connections, devGuard, noGateway);
 
       const contact = await client.upsertContact("loc_1", {
         phone: "+17865274077",
@@ -364,7 +514,7 @@ describe("GhlApiClient", () => {
     it("posts the SMS to the Conversations API on the location's client", async () => {
       const c = conn({ locationId: "loc_a", baseUrl: "https://a.example.com" });
       connections.getByLocationId.mockResolvedValue(c);
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request.mockResolvedValue(ok({ conversationId: "cv_1", messageId: "m_1" }));
 
       const result = await client.sendSms("loc_a", {
@@ -390,7 +540,7 @@ describe("GhlApiClient", () => {
 
     it("omits fromNumber when not provided (GHL uses the location default)", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request.mockResolvedValue(ok({}));
 
       await client.sendSms("loc_1", { contactId: "ct_1", message: "hi" });
@@ -404,7 +554,7 @@ describe("GhlApiClient", () => {
 
     it("echoes and SKIPS the send in dev (never texts a real person)", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, devGuard);
+      const client = new TestGhlApiClient(connections, devGuard, noGateway);
 
       const result = await client.sendSms("loc_1", { contactId: "ct_1", message: "hi" });
 
@@ -417,7 +567,7 @@ describe("GhlApiClient", () => {
   describe("retries + rate-limit backoff", () => {
     it("retries on 429 then succeeds, honouring Retry-After (seconds)", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request
         .mockRejectedValueOnce(axiosError(429, { "retry-after": "1" }))
         .mockResolvedValueOnce(ok({ contact: { id: "ct_1" } }));
@@ -430,7 +580,7 @@ describe("GhlApiClient", () => {
 
     it("retries on 5xx then succeeds (exponential backoff)", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request
         .mockRejectedValueOnce(axiosError(503))
         .mockResolvedValueOnce(ok({ customFields: [{ id: "cf" }] }));
@@ -443,7 +593,7 @@ describe("GhlApiClient", () => {
 
     it("retries network errors (no response)", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request
         .mockRejectedValueOnce(axiosError(undefined))
         .mockResolvedValueOnce(ok({ contact: { id: "ct_1" } }));
@@ -454,7 +604,7 @@ describe("GhlApiClient", () => {
 
     it("fails fast on a non-retriable 400 (no retries)", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request.mockRejectedValue(axiosError(400));
 
       await expect(client.getContact("loc_1", "ct")).rejects.toBeInstanceOf(GhlApiError);
@@ -464,7 +614,7 @@ describe("GhlApiClient", () => {
 
     it("gives up after MAX_RETRIES on persistent 500s", async () => {
       connections.getByLocationId.mockResolvedValue(conn());
-      const client = new TestGhlApiClient(connections, prodGuard);
+      const client = new TestGhlApiClient(connections, prodGuard, noGateway);
       client.transport.request.mockRejectedValue(axiosError(500));
 
       await expect(client.listCustomFields("loc_1")).rejects.toMatchObject({
