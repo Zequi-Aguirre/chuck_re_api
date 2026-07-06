@@ -57,6 +57,26 @@ export function parseOrdinalSelection(message: string): OrdinalSelection | null 
   return null;
 }
 
+/**
+ * JAK-159 — a "last" reference to a PRIOR property EMBEDDED in a larger command
+ * ("comp the last one", "skip the last property", "run the last address"), as
+ * opposed to a bare selection {@link parseOrdinalSelection} handles. Matches the
+ * phrase "last" followed by a property noun ("last one/property/address/home") or
+ * a trailing "the last" ("comp the last"). Deliberately does NOT match numbered
+ * ordinals ("the 2nd one") — those stay POSITIONAL — nor time words ("last week").
+ *
+ * Callers route a match through the genuinely MOST-RECENT address (the JAK-154
+ * `lastResolvedAddress`, ORDER BY created_at DESC), NOT the END of the
+ * first-appearance ordinal list, which can disagree after the texter re-sends an
+ * older address. See {@link parseOrdinalSelection} for the bare-selection form.
+ */
+const LAST_ADDRESS_REFERENCE =
+  /\blast\s+(?:one|property|properties|address(?:es)?|prop|home|house|place)\b|\bthe\s+last\b(?=[\s.!?,]*$)/;
+
+export function mentionsLastAddressReference(message: string): boolean {
+  return LAST_ADDRESS_REFERENCE.test(String(message).trim().toLowerCase());
+}
+
 /** A person reference into a prior skip-trace result. */
 export interface PersonReference {
   /** True when the message explicitly picks a person ("that owner", "the 3rd person"). */

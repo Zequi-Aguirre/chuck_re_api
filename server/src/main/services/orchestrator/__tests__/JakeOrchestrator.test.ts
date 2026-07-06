@@ -280,17 +280,65 @@ describe("JakeOrchestrator (JAK-135 router)", () => {
       expect(plan.targetEntity).toBe("2 Second Ave, Town, CA 90000");
     });
 
-    it("resolves 'the last one' to the final entry", async () => {
-      llm.classify.mockResolvedValue(classification({ intent: "property_report", addressOrdinal: 3 }));
+    it("JAK-159: 'the last one' defers to the MOST-RECENT address (null target + addressRecency), not the ordinal-list end", async () => {
+      // The router still classifies "last" as an ordinal at the list END (addressOrdinal
+      // = 3), but that's the address whose FIRST mention is most recent — which can be
+      // STALE after a re-send. So the orchestrator leaves the target UNRESOLVED and flags
+      // addressRecency="last"; the assistant resolves it to the genuinely most-recent
+      // address (lastResolvedAddress) downstream.
+      llm.classify.mockResolvedValue(classification({ intent: "comps", addressOrdinal: 3 }));
 
       const plan = await orchestrator.plan({
         phone: "+15559990000",
-        message: "pull the last one",
+        message: "comp the last one",
         parsedAddress: null,
         isAffirmative: false,
       });
 
-      expect(plan.targetEntity).toBe("3 Third Blvd, Town, CA 90000");
+      expect(plan.targetEntity).toBeNull();
+      expect(plan.addressRecency).toBe("last");
+    });
+
+    it("JAK-159: 'skip the last property' flags addressRecency without resolving the ordinal", async () => {
+      llm.classify.mockResolvedValue(classification({ intent: "skip_trace", addressOrdinal: 3 }));
+
+      const plan = await orchestrator.plan({
+        phone: "+15559990000",
+        message: "skip the last property",
+        parsedAddress: null,
+        isAffirmative: false,
+      });
+
+      expect(plan.targetEntity).toBeNull();
+      expect(plan.addressRecency).toBe("last");
+    });
+
+    it("JAK-159: a NUMBERED ordinal ('the 2nd one') stays positional — never flagged as 'last'", async () => {
+      llm.classify.mockResolvedValue(classification({ intent: "comps", addressOrdinal: 2 }));
+
+      const plan = await orchestrator.plan({
+        phone: "+15559990000",
+        message: "comp the 2nd one",
+        parsedAddress: null,
+        isAffirmative: false,
+      });
+
+      expect(plan.targetEntity).toBe("2 Second Ave, Town, CA 90000");
+      expect(plan.addressRecency).toBeNull();
+    });
+
+    it("JAK-159: an inline typed address still OUTRANKS a 'last' phrase (JAK-156 intact)", async () => {
+      llm.classify.mockResolvedValue(classification({ intent: "comps", addressOrdinal: 3 }));
+
+      const plan = await orchestrator.plan({
+        phone: "+15559990000",
+        message: "comp the last one at 123 Main St, Tampa, FL 33601",
+        parsedAddress: "123 Main St, Tampa, FL 33601",
+        isAffirmative: false,
+      });
+
+      expect(plan.targetEntity).toBe("123 Main St, Tampa, FL 33601");
+      expect(plan.addressRecency).toBeNull();
     });
 
     it("an out-of-range ordinal yields a null target (assistant will clarify)", async () => {

@@ -1,4 +1,4 @@
-import { parseOrdinalSelection, parsePersonReference } from "../references";
+import { mentionsLastAddressReference, parseOrdinalSelection, parsePersonReference } from "../references";
 
 /**
  * JAK-138 — the pure follow-up parsers. Reference resolution stays deterministic
@@ -35,6 +35,32 @@ describe("parseOrdinalSelection (JAK-138 numbered selection)", () => {
 
   it("rejects a zero pick (ordinals are 1-based)", () => {
     expect(parseOrdinalSelection("0")).toBeNull();
+  });
+});
+
+describe("mentionsLastAddressReference (JAK-159 'last' reference inside a command)", () => {
+  it("matches 'last' + a property noun embedded in a command", () => {
+    expect(mentionsLastAddressReference("comp the last one")).toBe(true);
+    expect(mentionsLastAddressReference("skip the last property")).toBe(true);
+    expect(mentionsLastAddressReference("run the last address")).toBe(true);
+    expect(mentionsLastAddressReference("pull comps on the last house")).toBe(true);
+  });
+
+  it("matches a trailing 'the last'", () => {
+    expect(mentionsLastAddressReference("comp the last")).toBe(true);
+    expect(mentionsLastAddressReference("skip the last.")).toBe(true);
+  });
+
+  it("does NOT match a NUMBERED ordinal — those stay positional", () => {
+    expect(mentionsLastAddressReference("comp the 2nd one")).toBe(false);
+    expect(mentionsLastAddressReference("skip the first property")).toBe(false);
+    expect(mentionsLastAddressReference("the 3rd address")).toBe(false);
+  });
+
+  it("does NOT match a time phrase or an unrelated 'last'", () => {
+    expect(mentionsLastAddressReference("comps for the last 6 months")).toBe(false);
+    expect(mentionsLastAddressReference("how long did that last")).toBe(false);
+    expect(mentionsLastAddressReference("123 Main St, Tampa FL")).toBe(false);
   });
 });
 

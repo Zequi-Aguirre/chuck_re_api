@@ -82,6 +82,16 @@ export interface DispatchPlan {
    */
   addressOrdinal?: number | null;
   /**
+   * JAK-159: set to `"last"` when the texter referenced "the last one" / "the last
+   * property" / "the last address" in a skip/comps/report command. The word "last"
+   * means the genuinely MOST-RECENT address (resolved downstream via the JAK-154
+   * `lastResolvedAddress`, ORDER BY created_at DESC) — NOT the end of the
+   * first-appearance ordinal list, which the router's addressOrdinal would point to
+   * and which can disagree after a re-send. Null when no "last" reference was made;
+   * numbered ordinals ("the 2nd one") stay positional via addressOrdinal.
+   */
+  addressRecency?: "last" | null;
+  /**
    * Texter-supplied comp parameter overrides pulled from the message ("comps within
    * 1 mile, last 6 months, 3 similar homes"), for the comps intent only (JAK-137).
    * Null/absent when the texter didn't specify any — the comps specialist then uses
