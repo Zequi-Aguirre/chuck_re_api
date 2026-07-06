@@ -13,6 +13,8 @@ import { SkipTraceSettingsService } from "../../services/skiptrace/SkipTraceSett
 import { CompsPromptService } from "../../services/comps/CompsPromptService";
 import { CompsSettingsService } from "../../services/comps/CompsSettingsService";
 import { CompParams } from "../../services/comps/CompsTypes";
+import { CreditSettingsService } from "../metering/CreditSettingsService";
+import { CREDIT_TYPES, CreditType } from "../metering/CreditCosts";
 import {
   LlmModelSettingsService,
   LlmSurface,
@@ -67,6 +69,7 @@ export class AdminResource {
     @inject(SkipTraceSettingsService) private readonly skipTraceSettings: SkipTraceSettingsService,
     @inject(CompsPromptService) private readonly compsPrompt: CompsPromptService,
     @inject(CompsSettingsService) private readonly compsSettings: CompsSettingsService,
+    @inject(CreditSettingsService) private readonly creditSettings: CreditSettingsService,
     @inject(LlmModelSettingsService) private readonly modelSettings: LlmModelSettingsService
   ) {
     this.router = Router();
@@ -155,6 +158,19 @@ export class AdminResource {
     this.router.get("/comps-params", this.getCompsParams.bind(this));
     this.router.put("/comps-params", this.updateCompsParams.bind(this));
     this.router.post("/comps-params/reset", this.resetCompsParams.bind(this));
+
+    // Per-feature CREDIT settings (JAK-161) — the backend the JAK-162 admin UI
+    // reads/writes: the NEW-CUSTOMER default grants (report / skiptrace / comps)
+    // and the per-feature OUT-OF-CREDITS messages, both the SAME editable
+    // app_settings pattern as the costs above. Available to ANY logged-in admin
+    // (requireAuth only). No secret is exposed; the canonical JAK-158 footer is
+    // appended by the sender and is NOT editable here.
+    this.router.get("/credit-defaults", this.getCreditDefaults.bind(this));
+    this.router.put("/credit-defaults", this.updateCreditDefault.bind(this));
+    this.router.post("/credit-defaults/reset", this.resetCreditDefault.bind(this));
+    this.router.get("/out-of-credits-messages", this.getOutOfCreditsMessages.bind(this));
+    this.router.put("/out-of-credits-messages", this.updateOutOfCreditsMessage.bind(this));
+    this.router.post("/out-of-credits-messages/reset", this.resetOutOfCreditsMessage.bind(this));
 
     // Per-prompt PROVIDER + MODEL picker (JAK-143). Each of the four editable-prompt
     // surfaces (router, skip-trace, comps, property report) can OPTIONALLY pin its
@@ -859,6 +875,103 @@ export class AdminResource {
     }
   }
 
+  // --- Per-feature credit settings (JAK-161) --------------------------------
+
+  /** Return all three new-customer default grants + whether each is still the default. */
+  private async getCreditDefaults(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const defaults = await this.creditSettings.getDefaultViews();
+      return res.status(200).json({ defaults });
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /**
+   * Save one bucket's new-customer default grant. `type` is one of report /
+   * skiptrace / comps; `credits` must be a NON-NEGATIVE integer (0 is valid — an
+   * admin may want a paid feature to start empty). Records the editing admin.
+   */
+  private async updateCreditDefault(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const type = creditType(req.body?.type);
+      if (!type) {
+        return res.status(400).json({ error: "type must be one of report, skiptrace, comps" });
+      }
+      const credits = Number(req.body?.credits);
+      if (!Number.isInteger(credits) || credits < 0) {
+        return res.status(400).json({ error: "credits must be a non-negative integer" });
+      }
+      const view = await this.creditSettings.setDefaultGrant(type, credits, req.admin?.sub ?? null);
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /** Revert one bucket's new-customer default grant to the code default. */
+  private async resetCreditDefault(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const type = creditType(req.body?.type);
+      if (!type) {
+        return res.status(400).json({ error: "type must be one of report, skiptrace, comps" });
+      }
+      const view = await this.creditSettings.resetDefaultGrant(type);
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /** Return all three out-of-credits messages + whether each is still the default. */
+  private async getOutOfCreditsMessages(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const messages = await this.creditSettings.getMessageViews();
+      return res.status(200).json({ messages });
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /**
+   * Save one bucket's out-of-credits message. `type` is report / skiptrace /
+   * comps; `message` must be non-empty. The canonical JAK-158 footer is appended
+   * by the sender, so it is never part of the stored copy. Records the editing admin.
+   */
+  private async updateOutOfCreditsMessage(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const type = creditType(req.body?.type);
+      if (!type) {
+        return res.status(400).json({ error: "type must be one of report, skiptrace, comps" });
+      }
+      const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
+      if (!message) {
+        return res.status(400).json({ error: "message is required" });
+      }
+      if (message.length > MAX_PROMPT_LENGTH) {
+        return res.status(400).json({ error: `message must be at most ${MAX_PROMPT_LENGTH} characters` });
+      }
+      const view = await this.creditSettings.setMessage(type, message, req.admin?.sub ?? null);
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /** Revert one bucket's out-of-credits message to the code default. */
+  private async resetOutOfCreditsMessage(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const type = creditType(req.body?.type);
+      if (!type) {
+        return res.status(400).json({ error: "type must be one of report, skiptrace, comps" });
+      }
+      const view = await this.creditSettings.resetMessage(type);
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
   // --- Per-prompt provider + model picker (JAK-143) -------------------------
 
   /**
@@ -967,6 +1080,11 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /** Coerce an unknown to a trimmed string ("" for non-strings). */
 function str(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+/** Validate a request's credit-bucket `type`, or null if it isn't one (JAK-161). */
+function creditType(value: unknown): CreditType | null {
+  return CREDIT_TYPES.includes(value as CreditType) ? (value as CreditType) : null;
 }
 
 /**

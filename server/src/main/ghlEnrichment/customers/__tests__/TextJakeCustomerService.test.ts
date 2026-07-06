@@ -1,16 +1,22 @@
 import { mock, MockProxy } from "jest-mock-extended";
 import { TextJakeCustomerService, normalizePhone } from "../TextJakeCustomerService";
 import { TextJakeCustomerRow, TextJakeCustomerStore } from "../TextJakeCustomerStore";
+import { CreditService } from "../../metering/CreditService";
 
 /**
  * The text-Jake customer service (JAK-115) is the tier-1 billing identity. These
  * tests pin: a phone resolves to a stable customer + credit account, two phones
  * never share an account (billing isolation), phones are normalized so the same
- * number can't split, and the GHL contact link is passed through.
+ * number can't split, the GHL contact link is passed through, and a genuinely NEW
+ * customer has their three credit buckets seeded (JAK-161).
  */
 describe("TextJakeCustomerService", () => {
   let store: MockProxy<TextJakeCustomerStore>;
+  let credits: MockProxy<CreditService>;
   let service: TextJakeCustomerService;
+
+  /** Shorthand for the store's upsert result: the row + whether it was just created. */
+  const upserted = (r: TextJakeCustomerRow, created = false) => ({ row: r, created });
 
   const row = (over: Partial<TextJakeCustomerRow> = {}): TextJakeCustomerRow => ({
     id: "cust-1111",
@@ -28,11 +34,12 @@ describe("TextJakeCustomerService", () => {
 
   beforeEach(() => {
     store = mock<TextJakeCustomerStore>();
-    service = new TextJakeCustomerService(store);
+    credits = mock<CreditService>();
+    service = new TextJakeCustomerService(store, credits);
   });
 
   it("resolves a phone to a customer whose credit account is its stable id", async () => {
-    store.upsertByPhone.mockResolvedValue(row({ id: "cust-abc", phone: "+15559990000" }));
+    store.upsertByPhone.mockResolvedValue(upserted(row({ id: "cust-abc", phone: "+15559990000" })));
 
     const customer = await service.resolveByPhone("+15559990000");
 
@@ -42,7 +49,7 @@ describe("TextJakeCustomerService", () => {
   });
 
   it("passes the GHL contact id through to the upsert when known", async () => {
-    store.upsertByPhone.mockResolvedValue(row({ ghl_contact_id: "ct_1" }));
+    store.upsertByPhone.mockResolvedValue(upserted(row({ ghl_contact_id: "ct_1" })));
 
     const customer = await service.resolveByPhone("+15559990000", "ct_1");
 
@@ -52,7 +59,7 @@ describe("TextJakeCustomerService", () => {
 
   it("maps two different phones to two different credit accounts (isolation)", async () => {
     store.upsertByPhone.mockImplementation(async (phone) =>
-      row({ id: `cust_${phone}`, phone })
+      upserted(row({ id: `cust_${phone}`, phone }))
     );
 
     const a = await service.resolveByPhone("+15550001111");
@@ -64,11 +71,25 @@ describe("TextJakeCustomerService", () => {
   });
 
   it("normalizes the phone before resolving (no split on stray whitespace)", async () => {
-    store.upsertByPhone.mockResolvedValue(row());
+    store.upsertByPhone.mockResolvedValue(upserted(row()));
 
     await service.resolveByPhone("  +1 555 999 0000 ");
 
     expect(store.upsertByPhone).toHaveBeenCalledWith("+15559990000", null);
+  });
+
+  it("seeds the three credit buckets ONLY when the customer is genuinely new (JAK-161)", async () => {
+    // Fresh insert → seed once, keyed on the new customer's stable id.
+    store.upsertByPhone.mockResolvedValue(upserted(row({ id: "cust-new" }), true));
+    await service.resolveByPhone("+15559990000");
+    expect(credits.seedNewCustomer).toHaveBeenCalledWith("cust-new");
+
+    credits.seedNewCustomer.mockClear();
+
+    // Returning texter (ON CONFLICT update) → never re-seeded, so no extra grants.
+    store.upsertByPhone.mockResolvedValue(upserted(row({ id: "cust-new" }), false));
+    await service.resolveByPhone("+15559990000");
+    expect(credits.seedNewCustomer).not.toHaveBeenCalled();
   });
 
   it("normalizePhone strips whitespace", () => {

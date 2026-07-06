@@ -1,4 +1,5 @@
 import { injectable } from "tsyringe";
+import { CreditService } from "../metering/CreditService";
 import { TextJakeCustomerRow, TextJakeCustomerStore } from "./TextJakeCustomerStore";
 import { TextJakeCustomer } from "./TextJakeCustomerTypes";
 
@@ -14,19 +15,30 @@ import { TextJakeCustomer } from "./TextJakeCustomerTypes";
  */
 @injectable()
 export class TextJakeCustomerService {
-  constructor(private readonly store: TextJakeCustomerStore) {}
+  constructor(
+    private readonly store: TextJakeCustomerStore,
+    private readonly credits: CreditService
+  ) {}
 
   /**
    * Resolve (creating on first contact) the customer for a sender phone. Pass the
    * GHL contact id when known so status notes can target it; it's only set if we
    * don't already have one.
+   *
+   * On a genuinely NEW customer, seed their three per-feature credit balances
+   * (JAK-161: report / skiptrace / comps) from the admin-editable defaults. The
+   * seed is idempotent and only fired on first insert, so a returning texter
+   * never pays the extra queries and is never re-granted.
    */
   async resolveByPhone(
     phone: string,
     ghlContactId?: string | null
   ): Promise<TextJakeCustomer> {
     const normalized = normalizePhone(phone);
-    const row = await this.store.upsertByPhone(normalized, ghlContactId ?? null);
+    const { row, created } = await this.store.upsertByPhone(normalized, ghlContactId ?? null);
+    if (created) {
+      await this.credits.seedNewCustomer(row.id);
+    }
     return toCustomer(row);
   }
 }

@@ -328,6 +328,7 @@ describe("GhlEnrichmentWorker", () => {
       credits.refundEnrichment.mockResolvedValue({
         id: "led-r",
         location_id: "loc_1",
+        credit_type: "report",
         amount: 1,
         balance_after: 10,
         reason: "refund",

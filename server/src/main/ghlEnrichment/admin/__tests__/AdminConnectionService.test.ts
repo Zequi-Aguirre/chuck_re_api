@@ -76,6 +76,7 @@ describe("AdminConnectionService", () => {
     credits.grantCredits.mockResolvedValue({
       id: "e1",
       location_id: "loc_1",
+      credit_type: "report",
       amount: 100,
       balance_after: 100,
       reason: "manual_grant",

@@ -84,15 +84,15 @@ describe("CreditLedgerStore", () => {
       expect(seq[seq.length - 1]).toBe("COMMIT");
       expect(seq).toEqual(expect.arrayContaining([expect.stringContaining("FOR UPDATE")]));
 
-      // Balance updated to 5 - (1+2) = 2.
-      expect(paramsOf(client, "UPDATE credit_balances")).toEqual(["loc_1", 2]);
+      // Balance updated to 5 - (1+2) = 2, in the default REPORT bucket (JAK-161).
+      expect(paramsOf(client, "UPDATE credit_balances")).toEqual(["loc_1", "report", 2]);
 
       // Ledger rows record NEGATIVE amounts with the running balance snapshot.
       const ledgerCalls = (client.query as jest.Mock).mock.calls.filter((c) =>
         String(c[0]).includes("INSERT INTO credit_ledger")
       );
-      expect(ledgerCalls[0][1]).toEqual(["loc_1", -1, 4, "enrichment", "ct_1"]);
-      expect(ledgerCalls[1][1]).toEqual(["loc_1", -2, 2, "skip_trace", "ct_1"]);
+      expect(ledgerCalls[0][1]).toEqual(["loc_1", "report", -1, 4, "enrichment", "ct_1"]);
+      expect(ledgerCalls[1][1]).toEqual(["loc_1", "report", -2, 2, "skip_trace", "ct_1"]);
 
       expect(client.release).toHaveBeenCalledTimes(1);
     });
@@ -200,9 +200,10 @@ describe("CreditLedgerStore", () => {
       const row = await store.refund({ locationId: "loc_1", contactId: "ct_1" });
 
       expect(row).toEqual({ id: "led-1" });
-      expect(paramsOf(client, "UPDATE credit_balances")).toEqual(["loc_1", 5]);
+      expect(paramsOf(client, "UPDATE credit_balances")).toEqual(["loc_1", "report", 5]);
       expect(paramsOf(client, "INSERT INTO credit_ledger")).toEqual([
         "loc_1",
+        "report",
         1, // positive reversal of the -1 debit
         5,
         "refund",
@@ -247,9 +248,10 @@ describe("CreditLedgerStore", () => {
       const row = await store.grant({ locationId: "loc_1", amount: 5, reason: "manual_grant" });
 
       expect(row).toEqual({ id: "led-1" });
-      expect(paramsOf(client, "UPDATE credit_balances")).toEqual(["loc_1", 7]);
+      expect(paramsOf(client, "UPDATE credit_balances")).toEqual(["loc_1", "report", 7]);
       expect(paramsOf(client, "INSERT INTO credit_ledger")).toEqual([
         "loc_1",
+        "report",
         5,
         7,
         "manual_grant",
@@ -264,6 +266,69 @@ describe("CreditLedgerStore", () => {
         store.grant({ locationId: "loc_1", amount: 0, reason: "manual_grant" })
       ).rejects.toThrow("positive integer");
       expect(db.connect).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("seedInitialBalance (JAK-161 new-customer defaults)", () => {
+    it("creates the bucket row + an audit ledger row on first seed, returning true", async () => {
+      (client.query as jest.Mock).mockImplementation(async (text: unknown) => {
+        if (String(text).includes("INSERT INTO credit_balances")) return { rowCount: 1, rows: [] };
+        return { rows: [] };
+      });
+
+      const seeded = await store.seedInitialBalance({
+        locationId: "acct_1",
+        creditType: "skiptrace",
+        amount: 10,
+        reason: "manual_grant",
+      });
+
+      expect(seeded).toBe(true);
+      expect(paramsOf(client, "INSERT INTO credit_ledger")).toEqual([
+        "acct_1",
+        "skiptrace",
+        10,
+        "manual_grant",
+      ]);
+      expect(sqlSequence(client)).toContain("COMMIT");
+    });
+
+    it("is a no-op (no ledger row, returns false) when the bucket already exists", async () => {
+      (client.query as jest.Mock).mockImplementation(async (text: unknown) => {
+        if (String(text).includes("INSERT INTO credit_balances")) return { rowCount: 0, rows: [] };
+        return { rows: [] };
+      });
+
+      const seeded = await store.seedInitialBalance({
+        locationId: "acct_1",
+        creditType: "comps",
+        amount: 10,
+        reason: "manual_grant",
+      });
+
+      expect(seeded).toBe(false);
+      expect(sqlSequence(client)).not.toEqual(
+        expect.arrayContaining([expect.stringContaining("INSERT INTO credit_ledger")])
+      );
+    });
+
+    it("does NOT write a ledger row for a zero-amount opening balance", async () => {
+      (client.query as jest.Mock).mockImplementation(async (text: unknown) => {
+        if (String(text).includes("INSERT INTO credit_balances")) return { rowCount: 1, rows: [] };
+        return { rows: [] };
+      });
+
+      const seeded = await store.seedInitialBalance({
+        locationId: "acct_1",
+        creditType: "comps",
+        amount: 0,
+        reason: "manual_grant",
+      });
+
+      expect(seeded).toBe(true);
+      expect(sqlSequence(client)).not.toEqual(
+        expect.arrayContaining([expect.stringContaining("INSERT INTO credit_ledger")])
+      );
     });
   });
 

@@ -37,7 +37,7 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-152** (P3) [LATER] Onboarding: white-glove + self-serve field-mapping guide — depends: JAK-105
 - [ ] **JAK-153** (P3) [LATER] Privacy Policy + Terms pages for Jake
 
-## Done (33)
+## Done (35)
 - [x] **JAK-100** (P0) Project ticket store (SQLite in-repo)
 - [x] **JAK-101** (P0) GHL app scaffolding + Doppler config + env helper — depends: JAK-100
 - [x] **JAK-102** (P0) Encrypted connection/credential store — depends: JAK-101
@@ -71,6 +71,5 @@ Epic: `ghl-enrichment`
 - [x] **JAK-157** (P1) Universal SMS footer -> 'Every lead deserves a Jake Report. / GoTextJake.com/crm' (replace GoTextJake.com)
 - [x] **JAK-158** (P1) Universal SMS footer copy update -> 'Every Lead Deserves Jake. / GoTextJake.com/CRM' — depends: JAK-157
 - [x] **JAK-159** (P0) Phrase "last" (the last one / last property) in skip/comps resolves to genuinely MOST-RECENT address, not the end of the first-appearance ordinal list — depends: JAK-154, JAK-156
-
-## in progress (1)
-- [ ] **JAK-160** (P1) Comps output overhaul: year-built + days-on-market, REAL haversine distance, closest-5 sorted nearest-first — depends: JAK-137, JAK-144
+- [x] **JAK-160** (P1) Comps output overhaul: year-built + days-on-market, REAL haversine distance, closest-5 sorted nearest-first — depends: JAK-137, JAK-144
+- [x] **JAK-161** (P1) Split single Jake credit pool into 3 per-feature buckets (report/skiptrace/comps) — backend of credit-split epic — depends: JAK-109, JAK-136, JAK-137, JAK-144

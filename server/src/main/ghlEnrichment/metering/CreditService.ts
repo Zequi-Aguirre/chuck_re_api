@@ -1,7 +1,9 @@
 import { inject, injectable } from "tsyringe";
 import { GhlEnrichmentConfig } from "../config/GhlEnrichmentConfig";
 import {
+  CREDIT_TYPES,
   CreditLedgerReason,
+  CreditType,
   EnrichmentCostPlan,
   enrichmentChargeLines,
   enrichmentCreditCost,
@@ -9,6 +11,7 @@ import {
   textLookupCreditCost,
 } from "./CreditCosts";
 import { ChargeResult, CreditLedgerRow, CreditLedgerStore } from "./CreditLedgerStore";
+import { CreditSettingsService } from "./CreditSettingsService";
 
 /** A location's credit standing: current balance + recent ledger activity. */
 export interface CreditAccountSummary {
@@ -16,6 +19,9 @@ export interface CreditAccountSummary {
   balance: number;
   recent: CreditLedgerRow[];
 }
+
+/** A customer's three independent per-feature balances (JAK-161). */
+export type CreditBalances = Record<CreditType, number>;
 
 /**
  * Credit metering service (JAK-109) — the module's business surface.
@@ -35,7 +41,8 @@ export interface CreditAccountSummary {
 export class CreditService {
   constructor(
     @inject(CreditLedgerStore) private readonly ledger: CreditLedgerStore,
-    @inject(GhlEnrichmentConfig) private readonly config: GhlEnrichmentConfig
+    @inject(GhlEnrichmentConfig) private readonly config: GhlEnrichmentConfig,
+    @inject(CreditSettingsService) private readonly creditSettings: CreditSettingsService
   ) {}
 
   /** Total credits an enrichment with this plan will cost. */
@@ -43,9 +50,77 @@ export class CreditService {
     return enrichmentCreditCost(this.config.creditCosts, plan);
   }
 
-  /** Current spendable balance for a location (0 if it has none yet). */
-  async getBalance(locationId: string): Promise<number> {
-    return this.ledger.getBalance(locationId);
+  /**
+   * Current spendable balance for an account in ONE bucket (0 if none yet).
+   * Defaults to the REPORT bucket so pre-JAK-161 callers read what they always did.
+   */
+  async getBalance(locationId: string, type: CreditType = "report"): Promise<number> {
+    return this.ledger.getBalance(locationId, type);
+  }
+
+  // ── Typed per-bucket API (JAK-161) ──────────────────────────────────────────
+  // The three text-Jake features each check + charge ONLY their own bucket, so
+  // one bucket running dry never affects the others. These are the generic
+  // primitives; the feature-named wrappers below bind each path to its bucket.
+
+  /** True if an account can afford `amount` in a given bucket (free when amount ≤ 0). */
+  async hasCredits(accountId: string, type: CreditType, amount: number): Promise<boolean> {
+    if (amount <= 0) return true;
+    return (await this.ledger.getBalance(accountId, type)) >= amount;
+  }
+
+  /** Charge `amount` against ONE bucket, atomically. `reason` labels the ledger row. */
+  async charge(
+    accountId: string,
+    type: CreditType,
+    amount: number,
+    reason: CreditLedgerReason
+  ): Promise<ChargeResult> {
+    if (amount <= 0) {
+      return { ok: true, balanceAfter: await this.ledger.getBalance(accountId, type), entries: [] };
+    }
+    return this.ledger.charge({
+      locationId: accountId,
+      creditType: type,
+      contactId: null,
+      lines: [{ reason, amount }],
+    });
+  }
+
+  /** Grant `amount` into ONE bucket, atomically. Returns the created ledger row. */
+  async grant(
+    accountId: string,
+    type: CreditType,
+    amount: number,
+    reason: CreditLedgerReason = "manual_grant"
+  ): Promise<CreditLedgerRow> {
+    return this.ledger.grant({ locationId: accountId, creditType: type, amount, reason });
+  }
+
+  /** All three of an account's balances at once (JAK-161) — the per-feature view. */
+  async getBalances(accountId: string): Promise<CreditBalances> {
+    const entries = await Promise.all(
+      CREDIT_TYPES.map(async (type) => [type, await this.ledger.getBalance(accountId, type)] as const)
+    );
+    return Object.fromEntries(entries) as CreditBalances;
+  }
+
+  /**
+   * Seed a brand-new customer's three balances from the admin-editable defaults
+   * (JAK-161): report / skiptrace / comps. Idempotent — a bucket that already has
+   * a balance row is left untouched, so re-calling on an existing customer (or a
+   * spent-down one) never re-grants. Safe on every customer-creation path.
+   */
+  async seedNewCustomer(accountId: string): Promise<void> {
+    for (const type of CREDIT_TYPES) {
+      const amount = await this.creditSettings.defaultGrant(type);
+      await this.ledger.seedInitialBalance({
+        locationId: accountId,
+        creditType: type,
+        amount,
+        reason: "manual_grant",
+      });
+    }
   }
 
   /** True if the location can currently afford an enrichment with this plan. */
@@ -71,10 +146,13 @@ export class CreditService {
     const lines = enrichmentChargeLines(this.config.creditCosts, input.plan);
     if (lines.length === 0) {
       // Nothing priced (all costs configured to 0) — treat as a free success.
-      return { ok: true, balanceAfter: await this.ledger.getBalance(input.locationId), entries: [] };
+      return { ok: true, balanceAfter: await this.ledger.getBalance(input.locationId, "report"), entries: [] };
     }
+    // GHL-location enrichment lives entirely in the REPORT bucket (JAK-161) — its
+    // single-pool behavior is unchanged; the two never diverge.
     return this.ledger.charge({
       locationId: input.locationId,
+      creditType: "report",
       contactId: input.contactId,
       lines,
     });
@@ -111,11 +189,11 @@ export class CreditService {
     return textLookupCreditCost(this.config.creditCosts);
   }
 
-  /** True if a customer's credit account can currently afford a text lookup. */
+  /** True if a customer's REPORT bucket can currently afford a text lookup. */
   async hasCreditsForTextLookup(accountId: string): Promise<boolean> {
     const cost = this.costOfTextLookup();
     if (cost <= 0) return true;
-    return (await this.ledger.getBalance(accountId)) >= cost;
+    return (await this.ledger.getBalance(accountId, "report")) >= cost;
   }
 
   /**
@@ -127,9 +205,9 @@ export class CreditService {
   async chargeForTextLookup(input: { accountId: string }): Promise<ChargeResult> {
     const lines = textLookupChargeLines(this.config.creditCosts);
     if (lines.length === 0) {
-      return { ok: true, balanceAfter: await this.ledger.getBalance(input.accountId), entries: [] };
+      return { ok: true, balanceAfter: await this.ledger.getBalance(input.accountId, "report"), entries: [] };
     }
-    return this.ledger.charge({ locationId: input.accountId, contactId: null, lines });
+    return this.ledger.charge({ locationId: input.accountId, creditType: "report", contactId: null, lines });
   }
 
   // ── Text-Jake skip trace (JAK-136) ─────────────────────────────────────────
@@ -139,10 +217,10 @@ export class CreditService {
   // the text-lookup path it bills the texting CUSTOMER's credit account (by phone),
   // with no per-contact idempotency: each confirmed trace is its own billed action.
 
-  /** True if a customer's credit account can afford a skip trace at `credits`. */
+  /** True if a customer's SKIPTRACE bucket can afford a skip trace at `credits`. */
   async hasCreditsForSkipTrace(accountId: string, credits: number): Promise<boolean> {
     if (credits <= 0) return true;
-    return (await this.ledger.getBalance(accountId)) >= credits;
+    return (await this.ledger.getBalance(accountId, "skiptrace")) >= credits;
   }
 
   /**
@@ -154,10 +232,11 @@ export class CreditService {
    */
   async chargeForSkipTrace(input: { accountId: string; credits: number }): Promise<ChargeResult> {
     if (input.credits <= 0) {
-      return { ok: true, balanceAfter: await this.ledger.getBalance(input.accountId), entries: [] };
+      return { ok: true, balanceAfter: await this.ledger.getBalance(input.accountId, "skiptrace"), entries: [] };
     }
     return this.ledger.charge({
       locationId: input.accountId,
+      creditType: "skiptrace",
       contactId: null,
       lines: [{ reason: "skip_trace", amount: input.credits }],
     });
@@ -171,10 +250,10 @@ export class CreditService {
   // with no per-contact idempotency: each confirmed comps pull is its own billed
   // action.
 
-  /** True if a customer's credit account can afford a comps pull at `credits`. */
+  /** True if a customer's COMPS bucket can afford a comps pull at `credits`. */
   async hasCreditsForComps(accountId: string, credits: number): Promise<boolean> {
     if (credits <= 0) return true;
-    return (await this.ledger.getBalance(accountId)) >= credits;
+    return (await this.ledger.getBalance(accountId, "comps")) >= credits;
   }
 
   /**
@@ -186,34 +265,40 @@ export class CreditService {
    */
   async chargeForComps(input: { accountId: string; credits: number }): Promise<ChargeResult> {
     if (input.credits <= 0) {
-      return { ok: true, balanceAfter: await this.ledger.getBalance(input.accountId), entries: [] };
+      return { ok: true, balanceAfter: await this.ledger.getBalance(input.accountId, "comps"), entries: [] };
     }
     return this.ledger.charge({
       locationId: input.accountId,
+      creditType: "comps",
       contactId: null,
       lines: [{ reason: "comps", amount: input.credits }],
     });
   }
 
   /**
-   * Grant credits to a location (beta: manual top-up; also refunds/adjustments).
-   * Atomic; returns the created ledger entry. Billing automation is deferred.
+   * Grant credits to an account (beta: manual top-up; also refunds/adjustments).
+   * Atomic; returns the created ledger entry. `type` selects the bucket — defaults
+   * to REPORT so pre-JAK-161 callers (and the connection/enrichment grant path)
+   * are unchanged; JAK-162's admin UI passes a specific bucket. Billing automation
+   * is deferred.
    */
   async grantCredits(
     locationId: string,
     amount: number,
-    reason: CreditLedgerReason = "manual_grant"
+    reason: CreditLedgerReason = "manual_grant",
+    type: CreditType = "report"
   ): Promise<CreditLedgerRow> {
-    return this.ledger.grant({ locationId, amount, reason });
+    return this.ledger.grant({ locationId, creditType: type, amount, reason });
   }
 
   /**
-   * Simple internal read of a location's credit standing: balance + recent
-   * ledger. The data source for the JAK-112 status view.
+   * Simple internal read of a location's REPORT credit standing: balance + recent
+   * ledger. The data source for the JAK-112 status view (GHL locations only ever
+   * use the report bucket).
    */
   async getAccountSummary(locationId: string, recentLimit = 20): Promise<CreditAccountSummary> {
     const [balance, recent] = await Promise.all([
-      this.ledger.getBalance(locationId),
+      this.ledger.getBalance(locationId, "report"),
       this.ledger.recentEntries(locationId, recentLimit),
     ]);
     return { locationId, balance, recent };

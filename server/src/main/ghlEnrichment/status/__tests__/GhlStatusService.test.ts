@@ -40,6 +40,7 @@ const eventRow = (over: Partial<GhlEnrichmentEventRow> = {}): GhlEnrichmentEvent
 const ledgerRow = (over: Partial<CreditLedgerRow> = {}): CreditLedgerRow => ({
   id: "led-1",
   location_id: "loc_1",
+  credit_type: "report",
   amount: -1,
   balance_after: 41,
   reason: "enrichment",

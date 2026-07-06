@@ -1,6 +1,7 @@
 import { mock, MockProxy } from "jest-mock-extended";
 import { GhlEnrichmentConfig } from "../../config/GhlEnrichmentConfig";
 import { CreditService } from "../CreditService";
+import { CreditSettingsService } from "../CreditSettingsService";
 import { CreditLedgerRow, CreditLedgerStore } from "../CreditLedgerStore";
 
 const configWith = (enrichment: number, skipTrace: number, textLookup = 1): GhlEnrichmentConfig =>
@@ -15,6 +16,7 @@ const configWith = (enrichment: number, skipTrace: number, textLookup = 1): GhlE
 const ledgerRow = (over: Partial<CreditLedgerRow> = {}): CreditLedgerRow => ({
   id: "led-1",
   location_id: "loc_1",
+  credit_type: "report",
   amount: -1,
   balance_after: 9,
   reason: "enrichment",
@@ -27,11 +29,19 @@ const ledgerRow = (over: Partial<CreditLedgerRow> = {}): CreditLedgerRow => ({
 
 describe("CreditService", () => {
   let store: MockProxy<CreditLedgerStore>;
+  let creditSettings: MockProxy<CreditSettingsService>;
   let service: CreditService;
+
+  const newService = (config = configWith(1, 2)) =>
+    new CreditService(store, config, creditSettings);
 
   beforeEach(() => {
     store = mock<CreditLedgerStore>();
-    service = new CreditService(store, configWith(1, 2));
+    creditSettings = mock<CreditSettingsService>();
+    creditSettings.defaultGrant.mockImplementation(
+      async (type) => ({ report: 100, skiptrace: 10, comps: 10 }[type])
+    );
+    service = newService();
   });
 
   describe("costOf", () => {
@@ -53,32 +63,34 @@ describe("CreditService", () => {
     });
 
     it("is true without a DB read when the operation is free (cost 0)", async () => {
-      const free = new CreditService(store, configWith(0, 0));
+      const free = newService(configWith(0, 0));
       expect(await free.hasSufficientCredits("loc_1", { skipTrace: true })).toBe(true);
       expect(store.getBalance).not.toHaveBeenCalled();
     });
   });
 
-  describe("chargeForEnrichment", () => {
-    it("charges a single enrichment line without a skip-trace", async () => {
+  describe("chargeForEnrichment (GHL — REPORT bucket)", () => {
+    it("charges a single enrichment line against the report bucket without a skip-trace", async () => {
       store.charge.mockResolvedValue({ ok: true, balanceAfter: 9, entries: [ledgerRow()] });
 
       await service.chargeForEnrichment({ locationId: "loc_1", contactId: "ct_1", plan: { skipTrace: false } });
 
       expect(store.charge).toHaveBeenCalledWith({
         locationId: "loc_1",
+        creditType: "report",
         contactId: "ct_1",
         lines: [{ reason: "enrichment", amount: 1 }],
       });
     });
 
-    it("charges an itemized enrichment + skip_trace when skip-tracing", async () => {
+    it("charges an itemized enrichment + skip_trace (both in the report bucket) when skip-tracing", async () => {
       store.charge.mockResolvedValue({ ok: true, balanceAfter: 7, entries: [] });
 
       await service.chargeForEnrichment({ locationId: "loc_1", contactId: "ct_1", plan: { skipTrace: true } });
 
       expect(store.charge).toHaveBeenCalledWith({
         locationId: "loc_1",
+        creditType: "report",
         contactId: "ct_1",
         lines: [
           { reason: "enrichment", amount: 1 },
@@ -88,7 +100,7 @@ describe("CreditService", () => {
     });
 
     it("is a free success when everything is priced at 0 — no charge issued", async () => {
-      const free = new CreditService(store, configWith(0, 0));
+      const free = newService(configWith(0, 0));
       store.getBalance.mockResolvedValue(5);
 
       const result = await free.chargeForEnrichment({
@@ -102,72 +114,53 @@ describe("CreditService", () => {
     });
   });
 
-  describe("text-Jake lookups (JAK-115)", () => {
+  describe("text-Jake report lookups (JAK-115 — REPORT bucket)", () => {
     it("prices a text lookup from config", () => {
       expect(service.costOfTextLookup()).toBe(1);
-      expect(new CreditService(store, configWith(1, 2, 3)).costOfTextLookup()).toBe(3);
+      expect(newService(configWith(1, 2, 3)).costOfTextLookup()).toBe(3);
     });
 
-    it("checks affordability against the customer's credit account", async () => {
+    it("checks affordability against the account's REPORT bucket", async () => {
       store.getBalance.mockResolvedValue(1);
       expect(await service.hasCreditsForTextLookup("acct_1")).toBe(true);
-      expect(store.getBalance).toHaveBeenCalledWith("acct_1");
+      expect(store.getBalance).toHaveBeenCalledWith("acct_1", "report");
 
       store.getBalance.mockResolvedValue(0);
       expect(await service.hasCreditsForTextLookup("acct_1")).toBe(false);
     });
 
-    it("is free (no DB read) when the lookup is priced at 0", async () => {
-      const free = new CreditService(store, configWith(1, 2, 0));
-      expect(await free.hasCreditsForTextLookup("acct_1")).toBe(true);
-      expect(store.getBalance).not.toHaveBeenCalled();
-    });
-
-    it("charges a text_lookup line to the account with NO contact-id dedup (each text bills)", async () => {
+    it("charges a text_lookup line to the REPORT bucket, NO contact-id dedup", async () => {
       store.charge.mockResolvedValue({ ok: true, balanceAfter: 4, entries: [] });
 
       await service.chargeForTextLookup({ accountId: "acct_1" });
 
       expect(store.charge).toHaveBeenCalledWith({
         locationId: "acct_1",
+        creditType: "report",
         contactId: null,
         lines: [{ reason: "text_lookup", amount: 1 }],
       });
     });
-
-    it("is a free success when the lookup is priced at 0 — no charge issued", async () => {
-      const free = new CreditService(store, configWith(1, 2, 0));
-      store.getBalance.mockResolvedValue(5);
-
-      const result = await free.chargeForTextLookup({ accountId: "acct_1" });
-
-      expect(result).toEqual({ ok: true, balanceAfter: 5, entries: [] });
-      expect(store.charge).not.toHaveBeenCalled();
-    });
   });
 
-  describe("skip trace (JAK-136)", () => {
-    it("checks affordability against the customer's account at the passed cost", async () => {
+  describe("skip trace (JAK-136 — SKIPTRACE bucket)", () => {
+    it("checks affordability against the SKIPTRACE bucket at the passed cost", async () => {
       store.getBalance.mockResolvedValue(3);
       expect(await service.hasCreditsForSkipTrace("acct_1", 3)).toBe(true);
-      expect(store.getBalance).toHaveBeenCalledWith("acct_1");
+      expect(store.getBalance).toHaveBeenCalledWith("acct_1", "skiptrace");
 
       store.getBalance.mockResolvedValue(2);
       expect(await service.hasCreditsForSkipTrace("acct_1", 3)).toBe(false);
     });
 
-    it("is affordable without a DB read when the cost is 0", async () => {
-      expect(await service.hasCreditsForSkipTrace("acct_1", 0)).toBe(true);
-      expect(store.getBalance).not.toHaveBeenCalled();
-    });
-
-    it("charges a single skip_trace line at the passed cost, NO contact-id dedup", async () => {
+    it("charges a single skip_trace line to the SKIPTRACE bucket, NO contact-id dedup", async () => {
       store.charge.mockResolvedValue({ ok: true, balanceAfter: 7, entries: [] });
 
       await service.chargeForSkipTrace({ accountId: "acct_1", credits: 3 });
 
       expect(store.charge).toHaveBeenCalledWith({
         locationId: "acct_1",
+        creditType: "skiptrace",
         contactId: null,
         lines: [{ reason: "skip_trace", amount: 3 }],
       });
@@ -178,12 +171,124 @@ describe("CreditService", () => {
       const result = await service.chargeForSkipTrace({ accountId: "acct_1", credits: 3 });
       expect(result).toEqual({ ok: false, balance: 1, required: 3 });
     });
+  });
 
-    it("is a free success (no charge issued) when the cost is 0", async () => {
+  describe("comps (JAK-137 — COMPS bucket)", () => {
+    it("checks affordability against the COMPS bucket at the passed cost", async () => {
+      store.getBalance.mockResolvedValue(3);
+      expect(await service.hasCreditsForComps("acct_1", 3)).toBe(true);
+      expect(store.getBalance).toHaveBeenCalledWith("acct_1", "comps");
+    });
+
+    it("charges a single comps line to the COMPS bucket", async () => {
+      store.charge.mockResolvedValue({ ok: true, balanceAfter: 7, entries: [] });
+
+      await service.chargeForComps({ accountId: "acct_1", credits: 3 });
+
+      expect(store.charge).toHaveBeenCalledWith({
+        locationId: "acct_1",
+        creditType: "comps",
+        contactId: null,
+        lines: [{ reason: "comps", amount: 3 }],
+      });
+    });
+  });
+
+  describe("typed per-bucket API (JAK-161)", () => {
+    it("getBalance defaults to the report bucket and honors an explicit type", async () => {
       store.getBalance.mockResolvedValue(5);
-      const result = await service.chargeForSkipTrace({ accountId: "acct_1", credits: 0 });
-      expect(result).toEqual({ ok: true, balanceAfter: 5, entries: [] });
-      expect(store.charge).not.toHaveBeenCalled();
+      await service.getBalance("acct_1");
+      expect(store.getBalance).toHaveBeenCalledWith("acct_1", "report");
+      await service.getBalance("acct_1", "comps");
+      expect(store.getBalance).toHaveBeenCalledWith("acct_1", "comps");
+    });
+
+    it("hasCredits reads only the named bucket (free when amount ≤ 0)", async () => {
+      store.getBalance.mockResolvedValue(2);
+      expect(await service.hasCredits("acct_1", "skiptrace", 3)).toBe(false);
+      expect(store.getBalance).toHaveBeenCalledWith("acct_1", "skiptrace");
+      expect(await service.hasCredits("acct_1", "comps", 0)).toBe(true);
+    });
+
+    it("charge routes to the named bucket with the given reason", async () => {
+      store.charge.mockResolvedValue({ ok: true, balanceAfter: 7, entries: [] });
+      await service.charge("acct_1", "comps", 3, "comps");
+      expect(store.charge).toHaveBeenCalledWith({
+        locationId: "acct_1",
+        creditType: "comps",
+        contactId: null,
+        lines: [{ reason: "comps", amount: 3 }],
+      });
+    });
+
+    it("grant routes to the named bucket, defaulting to report", async () => {
+      store.grant.mockResolvedValue(ledgerRow({ amount: 5, reason: "manual_grant" }));
+      await service.grant("acct_1", "skiptrace", 5);
+      expect(store.grant).toHaveBeenCalledWith({
+        locationId: "acct_1",
+        creditType: "skiptrace",
+        amount: 5,
+        reason: "manual_grant",
+      });
+    });
+
+    it("getBalances reads all three buckets independently", async () => {
+      store.getBalance.mockImplementation(async (_acct, type) =>
+        ({ report: 100, skiptrace: 7, comps: 3 }[type as string] ?? 0)
+      );
+      expect(await service.getBalances("acct_1")).toEqual({ report: 100, skiptrace: 7, comps: 3 });
+    });
+  });
+
+  describe("seedNewCustomer (JAK-161)", () => {
+    it("seeds all three buckets from the admin-editable defaults, idempotently", async () => {
+      store.seedInitialBalance.mockResolvedValue(true);
+
+      await service.seedNewCustomer("acct_new");
+
+      expect(store.seedInitialBalance).toHaveBeenCalledWith({
+        locationId: "acct_new",
+        creditType: "report",
+        amount: 100,
+        reason: "manual_grant",
+      });
+      expect(store.seedInitialBalance).toHaveBeenCalledWith({
+        locationId: "acct_new",
+        creditType: "skiptrace",
+        amount: 10,
+        reason: "manual_grant",
+      });
+      expect(store.seedInitialBalance).toHaveBeenCalledWith({
+        locationId: "acct_new",
+        creditType: "comps",
+        amount: 10,
+        reason: "manual_grant",
+      });
+      expect(store.seedInitialBalance).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe("grantCredits", () => {
+    it("grants to the report bucket by default, defaulting the reason to manual_grant", async () => {
+      store.grant.mockResolvedValue(ledgerRow({ amount: 100, reason: "manual_grant" }));
+      await service.grantCredits("loc_1", 100);
+      expect(store.grant).toHaveBeenCalledWith({
+        locationId: "loc_1",
+        creditType: "report",
+        amount: 100,
+        reason: "manual_grant",
+      });
+    });
+
+    it("grants to an explicit bucket when one is passed (JAK-162 top-up)", async () => {
+      store.grant.mockResolvedValue(ledgerRow({ amount: 5, reason: "manual_grant" }));
+      await service.grantCredits("loc_1", 5, "manual_grant", "comps");
+      expect(store.grant).toHaveBeenCalledWith({
+        locationId: "loc_1",
+        creditType: "comps",
+        amount: 5,
+        reason: "manual_grant",
+      });
     });
   });
 
@@ -203,32 +308,19 @@ describe("CreditService", () => {
 
     it("returns null when there was nothing to refund (idempotent no-op)", async () => {
       store.refund.mockResolvedValue(null);
-      expect(
-        await service.refundEnrichment({ locationId: "loc_1", contactId: "ct_1" })
-      ).toBeNull();
-    });
-  });
-
-  describe("grantCredits", () => {
-    it("grants via the ledger, defaulting the reason to manual_grant", async () => {
-      store.grant.mockResolvedValue(ledgerRow({ amount: 100, reason: "manual_grant" }));
-      await service.grantCredits("loc_1", 100);
-      expect(store.grant).toHaveBeenCalledWith({
-        locationId: "loc_1",
-        amount: 100,
-        reason: "manual_grant",
-      });
+      expect(await service.refundEnrichment({ locationId: "loc_1", contactId: "ct_1" })).toBeNull();
     });
   });
 
   describe("getAccountSummary", () => {
-    it("returns the balance and recent ledger for a location", async () => {
+    it("returns the REPORT balance and recent ledger for a location", async () => {
       store.getBalance.mockResolvedValue(8);
       const recent = [ledgerRow()];
       store.recentEntries.mockResolvedValue(recent);
 
       const summary = await service.getAccountSummary("loc_1");
 
+      expect(store.getBalance).toHaveBeenCalledWith("loc_1", "report");
       expect(summary).toEqual({ locationId: "loc_1", balance: 8, recent });
     });
   });
