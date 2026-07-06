@@ -41,6 +41,7 @@ import { GhlEnrichmentEventStore } from "../worker/GhlEnrichmentEventStore";
 import { GhlEnrichmentWorker } from "../worker/GhlEnrichmentWorker";
 import { CreditLedgerStore } from "../metering/CreditLedgerStore";
 import { CreditService } from "../metering/CreditService";
+import { CreditSettingsService } from "../metering/CreditSettingsService";
 import { GhlStatusService } from "../status/GhlStatusService";
 import { GhlStatusResource } from "../status/GhlStatusResource";
 import { AdminUserStore } from "../admin/AdminUserStore";
@@ -163,6 +164,13 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   // Postgres pool with every other store.
   if (!c.isRegistered(CreditLedgerStore)) {
     c.registerSingleton(CreditLedgerStore);
+  }
+  // JAK-161 — admin-editable new-customer default grants + per-feature
+  // out-of-credits messages (app_settings, same pattern as the editable costs).
+  // Registered before CreditService, which seeds a new customer's three balances
+  // from these defaults.
+  if (!c.isRegistered(CreditSettingsService)) {
+    c.registerSingleton(CreditSettingsService);
   }
   if (!c.isRegistered(CreditService)) {
     c.registerSingleton(CreditService);

@@ -14,6 +14,7 @@ import { SkipTracePromptService } from "../../../services/skiptrace/SkipTracePro
 import { SkipTraceSettingsService } from "../../../services/skiptrace/SkipTraceSettingsService";
 import { CompsPromptService } from "../../../services/comps/CompsPromptService";
 import { CompsSettingsService } from "../../../services/comps/CompsSettingsService";
+import { CreditSettingsService } from "../../metering/CreditSettingsService";
 import { LlmModelSettingsService } from "../../../services/llm/LlmModelSettingsService";
 
 // Obviously-fake, low-entropy placeholder used by the reset-password tests.
@@ -44,6 +45,7 @@ describe("AdminResource", () => {
   let skipTraceSettings: MockProxy<SkipTraceSettingsService>;
   let compsPrompt: MockProxy<CompsPromptService>;
   let compsSettings: MockProxy<CompsSettingsService>;
+  let creditSettings: MockProxy<CreditSettingsService>;
   let modelSettings: MockProxy<LlmModelSettingsService>;
   let app: Express;
 
@@ -58,6 +60,7 @@ describe("AdminResource", () => {
     skipTraceSettings = mock<SkipTraceSettingsService>();
     compsPrompt = mock<CompsPromptService>();
     compsSettings = mock<CompsSettingsService>();
+    creditSettings = mock<CreditSettingsService>();
     modelSettings = mock<LlmModelSettingsService>();
     // Default: authenticated AS A SUPERADMIN so the admin-management tests reach
     // their handlers. Individual tests override to a plain admin / no session.
@@ -78,6 +81,7 @@ describe("AdminResource", () => {
         skipTraceSettings,
         compsPrompt,
         compsSettings,
+        creditSettings,
         modelSettings
       ).router
     );
@@ -191,6 +195,7 @@ describe("AdminResource", () => {
       connections.grantCredits.mockResolvedValue({
         id: "e1",
         location_id: "loc_1",
+        credit_type: "report",
         amount: 100,
         balance_after: 100,
         reason: "manual_grant",
@@ -275,6 +280,7 @@ describe("AdminResource", () => {
         entry: {
           id: "led-1",
           location_id: "cust-1",
+          credit_type: "report",
           amount: 5,
           balance_after: 5,
           reason: "manual_grant",

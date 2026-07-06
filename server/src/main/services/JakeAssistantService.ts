@@ -5,6 +5,8 @@ import { GhlConnectionService } from "../ghlEnrichment/connections/GhlConnection
 import { GhlConnection } from "../ghlEnrichment/connections/GhlConnectionTypes.ts";
 import { JakeGatewayClient } from "../ghlEnrichment/gateway/JakeGatewayClient.ts";
 import { CreditService } from "../ghlEnrichment/metering/CreditService.ts";
+import { CreditSettingsService } from "../ghlEnrichment/metering/CreditSettingsService.ts";
+import { CreditType } from "../ghlEnrichment/metering/CreditCosts.ts";
 import { TextJakeCustomerService } from "../ghlEnrichment/customers/TextJakeCustomerService.ts";
 import { ConversationMemoryService } from "../ghlEnrichment/conversation/ConversationMemoryService.ts";
 import { LookupRow } from "../ghlEnrichment/conversation/ConversationTypes.ts";
@@ -76,9 +78,6 @@ interface TextRoute {
     note(contactId: string, body: string): Promise<unknown>;
 }
 
-const OUT_OF_CREDITS_REPLY =
-    "You're out of Jake credits, so I couldn't run that lookup. Top up and text the address again.";
-
 /**
  * The brief ACK Jake sends before a confirmed paid specialist (skip-trace / comps)
  * that hits a paid API + the LLM writer, so the texter isn't left waiting in
@@ -119,6 +118,7 @@ export class JakeAssistantService {
         private readonly connections: GhlConnectionService,
         private readonly customers: TextJakeCustomerService,
         private readonly credits: CreditService,
+        private readonly creditSettings: CreditSettingsService,
         private readonly reportWriter: PropertyReportWriter,
         private readonly memory: ConversationMemoryService,
         private readonly orchestrator: JakeOrchestrator,
@@ -359,6 +359,18 @@ export class JakeAssistantService {
     }
 
     /**
+     * The customer-facing out-of-credits reply for one feature bucket (JAK-161):
+     * the ADMIN-EDITABLE message for that bucket, with the canonical JAK-158 SMS
+     * footer appended last (the footer is NOT part of the editable copy, so it can
+     * never be edited away). Sent when the bucket can't cover the feature's cost —
+     * the specialist does NOT run and nothing is charged.
+     */
+    private async outOfCreditsReply(type: CreditType): Promise<string> {
+        const message = await this.creditSettings.outOfCreditsMessage(type);
+        return [message, PropertyReportWriter.FOOTER].join("\n\n");
+    }
+
+    /**
      * The paid-lookup path, shared by a cache miss and an OK refresh. Enforces the
      * credit gate, runs the PropertySearch, replies, charges only on a delivered
      * match, and SNAPSHOTS the match so a repeat within the free window re-serves
@@ -377,18 +389,20 @@ export class JakeAssistantService {
     }): Promise<JakeInboundResult> {
         const { input, route, customer, accountId, phone, address } = ctx;
 
-        // Credit gate — never look up for free.
+        // Credit gate — never look up for free. The REPORT bucket only (JAK-161):
+        // an empty skip-trace / comps balance never blocks a report.
         if (!(await this.credits.hasCreditsForTextLookup(accountId))) {
-            await this.sendAndRemember(route, input.contactId, customer, phone, OUT_OF_CREDITS_REPLY);
+            const reply = await this.outOfCreditsReply("report");
+            await this.sendAndRemember(route, input.contactId, customer, phone, reply);
             await this.writeStatusNote(
                 route,
                 input.contactId,
-                `Jake (text): out of credits — skipped lookup for "${address}".`
+                `Jake (text): out of report credits — skipped lookup for "${address}".`
             );
             return {
                 ok: false,
                 address,
-                reply: OUT_OF_CREDITS_REPLY,
+                reply,
                 mode: route.mode,
                 charged: 0,
                 outOfCredits: true,
@@ -547,20 +561,17 @@ export class JakeAssistantService {
             return this.reserveSkipTraceFromCache({ input, route, customer, phone, target, cached, cost });
         }
 
-        // JAK-144: run immediately — NO "reply OK" confirmation. Credit gate FIRST:
-        // insufficient balance → do NOT run, reply with the clear no-charge message.
+        // JAK-144: run immediately — NO "reply OK" confirmation. Credit gate FIRST
+        // on the SKIPTRACE bucket only (JAK-161): insufficient balance → do NOT run,
+        // reply with the admin-editable skip-trace out-of-credits message, no charge.
         if (!(await this.credits.hasCreditsForSkipTrace(accountId, cost))) {
-            const balance = await this.credits.getBalance(accountId);
-            const reply = [
-                `A skip trace on ${target} costs ${cost} credit${cost === 1 ? "" : "s"}, but you have ${balance}. ` +
-                    "Top up and text me again to run it — I haven't charged you anything.",
-                PropertyReportWriter.FOOTER,
-            ].join("\n\n");
+            const balance = await this.credits.getBalance(accountId, "skiptrace");
+            const reply = await this.outOfCreditsReply("skiptrace");
             await this.sendAndRemember(route, input.contactId, customer, phone, reply);
             await this.writeStatusNote(
                 route,
                 input.contactId,
-                `Jake (text): skip trace for "${target}" needs ${cost} credit(s), balance ${balance} — declined, no charge.`
+                `Jake (text): skip trace for "${target}" needs ${cost} credit(s), skiptrace balance ${balance} — declined, no charge.`
             );
             return { ok: false, address: target, reply, mode: route.mode, charged: 0, outOfCredits: true };
         }
@@ -1177,20 +1188,17 @@ export class JakeAssistantService {
             return this.reserveCompsFromCache({ input, route, customer, phone, target, params, cached, cost });
         }
 
-        // JAK-144: run immediately — NO "reply OK" confirmation. Credit gate FIRST:
-        // insufficient balance → do NOT run, reply with the clear no-charge message.
+        // JAK-144: run immediately — NO "reply OK" confirmation. Credit gate FIRST
+        // on the COMPS bucket only (JAK-161): insufficient balance → do NOT run,
+        // reply with the admin-editable comps out-of-credits message, no charge.
         if (!(await this.credits.hasCreditsForComps(accountId, cost))) {
-            const balance = await this.credits.getBalance(accountId);
-            const reply = [
-                `Pulling comparable sales for ${target} costs ${cost} credit${cost === 1 ? "" : "s"}, but you have ${balance}. ` +
-                    "Top up and text me again to run it — I haven't charged you anything.",
-                PropertyReportWriter.FOOTER,
-            ].join("\n\n");
+            const balance = await this.credits.getBalance(accountId, "comps");
+            const reply = await this.outOfCreditsReply("comps");
             await this.sendAndRemember(route, input.contactId, customer, phone, reply);
             await this.writeStatusNote(
                 route,
                 input.contactId,
-                `Jake (text): comps for "${target}" needs ${cost} credit(s), balance ${balance} — declined, no charge.`
+                `Jake (text): comps for "${target}" needs ${cost} credit(s), comps balance ${balance} — declined, no charge.`
             );
             return { ok: false, address: target, reply, mode: route.mode, charged: 0, outOfCredits: true };
         }

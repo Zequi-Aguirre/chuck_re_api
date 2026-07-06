@@ -8,6 +8,7 @@ import { GhlConnection } from "../../ghlEnrichment/connections/GhlConnectionType
 import { TextJakeCustomerService } from "../../ghlEnrichment/customers/TextJakeCustomerService";
 import { TextJakeCustomer } from "../../ghlEnrichment/customers/TextJakeCustomerTypes";
 import { CreditService } from "../../ghlEnrichment/metering/CreditService";
+import { CreditSettingsService } from "../../ghlEnrichment/metering/CreditSettingsService";
 import { ConversationMemoryService } from "../../ghlEnrichment/conversation/ConversationMemoryService";
 import { LookupRow } from "../../ghlEnrichment/conversation/ConversationTypes";
 import { PropertyReportWriter } from "../PropertyReportWriter";
@@ -42,6 +43,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
   let connections: MockProxy<GhlConnectionService>;
   let customers: MockProxy<TextJakeCustomerService>;
   let credits: MockProxy<CreditService>;
+  let creditSettings: MockProxy<CreditSettingsService>;
   let reportWriter: MockProxy<PropertyReportWriter>;
   let memory: MockProxy<ConversationMemoryService>;
   let orchestrator: MockProxy<JakeOrchestrator>;
@@ -167,6 +169,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     connections = mock<GhlConnectionService>();
     customers = mock<TextJakeCustomerService>();
     credits = mock<CreditService>();
+    creditSettings = mock<CreditSettingsService>();
     reportWriter = mock<PropertyReportWriter>();
     memory = mock<ConversationMemoryService>();
     orchestrator = mock<JakeOrchestrator>();
@@ -254,6 +257,11 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     credits.chargeForComps.mockResolvedValue({ ok: true, balanceAfter: 7, entries: [] });
 
     customers.resolveByPhone.mockImplementation(async (phone) => customerFor(phone));
+    // Per-feature out-of-credits copy (JAK-161): echo the bucket so a test can
+    // assert the RIGHT message went out (the sender appends the JAK-158 footer).
+    creditSettings.outOfCreditsMessage.mockImplementation(
+      async (type) => `You're out of ${type} credits. To get more, contact an admin.`
+    );
     credits.hasCreditsForTextLookup.mockResolvedValue(true);
     credits.costOfTextLookup.mockReturnValue(1);
     credits.chargeForTextLookup.mockResolvedValue({ ok: true, balanceAfter: 9, entries: [] });
@@ -269,6 +277,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       connections,
       customers,
       credits,
+      creditSettings,
       reportWriter,
       memory,
       orchestrator,
@@ -667,7 +676,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(result.charged).toBe(0);
       expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
       expect(credits.chargeForTextLookup).not.toHaveBeenCalled();
-      expect(gateway.createContactNote).toHaveBeenCalledWith("ct_1", expect.stringContaining("out of credits"));
+      expect(gateway.createContactNote).toHaveBeenCalledWith("ct_1", expect.stringContaining("out of report credits"));
     });
 
     it("no address: guidance reply, no lookup, no charge", async () => {
@@ -1119,7 +1128,8 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(skipTrace.setPending).not.toHaveBeenCalled();
       expect(realEstate.skipTraceByAddress).not.toHaveBeenCalled();
       expect(credits.chargeForSkipTrace).not.toHaveBeenCalled();
-      expect(sent()).toContain("3 credit");
+      // JAK-161: the admin-editable SKIPTRACE out-of-credits message (bucket-specific).
+      expect(sent()).toContain("out of skiptrace credits");
       expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
     });
 
@@ -1422,7 +1432,8 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(comps.setPending).not.toHaveBeenCalled();
       expect(realEstate.getCompsByAddress).not.toHaveBeenCalled();
       expect(credits.chargeForComps).not.toHaveBeenCalled();
-      expect(sent()).toContain("3 credit");
+      // JAK-161: the admin-editable COMPS out-of-credits message (bucket-specific).
+      expect(sent()).toContain("out of comps credits");
       expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
     });
 

@@ -1,6 +1,7 @@
 import { mock, MockProxy } from "jest-mock-extended";
 import { GhlEnrichmentConfig } from "../../config/GhlEnrichmentConfig";
 import { CreditService } from "../../metering/CreditService";
+import { CreditSettingsService } from "../../metering/CreditSettingsService";
 import {
   CreditLedgerRow,
   CreditLedgerStore,
@@ -38,20 +39,31 @@ const config = (textLookup = 1): GhlEnrichmentConfig =>
  * (the customer id) that {@link CreditService.hasCreditsForTextLookup} reads.
  */
 function inMemoryLedger(): CreditLedgerStore {
+  // Bucket-aware (JAK-161): keyed by "accountId|creditType" so report / skiptrace
+  // / comps balances stay independent, as the real composite-PK store does.
   const balances = new Map<string, number>();
+  const key = (accountId: string, creditType = "report") => `${accountId}|${creditType}`;
   const fake = {
-    async getBalance(accountId: string): Promise<number> {
-      return balances.get(accountId) ?? 0;
+    async getBalance(accountId: string, creditType = "report"): Promise<number> {
+      return balances.get(key(accountId, creditType)) ?? 0;
     },
-    async listBalances(): Promise<LocationBalance[]> {
-      return [...balances.entries()].map(([location_id, balance]) => ({ location_id, balance }));
+    async listBalances(creditType = "report"): Promise<LocationBalance[]> {
+      return [...balances.entries()]
+        .filter(([k]) => k.endsWith(`|${creditType}`))
+        .map(([k, balance]) => ({ location_id: k.split("|")[0], balance }));
     },
-    async grant(input: { locationId: string; amount: number }): Promise<CreditLedgerRow> {
-      const next = (balances.get(input.locationId) ?? 0) + input.amount;
-      balances.set(input.locationId, next);
+    async grant(input: {
+      locationId: string;
+      creditType?: string;
+      amount: number;
+    }): Promise<CreditLedgerRow> {
+      const creditType = input.creditType ?? "report";
+      const next = (balances.get(key(input.locationId, creditType)) ?? 0) + input.amount;
+      balances.set(key(input.locationId, creditType), next);
       return {
-        id: `led-${input.locationId}`,
+        id: `led-${input.locationId}-${creditType}`,
         location_id: input.locationId,
+        credit_type: creditType,
         amount: input.amount,
         balance_after: next,
         reason: "manual_grant",
@@ -60,6 +72,16 @@ function inMemoryLedger(): CreditLedgerStore {
         modified_at: new Date("2026-07-01T00:00:00Z"),
         deleted_at: null,
       };
+    },
+    async seedInitialBalance(input: {
+      locationId: string;
+      creditType: string;
+      amount: number;
+    }): Promise<boolean> {
+      const k = key(input.locationId, input.creditType);
+      if (balances.has(k)) return false;
+      balances.set(k, input.amount);
+      return true;
     },
   };
   return fake as unknown as CreditLedgerStore;
@@ -106,7 +128,11 @@ describe("AdminTextCustomerService", () => {
     customers = mock<TextJakeCustomerService>();
     customerStore = mock<TextJakeCustomerStore>();
     ledger = inMemoryLedger();
-    credits = new CreditService(ledger, config());
+    const creditSettings = mock<CreditSettingsService>();
+    creditSettings.defaultGrant.mockImplementation(async (type) =>
+      ({ report: 100, skiptrace: 10, comps: 10 }[type])
+    );
+    credits = new CreditService(ledger, config(), creditSettings);
     sync = mock<TextCustomerGhlSyncService>();
     // Default: the off-prod "skipped" outcome so create/update don't try to
     // persist a contact id unless a test opts into a live sync.
@@ -144,7 +170,7 @@ describe("AdminTextCustomerService", () => {
     expect(await credits.hasCreditsForTextLookup("new-cust")).toBe(true);
   });
 
-  it("creates a customer with a normalized phone + profile, at balance 0 (JAK-146)", async () => {
+  it("creates a customer with a normalized phone + profile, seeded to the default report balance (JAK-146/161)", async () => {
     customerStore.create.mockResolvedValue(
       customerRow({ first_name: "Ada", last_name: "Lovelace", email: "ada@example.com" })
     );
@@ -164,8 +190,20 @@ describe("AdminTextCustomerService", () => {
     });
     expect(customer.firstName).toBe("Ada");
     expect(customer.email).toBe("ada@example.com");
-    // A brand-new customer has no ledger activity yet.
-    expect(customer.creditBalance).toBe(0);
+    // JAK-161: a brand-new customer is seeded from the default grants, so the
+    // returned (report) balance is the 100-credit report default, not 0.
+    expect(customer.creditBalance).toBe(100);
+  });
+
+  it("seeds the three per-feature credit buckets on create (JAK-161)", async () => {
+    customerStore.create.mockResolvedValue(customerRow({ id: "cust-seeded" }));
+
+    await service.create({ phone: "+17865270000", firstName: null, lastName: null, email: null });
+
+    // The three independent buckets are seeded from the defaults (100/10/10).
+    expect(await credits.getBalance("cust-seeded", "report")).toBe(100);
+    expect(await credits.getBalance("cust-seeded", "skiptrace")).toBe(10);
+    expect(await credits.getBalance("cust-seeded", "comps")).toBe(10);
   });
 
   it("syncs a created customer to the Jake sub-account and returns the sync outcome (JAK-147)", async () => {

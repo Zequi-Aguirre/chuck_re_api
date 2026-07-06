@@ -32,6 +32,21 @@ export interface EnrichmentCostPlan {
   skipTrace: boolean;
 }
 
+/**
+ * Which per-feature BUCKET a balance / ledger entry belongs to (JAK-161). Each
+ * text-Jake customer has three INDEPENDENT balances; a specialist only ever
+ * checks + charges its own bucket, so running one bucket dry never affects the
+ * others. Mirrors the `credit_type` column on `credit_ledger` / `credit_balances`
+ * (default 'report', so GHL-location enrichment stays single-pool in that bucket).
+ */
+export type CreditType = "report" | "skiptrace" | "comps";
+
+/** The three buckets, in a stable order — handy for seeding + iteration. */
+export const CREDIT_TYPES: readonly CreditType[] = ["report", "skiptrace", "comps"];
+
+/** The default bucket. Everything pre-JAK-161 (and all GHL enrichment) lives here. */
+export const DEFAULT_CREDIT_TYPE: CreditType = "report";
+
 /** Why a ledger entry exists. Mirrors the `reason` column on `credit_ledger`. */
 export type CreditLedgerReason =
   | "enrichment"

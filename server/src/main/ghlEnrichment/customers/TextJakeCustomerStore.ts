@@ -44,21 +44,28 @@ export class TextJakeCustomerStore {
    * (atomic upsert). A provided `ghlContactId` is set only if we don't already
    * have one on file — we never overwrite a known contact link with a later
    * value — and `modified_at` is always bumped so "last seen" tracks activity.
+   *
+   * Returns `created: true` ONLY when this call inserted a brand-new row (via the
+   * `xmax = 0` system-column trick — 0 for a fresh insert, non-zero for the ON
+   * CONFLICT update). That flag is how the caller seeds a new customer's three
+   * credit balances (JAK-161) exactly once, keeping the hot inbound path off the
+   * seeding queries for every returning texter.
    */
   async upsertByPhone(
     phone: string,
     ghlContactId: string | null
-  ): Promise<TextJakeCustomerRow> {
-    const result = await this.db.query<TextJakeCustomerRow>(
+  ): Promise<{ row: TextJakeCustomerRow; created: boolean }> {
+    const result = await this.db.query<TextJakeCustomerRow & { created: boolean }>(
       `INSERT INTO text_jake_customers (phone, ghl_contact_id)
        VALUES ($1, $2)
        ON CONFLICT (phone) DO UPDATE SET
          ghl_contact_id = COALESCE(text_jake_customers.ghl_contact_id, EXCLUDED.ghl_contact_id),
          modified_at = now()
-       RETURNING *`,
+       RETURNING *, (xmax = 0) AS created`,
       [phone, ghlContactId]
     );
-    return result.rows[0];
+    const { created, ...row } = result.rows[0];
+    return { row: row as TextJakeCustomerRow, created };
   }
 
   /**

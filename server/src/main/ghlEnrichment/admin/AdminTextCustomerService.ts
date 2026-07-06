@@ -104,9 +104,14 @@ export class AdminTextCustomerService {
       lastName: input.lastName,
       email: input.email,
     });
+    // Seed the three per-feature credit balances from the admin-editable defaults
+    // (JAK-161: report / skiptrace / comps). Idempotent, so it mirrors the passive
+    // first-contact seeding without ever double-granting.
+    await this.credits.seedNewCustomer(row.id);
     const sync = await this.sync.syncCustomer({ phone, ...profileOf(input) });
     const finalRow = await this.persistContactId(row, sync);
-    return { customer: toView(finalRow, 0), sync };
+    const balance = await this.credits.getBalance(finalRow.id, "report");
+    return { customer: toView(finalRow, balance), sync };
   }
 
   /**
