@@ -1937,6 +1937,113 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     });
   });
 
+  // JAK-166 — the "Sunset Strip" bug: a texter looks up a NEW address wrapped in
+  // conversational preamble ("Hey Jake, look up this address 7680 ..."). The
+  // deterministic insert-time parser (parseCommandAddress) can't read that — it isn't
+  // house-number-first — so the inbound row stores NO address, yet the report SUCCEEDS
+  // on the LLM-resolved target. Before the fix that success never updated the active
+  // property, so the next bare "comps" and "skip" fell back to a STALE older address
+  // (and even diverged to DIFFERENT ones as the router re-guessed per command). The fix
+  // backfills the acted-on address onto the requesting message, making it the single
+  // source of truth. This drives the memory seam STATEFULLY (markResolvedAddress writes,
+  // lastResolvedAddress reads — the same DB round-trip production performs) so the
+  // write-back is genuinely exercised: looking up B must make a following bare COMP and
+  // bare SKIP BOTH target B, never the older A.
+  describe("JAK-166 a successful lookup becomes the single active property for later comps/skip", () => {
+    const A = "5895 NW 62nd Ter, Parkland, FL 33067"; // OLD — the last address that parsed cleanly
+    const B = "7680 Sunset Strip, Sunrise, FL 33322"; // NEW — looked up via conversational preamble
+
+    const personsHit = {
+      match: true,
+      persons: [
+        { fullName: "Homer Simpson", phones: [{ phone: "+15550101" }], emails: ["homer@example.com"] },
+      ],
+    };
+
+    // The conversation's active-property memory, stateful: markResolvedAddress (the
+    // fix's write-back) updates it, lastResolvedAddress reads it — exactly the DB
+    // round-trip the production store performs.
+    let active: string | null;
+
+    const bareComps: DispatchPlan = {
+      intent: "comps",
+      targetEntity: null,
+      specialists: compsSpecialist(),
+      userFacingNote: "",
+      compParams: null,
+    };
+    const bareSkip: DispatchPlan = {
+      intent: "skip_trace",
+      targetEntity: null,
+      specialists: skipTraceSpecialist(),
+      userFacingNote: "",
+    };
+
+    beforeEach(() => {
+      active = null;
+      memory.lastResolvedAddress.mockImplementation(async () => active);
+      memory.markResolvedAddress.mockImplementation(async (_id: string, addr: string) => {
+        active = addr;
+      });
+      memory.resolvedAddressList.mockResolvedValue([A, B]);
+    });
+
+    // Look up A the ordinary, parseable way — the default orchestrator turns a parsed
+    // address into a property_report, and the fix records A as the active property.
+    const reportA = async (): Promise<void> => {
+      realEstate.searchPropertyByAddress.mockResolvedValue({ address: A } as never);
+      await service.handleInboundMessage({ contactId: "ct_1", senderPhone: "+15559990000", message: A });
+    };
+
+    // Look up B through a preamble message the insert-time regex CAN'T parse, so the
+    // router (LLM) resolves B into plan.targetEntity while appendInbound stores
+    // resolvedAddress = null — the exact shape that produced the bug.
+    const reportB = async (): Promise<void> => {
+      orchestrator.plan.mockResolvedValue({
+        intent: "property_report",
+        targetEntity: B,
+        specialists: reportSpecialist(),
+        userFacingNote: "",
+      });
+      realEstate.searchPropertyByAddress.mockResolvedValue({ address: B } as never);
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: `Hey Jake, look up this address ${B}`,
+      });
+    };
+
+    it("a report resolved via the LLM (unparseable inbound) still backfills the active property", async () => {
+      await reportB();
+      // The report acted on B and wrote it back onto the requesting inbound (msg_1),
+      // even though parseCommandAddress returned null for the preamble message.
+      expect(memory.markResolvedAddress).toHaveBeenCalledWith("msg_1", B);
+      expect(active).toBe(B);
+    });
+
+    it("after lookup A then lookup B, a bare COMP and a bare SKIP BOTH target B — never A", async () => {
+      await reportA();
+      expect(active).toBe(A); // A is the active property so far
+
+      await reportB();
+      expect(active).toBe(B); // the newer lookup takes over as the single source of truth
+
+      // Bare COMP → the most-recent engaged property (B), not the stale A.
+      orchestrator.plan.mockResolvedValue(bareComps);
+      await service.handleInboundMessage({ contactId: "ct_1", senderPhone: "+15559990000", message: "comps" });
+      expect(compsEngine.buildComps).toHaveBeenCalledWith({ target: B, params: DEFAULT_COMP_PARAMS });
+      expect(compsEngine.buildComps).not.toHaveBeenCalledWith(expect.objectContaining({ target: A }));
+
+      // Bare SKIP → the SAME property B (one source of truth), never a DIFFERENT stale
+      // address the way the reported bug diverged comps and skip to two old Parkland ones.
+      orchestrator.plan.mockResolvedValue(bareSkip);
+      realEstate.skipTraceByAddress.mockResolvedValue(personsHit as never);
+      await service.handleInboundMessage({ contactId: "ct_1", senderPhone: "+15559990000", message: "skip" });
+      expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith(B);
+      expect(realEstate.skipTraceByAddress).not.toHaveBeenCalledWith(A);
+    });
+  });
+
   // JAK-156 — an address typed INSIDE a skip/comps command ("skip 123 Main St, Tampa
   // FL", "comps 123 ...") must target THAT exact address, not an older one resolved
   // from conversation history. Before the fix the leading "skip" made the deterministic

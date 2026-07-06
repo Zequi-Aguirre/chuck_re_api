@@ -297,6 +297,11 @@ export class JakeAssistantService {
                     return this.sendGuidance(input, route, customer, phone);
                 }
                 const target = resolution.target;
+                // JAK-166: this resolved address is now the conversation's active
+                // property — backfill it onto the requesting message so a later bare
+                // comps/skip targets THIS property, not a stale older one the
+                // insert-time regex happened to capture.
+                await this.rememberActiveProperty(requestingMessageId, target);
                 // Moving on to a report cancels any outstanding skip-trace or comps
                 // quote (and any pending address question) so a later bare "OK" or
                 // number can't fire a stale (paid) action.
@@ -543,6 +548,11 @@ export class JakeAssistantService {
             );
             return { ok: true, address: null, reply, mode: route.mode, charged: 0 };
         }
+
+        // JAK-166: the address this trace acts on becomes the active property, so a
+        // following bare comps/skip stays on it (and an inline "skip 123 Main St"
+        // makes 123 Main the active property).
+        await this.rememberActiveProperty(ctx.requestingMessageId, target);
 
         // JAK-145: resolve WHO we trace — the texter-named people ("skip trace
         // Jane and John"), else the PROPERTY OWNER pulled from PropertySearch
@@ -1177,6 +1187,11 @@ export class JakeAssistantService {
             );
             return { ok: true, address: null, reply, mode: route.mode, charged: 0 };
         }
+
+        // JAK-166: the address this comps run acts on becomes the active property,
+        // so a following bare skip/comps stays on it (and an inline "comps 123 Main"
+        // makes 123 Main the active property).
+        await this.rememberActiveProperty(ctx.requestingMessageId, target);
 
         // Resolve parameters: admin defaults overlaid with texter overrides, clamped.
         const params = resolveCompParams(await this.compsSettings.defaultParams(), plan.compParams);
@@ -1842,6 +1857,29 @@ export class JakeAssistantService {
         } catch (err) {
             console.error("⚠️ Jake inbound memory write failed:", this.errorSummary(err));
             return null;
+        }
+    }
+
+    /**
+     * JAK-166: make the address a command actually acts on the conversation's
+     * single active property. The insert-time regex (parseCommandAddress) only
+     * captures a bare, house-number-first address; when the texter wraps it in
+     * preamble ("Hey Jake, look up 123 Main St") the parse fails and the inbound
+     * row stores NO address, even though the lookup succeeds on the LLM-resolved
+     * target. Backfilling that resolved target onto the requesting message keeps
+     * lastResolvedAddress (created_at DESC) pointed at the property the texter is
+     * really on, so a later bare comps/skip can't drift to a stale older address.
+     * Best-effort: a memory hiccup must never break the customer's reply.
+     */
+    private async rememberActiveProperty(
+        requestingMessageId: string | null,
+        address: string
+    ): Promise<void> {
+        if (!requestingMessageId) return;
+        try {
+            await this.memory.markResolvedAddress(requestingMessageId, address);
+        } catch (err) {
+            console.error("⚠️ Jake active-property update failed:", this.errorSummary(err));
         }
     }
 

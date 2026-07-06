@@ -61,6 +61,26 @@ export class ConversationStore {
   }
 
   /**
+   * Backfill the resolved address onto an already-stored inbound message (JAK-166).
+   * The address is captured at INSERT time from a deterministic regex parse of the
+   * raw text (see `appendMessage` / `parseCommandAddress`), which fails whenever the
+   * texter wraps the address in conversational preamble ("Hey Jake, look up ...") —
+   * even though the lookup itself succeeds via the LLM-resolved target. This UPDATE
+   * lets the assistant write the address it ACTUALLY acted on back onto the
+   * requesting message, so `lastResolvedAddress` / `resolvedAddresses` become a
+   * single source of truth for the conversation's active property. No-op if the id
+   * is unknown.
+   */
+  async updateResolvedAddress(messageId: string, resolvedAddress: string): Promise<void> {
+    await this.db.query(
+      `UPDATE text_jake_conversation_messages
+          SET resolved_address = $2
+        WHERE id = $1`,
+      [messageId, resolvedAddress]
+    );
+  }
+
+  /**
    * The most recent inbound message for a phone that resolved to an address —
    * i.e. "the last address they sent". Used to resolve an "OK" refresh reply,
    * which carries no address of its own.

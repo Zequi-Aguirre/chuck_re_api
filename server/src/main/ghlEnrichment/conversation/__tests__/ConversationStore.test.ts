@@ -86,6 +86,18 @@ describe("ConversationStore", () => {
     });
   });
 
+  describe("updateResolvedAddress (JAK-166 active-property backfill)", () => {
+    it("UPDATEs the resolved_address of the given message id", async () => {
+      db.query.mockResolvedValue({ rows: [] } as never);
+      await store.updateResolvedAddress("m1", "7680 Sunset Strip, Sunrise, FL 33322");
+      const [sql, params] = lastQuery(db);
+      expect(String(sql)).toContain("UPDATE text_jake_conversation_messages");
+      expect(String(sql)).toContain("SET resolved_address = $2");
+      expect(String(sql)).toContain("WHERE id = $1");
+      expect(params).toEqual(["m1", "7680 Sunset Strip, Sunrise, FL 33322"]);
+    });
+  });
+
   describe("resolvedAddresses (JAK-135 ordered list)", () => {
     it("returns DISTINCT inbound resolved addresses, oldest-first by first send", async () => {
       db.query.mockResolvedValue({
