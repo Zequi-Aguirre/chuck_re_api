@@ -37,7 +37,7 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-152** (P3) [LATER] Onboarding: white-glove + self-serve field-mapping guide — depends: JAK-105
 - [ ] **JAK-153** (P3) [LATER] Privacy Policy + Terms pages for Jake
 
-## Done (32)
+## Done (33)
 - [x] **JAK-100** (P0) Project ticket store (SQLite in-repo)
 - [x] **JAK-101** (P0) GHL app scaffolding + Doppler config + env helper — depends: JAK-100
 - [x] **JAK-102** (P0) Encrypted connection/credential store — depends: JAK-101
@@ -70,3 +70,4 @@ Epic: `ghl-enrichment`
 - [x] **JAK-156** (P0) Explicit address typed inside a skip/comps command targets THAT address (not a historical one) — depends: JAK-135, JAK-154, JAK-145
 - [x] **JAK-157** (P1) Universal SMS footer -> 'Every lead deserves a Jake Report. / GoTextJake.com/crm' (replace GoTextJake.com)
 - [x] **JAK-158** (P1) Universal SMS footer copy update -> 'Every Lead Deserves Jake. / GoTextJake.com/CRM' — depends: JAK-157
+- [x] **JAK-159** (P0) Phrase "last" (the last one / last property) in skip/comps resolves to genuinely MOST-RECENT address, not the end of the first-appearance ordinal list — depends: JAK-154, JAK-156

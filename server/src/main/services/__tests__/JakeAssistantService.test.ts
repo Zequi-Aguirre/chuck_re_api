@@ -1197,6 +1197,30 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith("9 B Rd, Town, CA 90000");
     });
 
+    it("JAK-159: 'skip the last one' traces the MOST-RECENT address, not the stale ordinal-list end", async () => {
+      // The router flagged a "last" reference (addressRecency), leaving targetEntity
+      // null and carrying a STALE ordinal that points at the OLDEST address (first in
+      // the first-appearance list). addressRecency must win: the trace runs on the
+      // genuinely most-recent address, not the ordinal's target.
+      orchestrator.plan.mockResolvedValue({
+        ...skipTracePlan(null),
+        addressOrdinal: 1, // stale: end-of-list / first-appearance would mis-target
+        addressRecency: "last",
+      });
+      memory.resolvedAddressList.mockResolvedValue(["1 Old St, Town, CA 90000", "2 Mid Ave, Town, CA 90000"]);
+      memory.lastResolvedAddress.mockResolvedValue("3 Newest Blvd, Town, CA 90000");
+      realEstate.skipTraceByAddress.mockResolvedValue(personsHit as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "skip the last one",
+      });
+
+      expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith("3 Newest Blvd, Town, CA 90000");
+      expect(realEstate.skipTraceByAddress).not.toHaveBeenCalledWith("1 Old St, Town, CA 90000");
+    });
+
     // JAK-145: /v2/SkipTrace is ADDRESS-DOMINANT — it returns the current residents of
     // whatever address we pass and ignores the owner name (live-verified). So for an
     // ABSENTEE property the property address returns TENANTS, never the owner; the
@@ -1458,6 +1482,27 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(realEstate.getCompsByAddress).not.toHaveBeenCalled();
       expect(comps.setPending).not.toHaveBeenCalled();
       expect(comps.checkCache).not.toHaveBeenCalled();
+    });
+
+    it("JAK-159: 'comp the last one' runs on the MOST-RECENT address, not the stale ordinal-list end", async () => {
+      // A "last" reference: targetEntity null, addressRecency="last", and a STALE ordinal
+      // that would otherwise point at the oldest address. The comps must run on the
+      // genuinely most-recent address (lastResolvedAddress).
+      orchestrator.plan.mockResolvedValue(
+        compsPlan({ targetEntity: null, addressOrdinal: 1, addressRecency: "last" })
+      );
+      memory.resolvedAddressList.mockResolvedValue(["1 Old St, Town, CA 90000", "2 Mid Ave, Town, CA 90000"]);
+      memory.lastResolvedAddress.mockResolvedValue("3 Newest Blvd, Town, CA 90000");
+      realEstate.getCompsByAddress.mockResolvedValue(compsHit as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "comp the last one",
+      });
+
+      expect(realEstate.getCompsByAddress).toHaveBeenCalledWith("3 Newest Blvd, Town, CA 90000", DEFAULT_COMP_PARAMS);
+      expect(realEstate.getCompsByAddress).not.toHaveBeenCalledWith("1 Old St, Town, CA 90000", expect.anything());
     });
   });
 

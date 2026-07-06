@@ -1397,6 +1397,19 @@ export class JakeAssistantService {
     > {
         if (plan.targetEntity) return { kind: "resolved", target: plan.targetEntity };
 
+        // JAK-159: an EXPLICIT "last" reference ("comp the last one", "skip the last
+        // property") resolves to the genuinely MOST-RECENT address — the same target a
+        // bare command uses (JAK-154, lastResolvedAddress, created_at DESC) — NOT the
+        // end of the first-appearance ordinal list, which the router's addressOrdinal
+        // would point at and which can disagree after the texter re-sends an older
+        // address. The orchestrator leaves targetEntity null and sets this flag so the
+        // resolution happens here, where the DB is reachable.
+        if (plan.addressRecency === "last") {
+            const mostRecent = await this.memory.lastResolvedAddress(phone);
+            if (mostRecent) return { kind: "resolved", target: mostRecent };
+            return { kind: "none" };
+        }
+
         const ordinal = plan.addressOrdinal ?? null;
 
         // An EXPLICIT ordinal reference ("the 2nd address", "the last one"). In-range

@@ -13,6 +13,7 @@ import {
   OrchestratorInput,
   SpecialistPlan,
 } from "./OrchestratorTypes.ts";
+import { mentionsLastAddressReference } from "./references.ts";
 
 /**
  * The text-Jake ORCHESTRATOR / ROUTER (JAK-135) — the brain that turns Jake from
@@ -74,12 +75,16 @@ export class JakeOrchestrator {
     input: OrchestratorInput
   ): DispatchPlan {
     const intent = classification.intent;
-    const targetEntity = this.resolveTarget(intent, classification, resolvedAddresses, input);
+    const addressRecency = this.resolveRecency(intent, classification, input);
+    const targetEntity = this.resolveTarget(intent, classification, resolvedAddresses, input, addressRecency);
     return {
       intent,
       targetEntity,
       specialists: this.specialistsFor(intent),
       userFacingNote: classification.userFacingNote ?? "",
+      // JAK-159: a "last" reference resolves to the genuinely MOST-RECENT address
+      // downstream (lastResolvedAddress), not the end of the ordinal list.
+      addressRecency,
       // Carry the texter's comp parameter overrides through for the comps intent
       // only (JAK-137); other intents never read them.
       compParams: intent === "comps" ? classification.compParams ?? null : null,
@@ -108,7 +113,8 @@ export class JakeOrchestrator {
     intent: JakeIntent,
     classification: RouterClassification,
     resolvedAddresses: string[],
-    input: OrchestratorInput
+    input: OrchestratorInput,
+    addressRecency: "last" | null
   ): string | null {
     if (intent !== "property_report" && intent !== "skip_trace" && intent !== "comps") return null;
 
@@ -123,12 +129,40 @@ export class JakeOrchestrator {
 
     if (classification.targetAddress) return classification.targetAddress;
 
+    // JAK-159: the texter said "the last one" / "the last property". "last" means the
+    // genuinely MOST-RECENT address, resolved downstream via lastResolvedAddress
+    // (created_at DESC) — the SAME target a bare command uses (JAK-154). Leave the
+    // target UNRESOLVED here (this router has no DB): returning the router's ordinal,
+    // which points at the END of the first-appearance list, would pick a STALE
+    // address after a re-send. The addressRecency flag routes it. Numbered ordinals
+    // ("the 2nd one") never set this flag and stay positional below.
+    if (addressRecency === "last") return null;
+
     const ordinal = classification.addressOrdinal;
     if (ordinal != null && ordinal >= 1 && ordinal <= resolvedAddresses.length) {
       return resolvedAddresses[ordinal - 1];
     }
 
     return input.parsedAddress;
+  }
+
+  /**
+   * JAK-159: detect a "last" reference ("the last one", "comp the last property")
+   * for an address-acting intent. Only fires when NO inline address was typed
+   * (JAK-156) and the LLM named no fresh explicit address — the same precedence
+   * resolveTarget uses — so an explicit address always wins over "last". Returns
+   * `"last"` so downstream resolves the genuinely most-recent address; null
+   * otherwise (numbered ordinals and bare commands are unaffected).
+   */
+  private resolveRecency(
+    intent: JakeIntent,
+    classification: RouterClassification,
+    input: OrchestratorInput
+  ): "last" | null {
+    if (intent !== "property_report" && intent !== "skip_trace" && intent !== "comps") return null;
+    if (input.parsedAddress) return null;
+    if (classification.targetAddress) return null;
+    return mentionsLastAddressReference(input.message) ? "last" : null;
   }
 
   /**
