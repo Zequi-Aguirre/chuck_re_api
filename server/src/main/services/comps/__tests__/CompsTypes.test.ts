@@ -84,41 +84,92 @@ describe("CompsTypes (JAK-137)", () => {
   });
 
   describe("assembleCompsData", () => {
+    // JAK-160: subject + comps carry lat/long so the assembler computes REAL
+    // great-circle distances and orders nearest-first. Subject at (28.0000,
+    // -80.6000); the "Close" comp is deliberately listed BEFORE the nearer
+    // "Nearby" comp so the sort has to reorder them.
     const response: RealEstateApiPropertyCompsResponse = {
-      subject: { bedrooms: 3, bathrooms: 2, squareFeet: 1500 },
+      subject: { bedrooms: 3, bathrooms: 2, squareFeet: 1500, latitude: 28.0, longitude: -80.6 },
       comps: [
-        { address: "123 Nearby St", lastSaleAmount: 400000, bedrooms: 3, bathrooms: 2, squareFeet: 1550, distance: 0.4, lastSaleDate: "2026-03-01" },
-        { address: "456 Close Ave", lastSaleAmount: 420000, bedrooms: 3, bathrooms: 2, squareFeet: 1600 },
+        // ~0.61 mi east (0.01 deg lon at this latitude).
+        { address: "456 Close Ave", lastSaleAmount: 420000, bedrooms: 3, bathrooms: 2, squareFeet: 1600, latitude: 28.0, longitude: -80.61, yearBuilt: "1998" },
+        // ~0.31 mi east (0.005 deg lon) — the genuinely nearest, plus MLS DOM.
+        { address: "123 Nearby St", lastSaleAmount: 400000, bedrooms: 3, bathrooms: 2, squareFeet: 1550, latitude: 28.0, longitude: -80.605, yearBuilt: "2004", mlsDaysOnMarket: "12", lastSaleDate: "2026-03-01" },
         // Way off on beds → filtered out by the default ±1 bed tolerance.
-        { address: "789 Far Rd", lastSaleAmount: 999000, bedrooms: 8, bathrooms: 2, squareFeet: 1500 },
+        { address: "789 Far Rd", lastSaleAmount: 999000, bedrooms: 8, bathrooms: 2, squareFeet: 1500, latitude: 28.0, longitude: -80.6 },
       ],
       reapiAvm: 410000,
       reapiAvmLow: 395000,
       reapiAvmHigh: 430000,
     };
 
-    it("maps only present values, filters by tolerance, caps at count, and derives the average + range", () => {
+    it("maps present values, filters by tolerance, orders nearest-first, and derives the average + range", () => {
       const data = assembleCompsData(response, "742 Evergreen Terrace", DEFAULT_COMP_PARAMS);
 
-      // The 8-bed outlier is filtered; the two in-tolerance comps remain.
+      // The 8-bed outlier is filtered; the two in-tolerance comps remain, and the
+      // genuinely-nearest comp is sorted FIRST despite being listed second.
       expect(data.comps).toHaveLength(2);
-      expect(data.comps[0]).toEqual({
-        address: "123 Nearby St",
-        salePrice: 400000,
-        beds: 3,
-        baths: 2,
-        squareFeet: 1550,
-        distanceMiles: 0.4,
-        saleDate: "03/01/2026",
-      });
-      // The second comp omits distance/date it never had — no blanks.
-      expect(data.comps[1]).toEqual({ address: "456 Close Ave", salePrice: 420000, beds: 3, baths: 2, squareFeet: 1600 });
+      expect(data.comps[0].address).toBe("123 Nearby St");
+      expect(data.comps[1].address).toBe("456 Close Ave");
+      // Nearest-first: comp[0]'s distance is smaller than comp[1]'s.
+      expect(data.comps[0].distanceMiles!).toBeLessThan(data.comps[1].distanceMiles!);
+      expect(data.comps[0].distanceMiles!).toBeGreaterThan(0.25);
+      expect(data.comps[0].distanceMiles!).toBeLessThan(0.4);
+      // yearBuilt coerced string -> number; mlsDaysOnMarket mapped as daysOnMarket.
+      expect(data.comps[0].yearBuilt).toBe(2004);
+      expect(data.comps[0].daysOnMarket).toBe(12);
+      expect(data.comps[0].saleDate).toBe("03/01/2026");
+      // The farther comp: yearBuilt present, but no DOM (non-MLS) — omitted, no blank.
+      expect(data.comps[1].yearBuilt).toBe(1998);
+      expect(data.comps[1].daysOnMarket).toBeUndefined();
       // Derived only from the included comps.
       expect(data.averageSalePrice).toBe(410000);
       expect(data.estimatedValueLow).toBe(395000);
       expect(data.estimatedValueHigh).toBe(430000);
       expect(data.subjectAddress).toBe("742 Evergreen Terrace");
       expect(hasComps(data)).toBe(true);
+    });
+
+    it("omits distance when a comp lacks coordinates, and sorts such comps last", () => {
+      const mixed: RealEstateApiPropertyCompsResponse = {
+        subject: { bedrooms: 3, bathrooms: 2, squareFeet: 1500, latitude: 28.0, longitude: -80.6 },
+        comps: [
+          // No coords → no distance, sorts LAST even though listed first.
+          { address: "No Coords Rd", lastSaleAmount: 300000, bedrooms: 3, bathrooms: 2, squareFeet: 1500 },
+          // Has coords → gets a distance, sorts first.
+          { address: "Has Coords Ln", lastSaleAmount: 310000, bedrooms: 3, bathrooms: 2, squareFeet: 1500, latitude: 28.0, longitude: -80.605 },
+        ],
+      };
+      const data = assembleCompsData(mixed, "1 A St", DEFAULT_COMP_PARAMS);
+      expect(data.comps.map((c) => c.address)).toEqual(["Has Coords Ln", "No Coords Rd"]);
+      expect(data.comps[0].distanceMiles).toBeGreaterThan(0);
+      expect(data.comps[1].distanceMiles).toBeUndefined();
+    });
+
+    it("computes no distance at all when the subject has no coordinates", () => {
+      const noSubjectCoords: RealEstateApiPropertyCompsResponse = {
+        subject: { bedrooms: 3, bathrooms: 2, squareFeet: 1500 },
+        comps: [{ address: "1 St", lastSaleAmount: 100000, latitude: 28.0, longitude: -80.605 }],
+      };
+      const data = assembleCompsData(noSubjectCoords, "1 A St", DEFAULT_COMP_PARAMS);
+      expect(data.comps[0].distanceMiles).toBeUndefined();
+    });
+
+    it("takes the CLOSEST params.count comps, not just the first count returned", () => {
+      // Five comps at increasing distance, listed farthest-first; count=3 must keep
+      // the three NEAREST (0.31, 0.61, 0.92 mi), dropping the two farthest.
+      const many: RealEstateApiPropertyCompsResponse = {
+        subject: { bedrooms: 3, bathrooms: 2, squareFeet: 1500, latitude: 28.0, longitude: -80.6 },
+        comps: [
+          { address: "E far", lastSaleAmount: 5, bedrooms: 3, bathrooms: 2, squareFeet: 1500, latitude: 28.0, longitude: -80.625 },
+          { address: "D", lastSaleAmount: 4, bedrooms: 3, bathrooms: 2, squareFeet: 1500, latitude: 28.0, longitude: -80.62 },
+          { address: "C", lastSaleAmount: 3, bedrooms: 3, bathrooms: 2, squareFeet: 1500, latitude: 28.0, longitude: -80.615 },
+          { address: "B", lastSaleAmount: 2, bedrooms: 3, bathrooms: 2, squareFeet: 1500, latitude: 28.0, longitude: -80.61 },
+          { address: "A near", lastSaleAmount: 1, bedrooms: 3, bathrooms: 2, squareFeet: 1500, latitude: 28.0, longitude: -80.605 },
+        ],
+      };
+      const data = assembleCompsData(many, "1 A St", { ...DEFAULT_COMP_PARAMS, count: 3 });
+      expect(data.comps.map((c) => c.address)).toEqual(["A near", "B", "C"]);
     });
 
     it("caps the number of comps at params.count", () => {

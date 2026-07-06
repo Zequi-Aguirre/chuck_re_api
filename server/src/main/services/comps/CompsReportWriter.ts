@@ -135,6 +135,10 @@ export class CompsReportWriter {
   private buildUserPayload(data: CompsData): string {
     return [
       "Verified comparable-sales data (use ONLY these values — do not invent anything not present here):",
+      // JAK-160: the comps are the closest comparable sales the provider returned,
+      // already ordered NEAREST-FIRST by real distance. For each comp, include
+      // distanceMiles, yearBuilt, and daysOnMarket WHEN PRESENT (daysOnMarket is
+      // legitimately absent on many comps — just omit it, never say 'not available').
       JSON.stringify(data, null, 2),
     ].join("\n");
   }
@@ -177,8 +181,14 @@ export class CompsReportWriter {
       comp.squareFeet != null ? `${comp.squareFeet.toLocaleString("en-US")} sqft` : null,
     ].filter(Boolean);
     if (bb.length) facts.push(bb.join(" / "));
+    // JAK-160: distance/year-built/days-on-market — each only when present. Days on
+    // market is legitimately blank on the many non-MLS comps, by design.
     if (comp.distanceMiles != null) facts.push(`${comp.distanceMiles} mi away`);
+    if (comp.yearBuilt != null) facts.push(`built ${comp.yearBuilt}`);
     if (comp.saleDate) facts.push(`sold ${comp.saleDate}`);
+    if (comp.daysOnMarket != null) {
+      facts.push(`${comp.daysOnMarket} day${comp.daysOnMarket === 1 ? "" : "s"} on market`);
+    }
     return facts.length ? `${lead}\n${facts.join(", ")}` : lead;
   }
 

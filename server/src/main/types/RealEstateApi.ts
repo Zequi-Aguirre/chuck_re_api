@@ -84,6 +84,11 @@ export type RealEstateApiPropertyInfo = {
 
     yearBuilt?: number | null;
 
+    // JAK-160: the provider ships the subject's geo-coordinates here; used as the
+    // origin point for the great-circle (haversine) distance to each comp.
+    latitude?: number | null;
+    longitude?: number | null;
+
     mailingAddress?: RealEstateApiMailingAddress;
 };
 
@@ -298,23 +303,27 @@ export type RealEstateApiPropertyDetailResponse = {
  * locations/casing vary by provider account, so everything is optional and an
  * index signature keeps the mapping forward-compatible; the specialist reads
  * address/price/beds/baths/sqft/distance/date defensively and NEVER fabricates a
- * value that isn't present. `squareFeet` is the comp's living area; `distance` is
- * miles from the subject; `lastSaleAmount`/`lastSaleDate` are the sold price/date.
+ * value that isn't present. `squareFeet` is the comp's living area;
+ * `latitude`/`longitude` are the comp's geo-coordinates (JAK-160: we compute the
+ * real great-circle distance to the subject from these — the provider ships NO
+ * `distance` field on this endpoint); `lastSaleAmount`/`lastSaleDate` are the sold
+ * price/date; `mlsDaysOnMarket` is present only on MLS-tracked comps (~20-30%).
  */
 export type RealEstateApiCompRecord = {
     id?: string | number;
     address?: RealEstateApiAddress | string | null;
-    distance?: number | null; // miles from the subject property
+    distance?: number | null; // legacy: always empty on this endpoint (JAK-160)
     bedrooms?: number | null;
     bathrooms?: number | null;
     squareFeet?: number | null; // living area
     lotSquareFeet?: number | null;
-    yearBuilt?: number | null;
+    yearBuilt?: number | string | null;
     propertyType?: string | null;
     lastSaleAmount?: number | null;
     lastSaleDate?: string | null;
     mlsSoldPrice?: number | null;
     mlsLastStatusDate?: string | null;
+    mlsDaysOnMarket?: number | string | null; // MLS-tracked comps only (~20-30%)
     estimatedValue?: number | null;
     latitude?: number | null;
     longitude?: number | null;
@@ -338,6 +347,10 @@ export type RealEstateApiCompsSubject = {
     lastSaleAmount?: number | null;
     lastSaleDate?: string | null;
     estimatedValue?: number | null;
+    // JAK-160: subject geo-coordinates — the origin for the haversine distance to
+    // each comp. Carried on the subject the DAO builds from `propertyInfo`.
+    latitude?: number | null;
+    longitude?: number | null;
     [key: string]: unknown;
 };
 
