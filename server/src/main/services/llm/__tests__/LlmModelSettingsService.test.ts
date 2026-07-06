@@ -16,6 +16,7 @@ const KEY: Record<LlmSurface, string> = {
   orchestrator: "llm_model_orchestrator",
   skiptrace: "llm_model_skiptrace",
   comps: "llm_model_comps",
+  comps_selection: "llm_model_comps_selection",
   property_report: "llm_model_property_report",
 };
 

@@ -15,13 +15,19 @@ import {
  * (JAK-143). Each already has an admin-editable STYLE prompt; now it also gets an
  * optional provider+model choice, resolved with the SAME fall-back-to-global rule.
  */
-export type LlmSurface = "orchestrator" | "skiptrace" | "comps" | "property_report";
+export type LlmSurface =
+  | "orchestrator"
+  | "skiptrace"
+  | "comps"
+  | "comps_selection"
+  | "property_report";
 
-/** The four surfaces, in admin-UI order. */
+/** The surfaces, in admin-UI order. `comps_selection` is JAK-164's engine prompt. */
 export const LLM_SURFACES: readonly LlmSurface[] = [
   "orchestrator",
   "skiptrace",
   "comps",
+  "comps_selection",
   "property_report",
 ] as const;
 
@@ -30,6 +36,7 @@ const KEY_FOR: Record<LlmSurface, string> = {
   orchestrator: "llm_model_orchestrator",
   skiptrace: "llm_model_skiptrace",
   comps: "llm_model_comps",
+  comps_selection: "llm_model_comps_selection",
   property_report: "llm_model_property_report",
 };
 

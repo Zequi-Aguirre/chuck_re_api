@@ -8,6 +8,7 @@ import {
   CompsCostView,
   CompsParamsView,
   CompsPromptView,
+  CompsSelectionPromptView,
   CreditDefaultView,
   CreditType,
   OutOfCreditsMessageView,
@@ -258,6 +259,19 @@ export const api = {
   async resetCompsPrompt(): Promise<CompsPromptView> {
     return request<CompsPromptView>("/comps-prompt/reset", { method: "POST" });
   },
+  // Comps SELECTION-engine prompt (JAK-164).
+  async getCompsSelectionPrompt(): Promise<CompsSelectionPromptView> {
+    return request<CompsSelectionPromptView>("/comps-selection-prompt");
+  },
+  async updateCompsSelectionPrompt(prompt: string): Promise<CompsSelectionPromptView> {
+    return request<CompsSelectionPromptView>("/comps-selection-prompt", {
+      method: "PUT",
+      body: JSON.stringify({ prompt }),
+    });
+  },
+  async resetCompsSelectionPrompt(): Promise<CompsSelectionPromptView> {
+    return request<CompsSelectionPromptView>("/comps-selection-prompt/reset", { method: "POST" });
+  },
   async getCompsCost(): Promise<CompsCostView> {
     return request<CompsCostView>("/comps-cost");
   },
@@ -373,6 +387,19 @@ export const api = {
   },
   async resetCompsModel(): Promise<LlmModelSettingView> {
     return request<LlmModelSettingView>("/comps-model/reset", { method: "POST" });
+  },
+
+  async getCompsSelectionModel(): Promise<LlmModelSettingView> {
+    return request<LlmModelSettingView>("/comps-selection-model");
+  },
+  async updateCompsSelectionModel(provider: LlmProvider, model: string): Promise<LlmModelSettingView> {
+    return request<LlmModelSettingView>("/comps-selection-model", {
+      method: "PUT",
+      body: JSON.stringify({ provider, model }),
+    });
+  },
+  async resetCompsSelectionModel(): Promise<LlmModelSettingView> {
+    return request<LlmModelSettingView>("/comps-selection-model/reset", { method: "POST" });
   },
 
   // --- admins (JAK-124) ---

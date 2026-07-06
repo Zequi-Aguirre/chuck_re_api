@@ -248,6 +248,55 @@ export class RealEstateApiDao {
   }
 
   /**
+   * JAK-164 — assemble a REAL geo-radius SOLD-COMP CANDIDATE POOL for the comps
+   * SELECTION engine, using /v2/PropertySearch (the SAME endpoint + key the
+   * property-report path already calls). Unlike PropertyDetail(comps:true) — which
+   * IGNORES radius and returns REAPI's own fixed ~1-mile ~10-property cluster — this
+   * queries by the subject's `latitude`/`longitude` + a real `radius` (miles) with a
+   * sold filter (`last_sale_date_min`) and, when known, the subject's `property_type`,
+   * so we can pull a genuine up-to-10-mile pool of recent sales and run our own
+   * scoring/reject selection over it. PropertySearch returns candidates NEAREST-FIRST,
+   * so a single wide fetch naturally "expands outward" only when close comps are
+   * scarce.
+   *
+   * Returns the raw summary records (the engine maps them + computes each candidate's
+   * haversine distance from the subject). It is a PAID, READ-ONLY lookup, so it
+   * funnels through the SAME {@link paidPost} chokepoint as the other PropertySearch
+   * calls: off prod/staging it NEVER spends — the deterministic empty dev mock is
+   * returned instead of hitting the provider.
+   */
+  public async getCompCandidatesByRadius(input: {
+    latitude: number;
+    longitude: number;
+    propertyType?: string | null;
+    radiusMiles: number;
+    soldSinceIso: string;
+    maxCandidates: number;
+  }): Promise<RealEstateApiPropertySearchResult[]> {
+    try {
+      const body: Record<string, string | number> = {
+        size: input.maxCandidates,
+        latitude: input.latitude,
+        longitude: input.longitude,
+        radius: input.radiusMiles,
+        last_sale_date_min: input.soldSinceIso,
+      };
+      const type = input.propertyType?.trim();
+      if (type) body.property_type = type;
+
+      const data = await this.paidPost<RealEstateApiPropertySearchResponse>(
+        "/v2/PropertySearch",
+        body,
+        RealEstateApiDao.DEV_MOCK_SEARCH
+      );
+      return Array.isArray(data.data) ? data.data : [];
+    } catch (err: any) {
+      console.error(`❌ PropertySearch (comp candidates) error: ${err.message}`);
+      return [];
+    }
+  }
+
+  /**
    * Reshape a /v2/PropertyDetail(comps:true) body (JAK-144) into the comps response
    * the specialist assembler consumes: the comparables from `data.comps`, a SUBJECT
    * built from the detail's `propertyInfo` (beds/baths/sqft — used for the tolerance

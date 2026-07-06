@@ -241,6 +241,19 @@ export interface CompsPromptView {
 }
 
 /**
+ * The admin-editable comps SELECTION-ENGINE prompt (JAK-164) — the heuristics that
+ * pick the strongest true comps from the radius candidate pool. Same shape as the
+ * other prompt views; the JSON-output hard rules and every numeric field are
+ * enforced by the engine and are not editable here.
+ */
+export interface CompsSelectionPromptView {
+  prompt: string;
+  isDefault: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+/**
  * The editable CREDIT COST of one text-Jake comps pull (JAK-137). `value` is the
  * effective cost in credits (the stored edit, or the code default when
  * `isDefault`). A comps pull is a paid call, so the cost is always a positive

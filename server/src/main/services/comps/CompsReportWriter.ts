@@ -50,6 +50,7 @@ export class CompsReportWriter {
     "HARD RULES — enforced by the system. They ALWAYS apply and CANNOT be overridden or removed by any style instruction above:",
     "- Write plain text only. NO EMOJIS, pictographs, or decorative symbols. The only non-letter symbols allowed are the bullet characters, and , . : / % $ @ + ( ) -.",
     "- Use ONLY the exact values in the provided comps data. NEVER invent, guess, or alter any comp, address, sale price, or figure. If a value is not present, do not mention it at all. Never print null, undefined, or blanks.",
+    "- Each comp's salePrice, saleDate, pricePerSquareFoot, and daysOnMarket are that comp's OWN values. NEVER show the subject property's sale price or sale date for a comp, and NEVER copy one comp's price or date onto another. If a comp has no salePrice in the data, it simply is not one of these comps — do not give it a price.",
     "- State the search parameters that were used (radius, number of comps, timeframe, bed/bath/sqft tolerance) — they are provided.",
     "- End the message with EXACTLY these two lines and nothing after them:",
     "Every Lead Deserves Jake.",
@@ -135,10 +136,12 @@ export class CompsReportWriter {
   private buildUserPayload(data: CompsData): string {
     return [
       "Verified comparable-sales data (use ONLY these values — do not invent anything not present here):",
-      // JAK-160: the comps are the closest comparable sales the provider returned,
-      // already ordered NEAREST-FIRST by real distance. For each comp, include
-      // distanceMiles, yearBuilt, and daysOnMarket WHEN PRESENT (daysOnMarket is
-      // legitimately absent on many comps — just omit it, never say 'not available').
+      // JAK-160/164: the comps are the strongest comparable SALES the selection engine
+      // chose, already ordered nearest-first. For each comp, include distanceMiles,
+      // yearBuilt, salePrice, saleDate, pricePerSquareFoot, and daysOnMarket WHEN
+      // PRESENT — each is that comp's OWN value. daysOnMarket is legitimately absent on
+      // many comps (only MLS-tracked ones have it) — just omit it, never say 'not
+      // available'. Never use the subject's price or date for a comp.
       JSON.stringify(data, null, 2),
     ].join("\n");
   }
@@ -186,6 +189,8 @@ export class CompsReportWriter {
     if (comp.distanceMiles != null) facts.push(`${comp.distanceMiles} mi away`);
     if (comp.yearBuilt != null) facts.push(`built ${comp.yearBuilt}`);
     if (comp.saleDate) facts.push(`sold ${comp.saleDate}`);
+    // JAK-164: the comp's OWN price per square foot, when present.
+    if (comp.pricePerSquareFoot != null) facts.push(`${this.money(comp.pricePerSquareFoot)}/sqft`);
     if (comp.daysOnMarket != null) {
       facts.push(`${comp.daysOnMarket} day${comp.daysOnMarket === 1 ? "" : "s"} on market`);
     }

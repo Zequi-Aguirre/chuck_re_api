@@ -11,6 +11,7 @@ import { OrchestratorPromptService } from "../../services/orchestrator/Orchestra
 import { SkipTracePromptService } from "../../services/skiptrace/SkipTracePromptService";
 import { SkipTraceSettingsService } from "../../services/skiptrace/SkipTraceSettingsService";
 import { CompsPromptService } from "../../services/comps/CompsPromptService";
+import { CompsSelectionPromptService } from "../../services/comps/CompsSelectionPromptService";
 import { CompsSettingsService } from "../../services/comps/CompsSettingsService";
 import { CompParams } from "../../services/comps/CompsTypes";
 import { CreditSettingsService } from "../metering/CreditSettingsService";
@@ -68,6 +69,7 @@ export class AdminResource {
     @inject(SkipTracePromptService) private readonly skipTracePrompt: SkipTracePromptService,
     @inject(SkipTraceSettingsService) private readonly skipTraceSettings: SkipTraceSettingsService,
     @inject(CompsPromptService) private readonly compsPrompt: CompsPromptService,
+    @inject(CompsSelectionPromptService) private readonly compsSelectionPrompt: CompsSelectionPromptService,
     @inject(CompsSettingsService) private readonly compsSettings: CompsSettingsService,
     @inject(CreditSettingsService) private readonly creditSettings: CreditSettingsService,
     @inject(LlmModelSettingsService) private readonly modelSettings: LlmModelSettingsService
@@ -159,6 +161,15 @@ export class AdminResource {
     this.router.put("/comps-params", this.updateCompsParams.bind(this));
     this.router.post("/comps-params/reset", this.resetCompsParams.bind(this));
 
+    // Comps SELECTION engine (JAK-164): the admin-editable prompt that drives which
+    // candidate sales become the chosen comps (scoring/reject/distance/recency/
+    // outlier heuristics). Same editable pattern + requireAuth-only gate as above.
+    // The JSON-output + only-choose-from-the-list hard rules and every numeric field
+    // are enforced in the engine and are NOT editable here.
+    this.router.get("/comps-selection-prompt", this.getCompsSelectionPrompt.bind(this));
+    this.router.put("/comps-selection-prompt", this.updateCompsSelectionPrompt.bind(this));
+    this.router.post("/comps-selection-prompt/reset", this.resetCompsSelectionPrompt.bind(this));
+
     // Per-feature CREDIT settings (JAK-161) — the backend the JAK-162 admin UI
     // reads/writes: the NEW-CUSTOMER default grants (report / skiptrace / comps)
     // and the per-feature OUT-OF-CREDITS messages, both the SAME editable
@@ -182,6 +193,8 @@ export class AdminResource {
     this.modelRoutes("orchestrator-model", "orchestrator");
     this.modelRoutes("skiptrace-model", "skiptrace");
     this.modelRoutes("comps-model", "comps");
+    // JAK-164: the comps SELECTION engine surface gets its own model picker too.
+    this.modelRoutes("comps-selection-model", "comps_selection");
 
     // Admin management (JAK-124, restricted in JAK-125): ONLY a superadmin may
     // manage other admins. requireSuperadmin runs after the router-level
@@ -788,6 +801,48 @@ export class AdminResource {
   private async resetCompsPrompt(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     try {
       const view = await this.compsPrompt.resetPrompt();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /** Return the effective comps SELECTION prompt + whether it is still the default (JAK-164). */
+  private async getCompsSelectionPrompt(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.compsSelectionPrompt.getView();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /**
+   * Save an admin-edited comps SELECTION prompt (JAK-164). The body's `prompt` is the
+   * selection heuristics ONLY — the JSON-output + only-choose-from-the-list hard rules
+   * and every numeric field are enforced by the engine regardless, so there is nothing
+   * dangerous to reject beyond an empty/oversized value.
+   */
+  private async updateCompsSelectionPrompt(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const prompt = typeof req.body?.prompt === "string" ? req.body.prompt.trim() : "";
+      if (!prompt) {
+        return res.status(400).json({ error: "prompt is required" });
+      }
+      if (prompt.length > MAX_PROMPT_LENGTH) {
+        return res.status(400).json({ error: `prompt must be at most ${MAX_PROMPT_LENGTH} characters` });
+      }
+      const view = await this.compsSelectionPrompt.setPrompt(prompt, req.admin?.sub ?? null);
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /** Revert the comps SELECTION prompt to the code default (clears the stored value). */
+  private async resetCompsSelectionPrompt(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.compsSelectionPrompt.resetPrompt();
       return res.status(200).json(view);
     } catch (err) {
       return next(err);

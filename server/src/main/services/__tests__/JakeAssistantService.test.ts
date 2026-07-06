@@ -22,7 +22,8 @@ import { SkipTracePendingRow, SkipTraceRow } from "../skiptrace/SkipTraceTypes";
 import { CompsReportWriter } from "../comps/CompsReportWriter";
 import { CompsMemoryService } from "../comps/CompsMemoryService";
 import { CompsSettingsService } from "../comps/CompsSettingsService";
-import { CompsPendingRow, CompsRow, DEFAULT_COMP_PARAMS } from "../comps/CompsTypes";
+import { CompsSelectionEngine } from "../comps/CompsSelectionEngine";
+import { CompsData, CompsPendingRow, CompsRow, DEFAULT_COMP_PARAMS } from "../comps/CompsTypes";
 import { DisambiguationMemoryService } from "../disambiguation/DisambiguationMemoryService";
 import { DisambiguationPendingRow } from "../disambiguation/DisambiguationTypes";
 
@@ -54,6 +55,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
   let comps: MockProxy<CompsMemoryService>;
   let compsSettings: MockProxy<CompsSettingsService>;
   let disambiguation: MockProxy<DisambiguationMemoryService>;
+  let compsEngine: MockProxy<CompsSelectionEngine>;
   let service: JakeAssistantService;
 
   const reportSpecialist = () => [{ name: "report", needsConfirmation: false, estimatedCredits: 1 }];
@@ -178,6 +180,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     skipTraceSettings = mock<SkipTraceSettingsService>();
     compsWriter = mock<CompsReportWriter>();
     comps = mock<CompsMemoryService>();
+    compsEngine = mock<CompsSelectionEngine>();
     compsSettings = mock<CompsSettingsService>();
     disambiguation = mock<DisambiguationMemoryService>();
 
@@ -255,6 +258,23 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     );
     credits.hasCreditsForComps.mockResolvedValue(true);
     credits.chargeForComps.mockResolvedValue({ ok: true, balanceAfter: 7, entries: [] });
+    // JAK-164: the selection engine assembles the radius pool + picks the comps and
+    // returns the formatter-ready data. Default to a one-comp hit; tests override.
+    compsEngine.buildComps.mockResolvedValue({
+      data: {
+        params: DEFAULT_COMP_PARAMS,
+        paramsSummary:
+          "radius 1 mi, up to 5 comps, sold in the last 12 months, beds ±1, baths ±1, sqft ±25%",
+        subjectAddress: "742 Evergreen Terrace, Springfield, IL 62704",
+        comps: [{ address: "123 Nearby St", salePrice: 400000, beds: 3, baths: 2, squareFeet: 1500 }],
+        averageSalePrice: 400000,
+      } as CompsData,
+      record: { source: "radius" },
+      source: "radius",
+      selectionMode: "deterministic",
+      poolSize: 1,
+      usableSize: 1,
+    });
 
     customers.resolveByPhone.mockImplementation(async (phone) => customerFor(phone));
     // Per-feature out-of-credits copy (JAK-161): echo the bucket so a test can
@@ -287,7 +307,8 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       compsWriter,
       comps,
       compsSettings,
-      disambiguation
+      disambiguation,
+      compsEngine
     );
   });
 
@@ -1365,7 +1386,8 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       });
 
       // Ran on the first ask with the resolved params — NO confirmation, NO pending.
-      expect(realEstate.getCompsByAddress).toHaveBeenCalledWith(TARGET, DEFAULT_COMP_PARAMS);
+      // JAK-164: the selection engine (radius pool + selection) is the paid path now.
+      expect(compsEngine.buildComps).toHaveBeenCalledWith({ target: TARGET, params: DEFAULT_COMP_PARAMS });
       expect(comps.setPending).not.toHaveBeenCalled();
       // The normalized comps response is parsed into the verified data handed to the
       // writer — comp address + sale price.
@@ -1394,10 +1416,10 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
         message: "comps within 1 mile, last 6 months, 3 similar homes",
       });
 
-      expect(realEstate.getCompsByAddress).toHaveBeenCalledWith(
-        TARGET,
-        { radiusMiles: 1, count: 3, monthsBack: 6, bedsTolerance: 1, bathsTolerance: 1, sqftTolerancePct: 25 }
-      );
+      expect(compsEngine.buildComps).toHaveBeenCalledWith({
+        target: TARGET,
+        params: { radiusMiles: 1, count: 3, monthsBack: 6, bedsTolerance: 1, bathsTolerance: 1, sqftTolerancePct: 25 },
+      });
     });
 
     it("clamps out-of-range texter overrides to sane bounds when running", async () => {
@@ -1410,10 +1432,10 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
         message: "comps within 500 miles, 999 homes",
       });
 
-      expect(realEstate.getCompsByAddress).toHaveBeenCalledWith(
-        TARGET,
-        expect.objectContaining({ radiusMiles: 10, count: 10 })
-      );
+      expect(compsEngine.buildComps).toHaveBeenCalledWith({
+        target: TARGET,
+        params: expect.objectContaining({ radiusMiles: 10, count: 10 }),
+      });
     });
 
     it("insufficient credits → clear no-charge message, does NOT run, NO paid API", async () => {
@@ -1430,7 +1452,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(result.charged).toBe(0);
       expect(result.outOfCredits).toBe(true);
       expect(comps.setPending).not.toHaveBeenCalled();
-      expect(realEstate.getCompsByAddress).not.toHaveBeenCalled();
+      expect(compsEngine.buildComps).not.toHaveBeenCalled();
       expect(credits.chargeForComps).not.toHaveBeenCalled();
       // JAK-161: the admin-editable COMPS out-of-credits message (bucket-specific).
       expect(sent()).toContain("out of comps credits");
@@ -1439,7 +1461,19 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
 
     it("a run that finds NO comparable sales → no charge, no snapshot", async () => {
       orchestrator.plan.mockResolvedValue(compsPlan());
-      realEstate.getCompsByAddress.mockResolvedValue({ comps: [] } as never);
+      compsEngine.buildComps.mockResolvedValue({
+        data: {
+          params: DEFAULT_COMP_PARAMS,
+          paramsSummary: "radius 1 mi, up to 5 comps, sold in the last 12 months, beds ±1, baths ±1, sqft ±25%",
+          subjectAddress: TARGET,
+          comps: [],
+        } as CompsData,
+        record: { source: "none" },
+        source: "none",
+        selectionMode: "none",
+        poolSize: 0,
+        usableSize: 0,
+      });
 
       const result = await service.handleInboundMessage({
         contactId: "ct_1",
@@ -1447,7 +1481,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
         message: "comps for 742 Evergreen Terrace",
       });
 
-      expect(realEstate.getCompsByAddress).toHaveBeenCalledWith(TARGET, DEFAULT_COMP_PARAMS);
+      expect(compsEngine.buildComps).toHaveBeenCalledWith({ target: TARGET, params: DEFAULT_COMP_PARAMS });
       expect(credits.chargeForComps).not.toHaveBeenCalled();
       expect(result.charged).toBe(0);
       expect(comps.recordComps).not.toHaveBeenCalled();
@@ -1469,7 +1503,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(comps.checkCache).toHaveBeenCalledWith("+15559990000", TARGET, DEFAULT_COMP_PARAMS);
       expect(result.reserved).toBe(true);
       expect(result.charged).toBe(0);
-      expect(realEstate.getCompsByAddress).not.toHaveBeenCalled();
+      expect(compsEngine.buildComps).not.toHaveBeenCalled();
       expect(credits.chargeForComps).not.toHaveBeenCalled();
       // Free copy re-served verbatim with an "on record, free" note — NO OK prompt.
       expect(sent().toLowerCase()).toContain("already on record");
@@ -1490,7 +1524,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       });
 
       expect(result.charged).toBe(0);
-      expect(realEstate.getCompsByAddress).not.toHaveBeenCalled();
+      expect(compsEngine.buildComps).not.toHaveBeenCalled();
       expect(comps.setPending).not.toHaveBeenCalled();
       expect(comps.checkCache).not.toHaveBeenCalled();
     });
@@ -1512,8 +1546,8 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
         message: "comp the last one",
       });
 
-      expect(realEstate.getCompsByAddress).toHaveBeenCalledWith("3 Newest Blvd, Town, CA 90000", DEFAULT_COMP_PARAMS);
-      expect(realEstate.getCompsByAddress).not.toHaveBeenCalledWith("1 Old St, Town, CA 90000", expect.anything());
+      expect(compsEngine.buildComps).toHaveBeenCalledWith({ target: "3 Newest Blvd, Town, CA 90000", params: DEFAULT_COMP_PARAMS });
+      expect(compsEngine.buildComps).not.toHaveBeenCalledWith(expect.objectContaining({ target: "1 Old St, Town, CA 90000" }));
     });
   });
 
@@ -1586,9 +1620,6 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     it("a bare NUMBER after the ask RUNS the stored intent immediately on the picked address", async () => {
       memory.resolvedAddressList.mockResolvedValue([A1, A2]);
       disambiguation.freshPending.mockResolvedValue(disambigRow({ intent: "comps", comp_params: null }));
-      realEstate.getCompsByAddress.mockResolvedValue({
-        comps: [{ address: "123 Nearby St", lastSaleAmount: 400000 }],
-      } as never);
 
       await service.handleInboundMessage({
         contactId: "ct_1",
@@ -1599,7 +1630,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       // Address 2 selected → the question is consumed and comps RUNS on A2 (JAK-144:
       // no confirmation, no pending offer).
       expect(disambiguation.clearPending).toHaveBeenCalledWith("+15559990000");
-      expect(realEstate.getCompsByAddress).toHaveBeenCalledWith(A2, DEFAULT_COMP_PARAMS);
+      expect(compsEngine.buildComps).toHaveBeenCalledWith({ target: A2, params: DEFAULT_COMP_PARAMS });
       expect(comps.setPending).not.toHaveBeenCalled();
     });
 
@@ -1712,10 +1743,6 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
         { fullName: "Homer Simpson", phones: [{ phone: "+15550101" }], emails: ["homer@example.com"] },
       ],
     };
-    const compsHit = {
-      comps: [{ address: "123 Nearby St", lastSaleAmount: 400000, bedrooms: 3, bathrooms: 2, squareFeet: 1500 }],
-      subject: { bedrooms: 3, bathrooms: 2, squareFeet: 1500 },
-    };
     // A bare skip-trace plan: the router named no address, ordinal, or person.
     const bareSkipTrace: DispatchPlan = {
       intent: "skip_trace",
@@ -1775,7 +1802,6 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       memory.resolvedAddressList.mockResolvedValue([A, B, C]);
       memory.lastResolvedAddress.mockResolvedValue(C);
       orchestrator.plan.mockResolvedValue(bareComps);
-      realEstate.getCompsByAddress.mockResolvedValue(compsHit as never);
 
       const result = await service.handleInboundMessage({
         contactId: "ct_1",
@@ -1783,8 +1809,8 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
         message: "run comps",
       });
 
-      expect(realEstate.getCompsByAddress).toHaveBeenCalledWith(C, DEFAULT_COMP_PARAMS);
-      expect(realEstate.getCompsByAddress).not.toHaveBeenCalledWith(A, expect.anything());
+      expect(compsEngine.buildComps).toHaveBeenCalledWith({ target: C, params: DEFAULT_COMP_PARAMS });
+      expect(compsEngine.buildComps).not.toHaveBeenCalledWith(expect.objectContaining({ target: A }));
       expect(disambiguation.setPending).not.toHaveBeenCalled();
       expect(result.charged).toBe(3);
     });
@@ -1844,10 +1870,6 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       persons: [
         { fullName: "Homer Simpson", phones: [{ phone: "+15550101" }], emails: ["homer@example.com"] },
       ],
-    };
-    const compsHit = {
-      comps: [{ address: "123 Nearby St", lastSaleAmount: 400000, bedrooms: 3, bathrooms: 2, squareFeet: 1500 }],
-      subject: { bedrooms: 3, bathrooms: 2, squareFeet: 1500 },
     };
 
     // Mirror the JAK-156 orchestrator wiring: a real inline parsedAddress OUTRANKS the
@@ -1922,7 +1944,6 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
 
     it("'comps 123 ...' pulls comps for the TYPED address, not a historical one", async () => {
       planFromParsed("comps");
-      realEstate.getCompsByAddress.mockResolvedValue(compsHit as never);
 
       const result = await service.handleInboundMessage({
         contactId: "ct_1",
@@ -1933,8 +1954,8 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(orchestrator.plan).toHaveBeenCalledWith(
         expect.objectContaining({ parsedAddress: EXPLICIT })
       );
-      expect(realEstate.getCompsByAddress).toHaveBeenCalledWith(EXPLICIT, DEFAULT_COMP_PARAMS);
-      expect(realEstate.getCompsByAddress).not.toHaveBeenCalledWith(C, expect.anything());
+      expect(compsEngine.buildComps).toHaveBeenCalledWith({ target: EXPLICIT, params: DEFAULT_COMP_PARAMS });
+      expect(compsEngine.buildComps).not.toHaveBeenCalledWith(expect.objectContaining({ target: C }));
       expect(memory.appendInbound).toHaveBeenCalledWith(
         expect.objectContaining({ resolvedAddress: EXPLICIT })
       );
@@ -1981,7 +2002,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       });
 
       expect(realEstate.skipTraceByAddress).not.toHaveBeenCalled();
-      expect(realEstate.getCompsByAddress).not.toHaveBeenCalled();
+      expect(compsEngine.buildComps).not.toHaveBeenCalled();
       expect(result.charged).toBe(0);
     });
 
@@ -2002,7 +2023,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(result.charged).toBe(0);
       expect(disambiguation.clearPending).toHaveBeenCalledWith("+15559990000");
       expect(realEstate.skipTraceByAddress).not.toHaveBeenCalled();
-      expect(realEstate.getCompsByAddress).not.toHaveBeenCalled();
+      expect(compsEngine.buildComps).not.toHaveBeenCalled();
     });
   });
 

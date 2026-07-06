@@ -34,8 +34,37 @@ describe("CompsSettingsService (JAK-137)", () => {
     updated_by: "admin_1",
   });
 
+  const poolRow = (value: string): AppSettingRow => ({
+    key: CompsSettingsService.POOL_KEY,
+    value,
+    updated_at: new Date("2026-07-06T00:00:00Z"),
+    updated_by: "admin_1",
+  });
+
   beforeEach(() => {
     settings = mock<AppSettingsStore>();
+  });
+
+  // JAK-164: the selection candidate-pool params (radius / days-back / max candidates).
+  describe("pool params (JAK-164)", () => {
+    it("returns the code default when nothing is stored", async () => {
+      settings.get.mockResolvedValue(null);
+      const svc = new CompsSettingsService(settings);
+      expect(await svc.poolParams()).toEqual({ radiusMiles: 10, maxDaysBack: 365, maxCandidates: 50 });
+    });
+
+    it("parses a stored pool and clamps out-of-range values to sane bounds", async () => {
+      settings.get.mockResolvedValue(poolRow('{"radiusMiles":999,"maxDaysBack":5,"maxCandidates":9999}'));
+      const svc = new CompsSettingsService(settings);
+      // radius clamps to 10, days-back up to 30, candidates to 250.
+      expect(await svc.poolParams()).toEqual({ radiusMiles: 10, maxDaysBack: 30, maxCandidates: 250 });
+    });
+
+    it("fills missing fields from the default and ignores a corrupt row", async () => {
+      settings.get.mockResolvedValue(poolRow("not json"));
+      const svc = new CompsSettingsService(settings);
+      expect(await svc.poolParams()).toEqual({ radiusMiles: 10, maxDaysBack: 365, maxCandidates: 50 });
+    });
   });
 
   describe("credit cost", () => {
