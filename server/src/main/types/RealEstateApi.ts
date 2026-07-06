@@ -8,6 +8,10 @@ export type RealEstateApiAddress = {
     state?: string | null;
     zip?: string | null;
     label?: string | null;
+    // JAK-164: the structured /v2/PropertySearch address also carries county + fips,
+    // which the comps selection engine reads for the location-boundary scoring.
+    county?: string | null;
+    fips?: string | null;
 };
 
 export type RealEstateApiOwnerInfo = {
@@ -191,11 +195,40 @@ export type RealEstateApiPropertySearchResult = {
 
     mlsActive?: boolean | null;
     mlsStatus?: string | null;
+
+    // JAK-164: the comparable-sale + MLS fields the /v2/PropertySearch geo-radius
+    // pool ships that the comps SELECTION engine reads. County/fips ride on the
+    // structured `address`; latitude/longitude are the haversine target. `landUse`
+    // gates the residential-only reject; the MLS trio backs the mls-vs-deed price
+    // rule, days-on-market, and the sale-date used; the distress/feature flags feed
+    // the outlier + scoring rules. Zoning + censusTract are NOT shipped on this
+    // endpoint (they degrade to null downstream). All optional + string-or-number
+    // tolerant, matching the live payload.
+    county?: string | null;
+    landUse?: string | null;
+    propertyUse?: string | null;
+    latitude?: number | null;
+    longitude?: number | null;
+    lastSaleArmsLength?: boolean | null;
+    mlsSold?: boolean | null;
+    mlsSoldPrice?: number | string | null;
+    mlsListingDate?: string | null;
+    mlsLastStatusDate?: string | null;
+    mlsLastSaleDate?: string | null;
+    mlsDaysOnMarket?: number | string | null;
+    vacant?: boolean | null;
+    cashBuyer?: boolean | null;
+    garage?: boolean | null;
+    airConditioningAvailable?: boolean | null;
     [key: string]: unknown;
 };
 
 export type RealEstateApiPropertySearchResponse = {
     data: RealEstateApiPropertySearchResult[];
+    /** Total matches for the query (may far exceed the returned page). JAK-164. */
+    resultCount?: number | null;
+    /** Records actually returned in this page. JAK-164. */
+    recordCount?: number | null;
 };
 
 /**

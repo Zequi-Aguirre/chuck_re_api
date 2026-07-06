@@ -70,9 +70,53 @@ describe("RealEstateApiDao — paid-lookup dev safety (JAK-110)", () => {
       expect(result?.comps).toEqual([]);
       expect(post).not.toHaveBeenCalled();
     });
+
+    it("JAK-164: the radius comp-candidate pool is dev-mocked EMPTY (no transport, no spend)", async () => {
+      const dao = daoFor(false);
+      const result = await dao.getCompCandidatesByRadius({
+        latitude: 28.0124,
+        longitude: -80.6795,
+        propertyType: "SFR",
+        radiusMiles: 10,
+        soldSinceIso: "2025-07-06",
+        maxCandidates: 50,
+      });
+      expect(result).toEqual([]);
+      expect(post).not.toHaveBeenCalled();
+    });
   });
 
   describe("prod / staging (real actions ON)", () => {
+    it("JAK-164: builds the /v2/PropertySearch geo-radius sold-comp pool body + returns the records", async () => {
+      post.mockResolvedValue({
+        data: { data: [{ id: "c1", latitude: 28.01, longitude: -80.68 }], resultCount: 6695 },
+      });
+      const dao = daoFor(true);
+
+      const records = await dao.getCompCandidatesByRadius({
+        latitude: 28.0124,
+        longitude: -80.6795,
+        propertyType: "SFR",
+        radiusMiles: 10,
+        soldSinceIso: "2025-07-06",
+        maxCandidates: 50,
+      });
+
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(post.mock.calls[0][0]).toBe("/v2/PropertySearch");
+      // The geo-radius + sold filter + type + size go in the body (NOT PropertyDetail).
+      expect(post.mock.calls[0][1]).toMatchObject({
+        size: 50,
+        latitude: 28.0124,
+        longitude: -80.6795,
+        radius: 10,
+        last_sale_date_min: "2025-07-06",
+        property_type: "SFR",
+      });
+      expect(records).toHaveLength(1);
+      expect(records[0]!.id).toBe("c1");
+    });
+
     it("hits the real PropertyDetail endpoint in prod", async () => {
       post.mockResolvedValue({ data: { data: { mlsActive: true } } });
       const dao = daoFor(true);

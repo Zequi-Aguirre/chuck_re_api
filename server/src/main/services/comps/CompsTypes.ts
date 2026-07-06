@@ -155,6 +155,12 @@ export interface CompSaleData {
   /** JAK-160: MLS days on market — present only on MLS-tracked comps (~20-30%). */
   daysOnMarket?: number;
   saleDate?: string;
+  /**
+   * JAK-164: the comp's OWN price per square foot (salePriceUsed / squareFeet),
+   * computed by the selection engine. Set only when the comp had a usable own price
+   * AND square footage — never borrowed from the subject or another comp.
+   */
+  pricePerSquareFoot?: number;
 }
 
 /**

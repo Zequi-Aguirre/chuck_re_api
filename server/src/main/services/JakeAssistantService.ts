@@ -16,7 +16,6 @@ import { JakeInboundMessage, JakeInboundResult, JakeTextMode } from "../types/Ja
 import {
     RealEstateApiAddress,
     RealEstateApiMailingAddress,
-    RealEstateApiPropertyCompsResponse,
     RealEstateApiPropertySearchResult,
     RealEstateApiSkipTraceEmail,
     RealEstateApiSkipTracePerson,
@@ -47,11 +46,11 @@ import {
 import { CompsReportWriter } from "./comps/CompsReportWriter.ts";
 import { CompsMemoryService } from "./comps/CompsMemoryService.ts";
 import { CompsSettingsService } from "./comps/CompsSettingsService.ts";
+import { CompsSelectionEngine } from "./comps/CompsSelectionEngine.ts";
 import {
     CompParamOverrides,
     CompParams,
     CompsRow,
-    assembleCompsData,
     formatCompParams,
     hasComps,
     resolveCompParams,
@@ -128,7 +127,8 @@ export class JakeAssistantService {
         private readonly compsWriter: CompsReportWriter,
         private readonly comps: CompsMemoryService,
         private readonly compsSettings: CompsSettingsService,
-        private readonly disambiguation: DisambiguationMemoryService
+        private readonly disambiguation: DisambiguationMemoryService,
+        private readonly compsEngine: CompsSelectionEngine
     ) {}
 
     /**
@@ -1272,9 +1272,14 @@ export class JakeAssistantService {
         // the result in a follow-up so the texter isn't left waiting silently (JAK-138).
         await this.sendAck(route, input.contactId);
 
-        let response: RealEstateApiPropertyCompsResponse | null;
+        // JAK-164: the SELECTION ENGINE assembles a REAL up-to-10-mile candidate pool
+        // via /v2/PropertySearch and picks the strongest true comps (LLM with a
+        // deterministic fallback; numbers always code-derived), falling back to the
+        // legacy cluster only when the radius pool yields nothing usable. It always
+        // returns a result object, so Jake always replies.
+        let result: Awaited<ReturnType<CompsSelectionEngine["buildComps"]>>;
         try {
-            response = await this.realEstateDao.getCompsByAddress(target, params);
+            result = await this.compsEngine.buildComps({ target, params });
         } catch (err) {
             const reply = `Sorry — I hit a snag pulling comps for "${target}". Please try again shortly.`;
             await this.sendAndRemember(route, input.contactId, customer, phone, reply);
@@ -1286,8 +1291,8 @@ export class JakeAssistantService {
             return { ok: false, address: target, reply, mode: route.mode, charged: 0 };
         }
 
-        const data = assembleCompsData(response, target, params);
-        if (!response || !hasComps(data)) {
+        const data = result.data;
+        if (!hasComps(data)) {
             const reply = [
                 `I couldn't find comparable sales for ${target} using ${formatCompParams(params)}, so I haven't charged you.`,
                 PropertyReportWriter.FOOTER,
@@ -1312,14 +1317,14 @@ export class JakeAssistantService {
             requestingMessageId: ctx.requestingMessageId,
             target,
             params,
-            record: response,
+            record: result.record,
             reportText: reply,
         });
 
         await this.writeStatusNote(
             route,
             input.contactId,
-            `Jake (text): pulled comps for "${target}" [${formatCompParams(params)}] — charged ${charged} credit(s).`
+            `Jake (text): pulled comps for "${target}" [${formatCompParams(params)}] via ${result.source}/${result.selectionMode} (${data.comps.length} comp(s)) — charged ${charged} credit(s).`
         );
         return { ok: true, address: target, reply, mode: route.mode, charged, refreshed: undefined };
     }
@@ -1354,7 +1359,7 @@ export class JakeAssistantService {
         requestingMessageId: string | null;
         target: string;
         params: CompParams;
-        record: RealEstateApiPropertyCompsResponse;
+        record: unknown;
         reportText: string;
     }): Promise<void> {
         try {

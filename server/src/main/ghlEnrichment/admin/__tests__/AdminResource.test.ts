@@ -13,6 +13,7 @@ import { OrchestratorPromptService } from "../../../services/orchestrator/Orches
 import { SkipTracePromptService } from "../../../services/skiptrace/SkipTracePromptService";
 import { SkipTraceSettingsService } from "../../../services/skiptrace/SkipTraceSettingsService";
 import { CompsPromptService } from "../../../services/comps/CompsPromptService";
+import { CompsSelectionPromptService } from "../../../services/comps/CompsSelectionPromptService";
 import { CompsSettingsService } from "../../../services/comps/CompsSettingsService";
 import { CreditSettingsService } from "../../metering/CreditSettingsService";
 import { LlmModelSettingsService } from "../../../services/llm/LlmModelSettingsService";
@@ -44,6 +45,7 @@ describe("AdminResource", () => {
   let skipTracePrompt: MockProxy<SkipTracePromptService>;
   let skipTraceSettings: MockProxy<SkipTraceSettingsService>;
   let compsPrompt: MockProxy<CompsPromptService>;
+  let compsSelectionPrompt: MockProxy<CompsSelectionPromptService>;
   let compsSettings: MockProxy<CompsSettingsService>;
   let creditSettings: MockProxy<CreditSettingsService>;
   let modelSettings: MockProxy<LlmModelSettingsService>;
@@ -59,6 +61,7 @@ describe("AdminResource", () => {
     skipTracePrompt = mock<SkipTracePromptService>();
     skipTraceSettings = mock<SkipTraceSettingsService>();
     compsPrompt = mock<CompsPromptService>();
+    compsSelectionPrompt = mock<CompsSelectionPromptService>();
     compsSettings = mock<CompsSettingsService>();
     creditSettings = mock<CreditSettingsService>();
     modelSettings = mock<LlmModelSettingsService>();
@@ -80,6 +83,7 @@ describe("AdminResource", () => {
         skipTracePrompt,
         skipTraceSettings,
         compsPrompt,
+        compsSelectionPrompt,
         compsSettings,
         creditSettings,
         modelSettings
@@ -939,6 +943,47 @@ describe("AdminResource", () => {
     });
   });
 
+  // JAK-164: the comps SELECTION-engine prompt is wired end-to-end (not dead code) —
+  // GET/PUT/reset behind the auth gate, available to any admin, saving with the admin id.
+  describe("comps SELECTION prompt (comps-selection-prompt, JAK-164)", () => {
+    const view = (over: Record<string, unknown> = {}) => ({
+      prompt: "SELECTION HEURISTICS",
+      isDefault: false,
+      updatedAt: new Date("2026-07-06T00:00:00Z"),
+      updatedBy: "admin-id",
+      ...over,
+    });
+
+    it("is behind the auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      expect((await request(app).get("/api/admin/comps-selection-prompt")).status).toBe(401);
+      expect(compsSelectionPrompt.getView).not.toHaveBeenCalled();
+    });
+
+    it("GET/PUT/reset are available to a REGULAR admin and save with the editing admin id", async () => {
+      asPlainAdmin();
+      compsSelectionPrompt.getView.mockResolvedValue(view() as never);
+      compsSelectionPrompt.setPrompt.mockResolvedValue(view({ prompt: "Tuned" }) as never);
+      compsSelectionPrompt.resetPrompt.mockResolvedValue(view({ isDefault: true }) as never);
+
+      expect((await asAdmin(request(app).get("/api/admin/comps-selection-prompt"))).status).toBe(200);
+      const put = await asAdmin(
+        request(app).put("/api/admin/comps-selection-prompt").send({ prompt: "  Tuned  " })
+      );
+      expect(put.status).toBe(200);
+      expect(compsSelectionPrompt.setPrompt).toHaveBeenCalledWith("Tuned", "admin-id");
+      const reset = await asAdmin(request(app).post("/api/admin/comps-selection-prompt/reset"));
+      expect(reset.status).toBe(200);
+      expect(reset.body.isDefault).toBe(true);
+    });
+
+    it("PUT 400s an empty prompt", async () => {
+      const res = await asAdmin(request(app).put("/api/admin/comps-selection-prompt").send({ prompt: "   " }));
+      expect(res.status).toBe(400);
+      expect(compsSelectionPrompt.setPrompt).not.toHaveBeenCalled();
+    });
+  });
+
   // --- Comps credit cost (JAK-137) ------------------------------------------
 
   describe("comps-cost", () => {
@@ -1224,12 +1269,13 @@ describe("AdminResource", () => {
       ...over,
     });
 
-    // The four surfaces and their route segments (JAK-143).
+    // The surfaces and their route segments (JAK-143; comps_selection added JAK-164).
     const surfaces: Array<[string, string]> = [
       ["report-model", "property_report"],
       ["orchestrator-model", "orchestrator"],
       ["skiptrace-model", "skiptrace"],
       ["comps-model", "comps"],
+      ["comps-selection-model", "comps_selection"],
     ];
 
     it.each(surfaces)("%s GET/PUT/reset is behind the auth gate", async (path) => {
