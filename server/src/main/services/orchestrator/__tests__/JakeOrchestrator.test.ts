@@ -341,6 +341,94 @@ describe("JakeOrchestrator (JAK-135 router)", () => {
       expect(plan.addressRecency).toBeNull();
     });
 
+    it("JAK-165: a BARE 'comps' with a messy history leaves the target UNRESOLVED even when the router guesses an OLD address", async () => {
+      // The Eric bug: a texter with several addresses in a long history sends a bare
+      // "comps" (no inline address, no ordinal, no "last"). The router LLM fills
+      // targetAddress with an OLD address it guessed from history. Honoring that guess
+      // would run comps on the wrong property. The orchestrator must NOT return the
+      // LLM's guess here — it leaves the target null so resolveAddressTarget's
+      // deterministic MOST-RECENT fallback (JAK-154) picks the newest property.
+      llm.classify.mockResolvedValue(
+        classification({ intent: "comps", targetAddress: "1 First St, Town, CA 90000" }) // OLD, history-derived guess
+      );
+
+      const plan = await orchestrator.plan({
+        phone: "+15559990000",
+        message: "comps",
+        parsedAddress: null,
+        isAffirmative: false,
+      });
+
+      expect(plan.targetEntity).toBeNull();
+      expect(plan.addressRecency).toBeNull();
+    });
+
+    it("JAK-165: a BARE 'skip' with a messy history leaves the target UNRESOLVED even when the router guesses an OLD address", async () => {
+      llm.classify.mockResolvedValue(
+        classification({ intent: "skip_trace", targetAddress: "1 First St, Town, CA 90000" }) // OLD, history-derived guess
+      );
+
+      const plan = await orchestrator.plan({
+        phone: "+15559990000",
+        message: "skip",
+        parsedAddress: null,
+        isAffirmative: false,
+      });
+
+      expect(plan.targetEntity).toBeNull();
+      expect(plan.addressRecency).toBeNull();
+    });
+
+    it("JAK-165: an EXPLICIT ordinal still corroborates the router's targetAddress for skip/comps", async () => {
+      // An ordinal reference means the texter DID point at an address — so the router's
+      // paired target is trusted and resolves positionally, unchanged from before.
+      llm.classify.mockResolvedValue(
+        classification({ intent: "comps", targetAddress: "2 Second Ave, Town, CA 90000", addressOrdinal: 2 })
+      );
+
+      const plan = await orchestrator.plan({
+        phone: "+15559990000",
+        message: "comp the 2nd address",
+        parsedAddress: null,
+        isAffirmative: false,
+      });
+
+      expect(plan.targetEntity).toBe("2 Second Ave, Town, CA 90000");
+    });
+
+    it("JAK-165: a bare comps with only ONE address on file still resolves to it (no ambiguity)", async () => {
+      memory.resolvedAddressList.mockResolvedValue(["9 Only St, Town, CA 90000"]);
+      llm.classify.mockResolvedValue(
+        classification({ intent: "comps", targetAddress: "9 Only St, Town, CA 90000" })
+      );
+
+      const plan = await orchestrator.plan({
+        phone: "+15559990000",
+        message: "comps",
+        parsedAddress: null,
+        isAffirmative: false,
+      });
+
+      expect(plan.targetEntity).toBe("9 Only St, Town, CA 90000");
+    });
+
+    it("JAK-165: property_report is UNCHANGED — the router's targetAddress still wins even with 2+ addresses", async () => {
+      // The bare skip/comps fix must NOT touch the report path: a report's targetAddress
+      // resolves exactly as before (JAK-138 governs bare-report ambiguity separately).
+      llm.classify.mockResolvedValue(
+        classification({ intent: "property_report", targetAddress: "1 First St, Town, CA 90000" })
+      );
+
+      const plan = await orchestrator.plan({
+        phone: "+15559990000",
+        message: "run it",
+        parsedAddress: null,
+        isAffirmative: false,
+      });
+
+      expect(plan.targetEntity).toBe("1 First St, Town, CA 90000");
+    });
+
     it("an out-of-range ordinal yields a null target (assistant will clarify)", async () => {
       llm.classify.mockResolvedValue(classification({ intent: "property_report", addressOrdinal: 9 }));
 

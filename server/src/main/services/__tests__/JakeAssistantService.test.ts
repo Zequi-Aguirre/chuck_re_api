@@ -14,6 +14,9 @@ import { LookupRow } from "../../ghlEnrichment/conversation/ConversationTypes";
 import { PropertyReportWriter } from "../PropertyReportWriter";
 import { PropertyReportData } from "../../types/PropertyReport";
 import { JakeOrchestrator } from "../orchestrator/JakeOrchestrator";
+import { OrchestratorPromptService } from "../orchestrator/OrchestratorPromptService";
+import { SpecialistRegistry } from "../orchestrator/SpecialistRegistry";
+import { RouterLlmClient } from "../orchestrator/RouterLlmClient";
 import { DispatchPlan } from "../orchestrator/OrchestratorTypes";
 import { SkipTraceReportWriter } from "../skiptrace/SkipTraceReportWriter";
 import { SkipTraceMemoryService } from "../skiptrace/SkipTraceMemoryService";
@@ -1851,6 +1854,86 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
         lastName: "Rey",
       });
       expect(skipTrace.checkCache).toHaveBeenCalledWith("+15559990000", C, "georgina rey");
+    });
+  });
+
+  // JAK-165 — the Eric bug: a texter with a long/messy history sends a BARE "comps"
+  // or "skip" (no inline address, no ordinal, no "last"). The router LLM still fills
+  // targetAddress with a GUESS from history, and on a cluttered history it sometimes
+  // guesses an OLD address. Before the fix that guess became plan.targetEntity and
+  // short-circuited the JAK-154 most-recent fallback, so the wrong (older) property was
+  // comped/traced. This drives the REAL JakeOrchestrator (only the router LLM is mocked)
+  // end-to-end to prove a bare skip/comps now ALWAYS lands on the most-recent address,
+  // never the router's stale guess.
+  describe("JAK-165 bare skip/comps ignores the router's OLD history guess → most-recent", () => {
+    const A = "111 First Ave, Springfield, IL 62701"; // OLD — the router's stale guess
+    const B = "222 Second St, Springfield, IL 62702";
+    const C = "333 Third Blvd, Springfield, IL 62703"; // NEWEST — what a bare command must hit
+
+    const personsHit = {
+      match: true,
+      persons: [
+        { fullName: "Homer Simpson", phones: [{ phone: "+15550101" }], emails: ["homer@example.com"] },
+      ],
+    };
+
+    let routerLlm: MockProxy<RouterLlmClient>;
+
+    beforeEach(() => {
+      // Route the assistant through the PRODUCTION orchestrator so the resolveTarget fix
+      // is genuinely exercised — only the router LLM seam is mocked (no network).
+      const prompts = mock<OrchestratorPromptService>();
+      prompts.getEffectivePrompt.mockResolvedValue("STYLE PROMPT");
+      routerLlm = mock<RouterLlmClient>();
+      const realOrchestrator = new JakeOrchestrator(prompts, memory, new SpecialistRegistry(), routerLlm);
+      orchestrator.plan.mockImplementation((input) => realOrchestrator.plan(input));
+
+      // A long/messy history: A, B, C on file (oldest-first), and C is the newest one
+      // the texter engaged with.
+      memory.recentMessages.mockResolvedValue([]);
+      memory.resolvedAddressList.mockResolvedValue([A, B, C]);
+      memory.lastResolvedAddress.mockResolvedValue(C);
+    });
+
+    it("bare 'comps' → comps the NEWEST (C), NOT the router's OLD targetAddress (A)", async () => {
+      routerLlm.classify.mockResolvedValue({
+        intent: "comps",
+        targetAddress: A, // the stale history guess that used to win
+        addressOrdinal: null,
+        userFacingNote: "",
+      });
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "comps",
+      });
+
+      expect(compsEngine.buildComps).toHaveBeenCalledWith({ target: C, params: DEFAULT_COMP_PARAMS });
+      expect(compsEngine.buildComps).not.toHaveBeenCalledWith(expect.objectContaining({ target: A }));
+      expect(disambiguation.setPending).not.toHaveBeenCalled();
+      expect(result.charged).toBe(3);
+    });
+
+    it("bare 'skip' → traces the NEWEST (C), NOT the router's OLD targetAddress (A)", async () => {
+      routerLlm.classify.mockResolvedValue({
+        intent: "skip_trace",
+        targetAddress: A, // the stale history guess that used to win
+        addressOrdinal: null,
+        userFacingNote: "",
+      });
+      realEstate.skipTraceByAddress.mockResolvedValue(personsHit as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "skip",
+      });
+
+      expect(realEstate.skipTraceByAddress).toHaveBeenCalledWith(C);
+      expect(realEstate.skipTraceByAddress).not.toHaveBeenCalledWith(A);
+      expect(disambiguation.setPending).not.toHaveBeenCalled();
+      expect(result.charged).toBe(3);
     });
   });
 

@@ -127,7 +127,27 @@ export class JakeOrchestrator {
     // command carries no parsedAddress and this branch simply doesn't fire.
     if (input.parsedAddress) return input.parsedAddress;
 
-    if (classification.targetAddress) return classification.targetAddress;
+    // JAK-165: the router LLM's free-form targetAddress is authoritative for a
+    // property_report, but for a BARE skip_trace / comps it is a GUESS derived from
+    // conversation history — and on a long/messy history the LLM sometimes fills it
+    // with an OLD address the texter is no longer looking at. Honoring that guess
+    // short-circuits the JAK-154 most-recent fallback in resolveAddressTarget and runs
+    // the skip/comps on the wrong (older) property — the intermittent bug that hits
+    // texters with cluttered histories. So for skip/comps we honor targetAddress ONLY
+    // when the texter CORROBORATED an address: an explicit ordinal ("the 2nd address"),
+    // a "last" reference (addressRecency === "last"), or when there's no ambiguity at
+    // all (0–1 addresses on file). A typed INLINE address already won above (JAK-156).
+    // Otherwise leave the target UNRESOLVED so the deterministic most-recent wins.
+    // property_report is deliberately UNCHANGED — its bare-with-2+-addresses case still
+    // disambiguates downstream (JAK-138).
+    if (classification.targetAddress) {
+      const corroborated =
+        intent === "property_report" ||
+        addressRecency === "last" ||
+        classification.addressOrdinal != null ||
+        resolvedAddresses.length <= 1;
+      if (corroborated) return classification.targetAddress;
+    }
 
     // JAK-159: the texter said "the last one" / "the last property". "last" means the
     // genuinely MOST-RECENT address, resolved downstream via lastResolvedAddress
