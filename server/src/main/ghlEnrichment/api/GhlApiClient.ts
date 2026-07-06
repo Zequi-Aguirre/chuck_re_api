@@ -1,6 +1,7 @@
 import axios, { AxiosInstance, AxiosRequestConfig } from "axios";
 import { injectable } from "tsyringe";
 import { ExternalActionGuard } from "../../safety/ExternalActionGuard";
+import { GhlEnrichmentConfig } from "../config/GhlEnrichmentConfig";
 import { GhlConnectionService } from "../connections/GhlConnectionService";
 import { GhlConnection } from "../connections/GhlConnectionTypes";
 import {
@@ -20,6 +21,15 @@ export class GhlConnectionUnavailableError extends Error {
     this.name = "GhlConnectionUnavailableError";
   }
 }
+
+/**
+ * A fixed, non-secret timestamp for the synthetic gateway connection (JAK-163).
+ * The gateway creds come from Doppler, not a DB row, so there are no real
+ * created/updated times — and {@link GhlApiClient.createHttpClient} only reads
+ * `baseUrl` + `apiKey` anyway. A constant epoch keeps the shape valid without
+ * introducing nondeterminism.
+ */
+const GATEWAY_CONNECTION_TIMESTAMP = new Date(0);
 
 /** Raised when a GHL request ultimately fails (after any retries). */
 export class GhlApiError extends Error {
@@ -42,6 +52,14 @@ export class GhlApiError extends Error {
  * ({@link GhlConnectionService} → decrypted `apiKey` + per-location `base_url`),
  * NOT from a single app-wide Doppler key. Doppler holds only the app-level
  * encryption key. The worker/webhook paths use this client (JAK-106/JAK-107).
+ *
+ * ONE deliberate exception (JAK-163): the shared "Jake" GATEWAY sub-account's
+ * credentials live in Doppler ({@link GhlEnrichmentConfig.gateway} — the SAME
+ * master key outbound SMS uses), never pasted into the JAK-102 store. So when a
+ * call targets the gateway location AND the store has no connection for it, we
+ * fall back to those Doppler creds instead of failing "not connected" — see
+ * {@link httpFor}. A REAL store connection for a location always wins (the
+ * own_number multi-tenant path is untouched); the fallback is gateway-only.
  *
  * Responsibilities:
  *  - Inject the correct per-location Bearer token + base URL (one cached axios
@@ -70,7 +88,8 @@ export class GhlApiClient {
 
   constructor(
     private readonly connections: GhlConnectionService,
-    private readonly guard: ExternalActionGuard
+    private readonly guard: ExternalActionGuard,
+    private readonly config: GhlEnrichmentConfig
   ) {}
 
   // ────────────────────────────── Reads ──────────────────────────────
@@ -230,12 +249,21 @@ export class GhlApiClient {
    * Resolve (and cache) the axios instance for a location, wiring its decrypted
    * per-location credentials. Throws {@link GhlConnectionUnavailableError} if
    * the location is unknown or inactive (uninstalled) — callers stop processing.
+   *
+   * A REAL store connection always wins (own_number multi-tenant path). Only
+   * when the store has NO connection for the location do we consider the JAK-163
+   * gateway fallback: if this IS the gateway location and its Doppler master
+   * creds are configured, auth with those (the same key SMS uses) instead of
+   * failing "not connected". An unconfigured gateway resolves to no connection,
+   * so the caller surfaces a graceful "not connected / not configured" message.
    */
   private async httpFor(locationId: string): Promise<AxiosInstance> {
     const cached = this.clients.get(locationId);
     if (cached) return cached;
 
-    const conn = await this.connections.getByLocationId(locationId);
+    const conn =
+      (await this.connections.getByLocationId(locationId)) ??
+      this.gatewayConnectionFor(locationId);
     if (!conn) {
       throw new GhlConnectionUnavailableError(locationId, "no connection on file");
     }
@@ -246,6 +274,33 @@ export class GhlApiClient {
     const client = this.createHttpClient(conn);
     this.clients.set(locationId, client);
     return client;
+  }
+
+  /**
+   * Build a synthetic {@link GhlConnection} from the Doppler gateway master creds
+   * (JAK-163) — but ONLY for the gateway location itself, and ONLY when those
+   * creds are actually configured. Returns null otherwise (not the gateway
+   * location, or gateway unset), so the caller falls through to the normal
+   * "no connection on file" path and the admin sees a graceful message rather
+   * than a crash. The master key is scoped to this one sub-account and, like
+   * every credential here, is never logged.
+   */
+  private gatewayConnectionFor(locationId: string): GhlConnection | null {
+    const { apiKey, baseUrl, locationId: gatewayLocationId } = this.config.gateway;
+    const gatewayLoc = (gatewayLocationId || "").trim();
+    if (!gatewayLoc || locationId !== gatewayLoc) return null;
+    if (!apiKey || !baseUrl) return null;
+    return {
+      id: `gateway:${gatewayLoc}`,
+      locationId: gatewayLoc,
+      apiKey,
+      baseUrl,
+      phoneNumbers: [],
+      status: "active",
+      textMode: "gateway",
+      createdAt: GATEWAY_CONNECTION_TIMESTAMP,
+      updatedAt: GATEWAY_CONNECTION_TIMESTAMP,
+    };
   }
 
   /**

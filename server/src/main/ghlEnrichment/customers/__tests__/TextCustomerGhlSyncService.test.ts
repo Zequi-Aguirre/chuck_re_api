@@ -1,7 +1,11 @@
+import { randomUUID } from "crypto";
+import { AxiosInstance } from "axios";
 import { mock, MockProxy } from "jest-mock-extended";
 import { GhlApiClient, GhlConnectionUnavailableError } from "../../api/GhlApiClient";
 import { GhlCustomField } from "../../api/GhlApiTypes";
 import { GhlEnrichmentConfig } from "../../config/GhlEnrichmentConfig";
+import { GhlConnectionService } from "../../connections/GhlConnectionService";
+import { GhlConnection } from "../../connections/GhlConnectionTypes";
 import { ExternalActionGuard } from "../../../safety/ExternalActionGuard";
 import { TextCustomerGhlSyncService } from "../TextCustomerGhlSyncService";
 
@@ -238,6 +242,136 @@ describe("TextCustomerGhlSyncService", () => {
 
       expect(result.found).toBe(false);
       expect(client.findContactByPhone).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * End-to-end wiring through a REAL {@link GhlApiClient} (mocked transport) —
+   * the actual JAK-163 bug: gateway mode has the Jake sub-account's creds in
+   * Doppler ({@link GhlEnrichmentConfig.gateway}), NOT in the JAK-102 store, so
+   * the store has no connection for the gateway location. Before the fix the
+   * client threw GhlConnectionUnavailableError → "check that it's connected"
+   * even though SMS (which reads config.gateway directly) worked fine.
+   */
+  describe("gateway-mode wiring (JAK-163, real GhlApiClient)", () => {
+    const GW_LOC = "jake_gw";
+    // Same master key SMS uses; generated at runtime so nothing secret is committed.
+    const gwKey = `pit-${randomUUID()}`;
+    const GW_BASE = "https://gateway.example.com";
+
+    /** A GhlApiClient whose axios transport we control (no network, instant backoff). */
+    class TestGhlApiClient extends GhlApiClient {
+      public readonly transport = { request: jest.fn() };
+      public builtFor: GhlConnection[] = [];
+      protected createHttpClient(conn: GhlConnection): AxiosInstance {
+        this.builtFor.push(conn);
+        return this.transport as unknown as AxiosInstance;
+      }
+      protected delay(): Promise<void> {
+        return Promise.resolve();
+      }
+    }
+
+    const gatewayConfig = (over: Partial<{ apiKey: string; baseUrl: string }> = {}): GhlEnrichmentConfig =>
+      ({
+        gateway: { locationId: GW_LOC, apiKey: gwKey, baseUrl: GW_BASE, ...over },
+      } as GhlEnrichmentConfig);
+
+    let connections: MockProxy<GhlConnectionService>;
+
+    beforeEach(() => {
+      connections = mock<GhlConnectionService>();
+    });
+
+    const wire = (config: GhlEnrichmentConfig, live = true) => {
+      const api = new TestGhlApiClient(connections, guardWith(live), config);
+      const service = new TextCustomerGhlSyncService(api, config, guardWith(live));
+      return { api, service };
+    };
+
+    it("findContact REACHES GHL on the gateway creds when the store has no connection", async () => {
+      connections.getByLocationId.mockResolvedValue(null); // gateway loc isn't in the store
+      const { api, service } = wire(gatewayConfig());
+      api.transport.request.mockResolvedValue({ data: { contact: { id: "ct_1", firstName: "Ada" } } });
+
+      const result = await service.findContact("+17865274077");
+
+      // No "check that it's connected" — the lookup reached GHL...
+      expect(result.found).toBe(true);
+      expect(result.contact?.ghlContactId).toBe("ct_1");
+      // ...authed with the gateway master key + base URL (the SMS creds), on the
+      // gateway location — never a store connection.
+      expect(api.builtFor[0].apiKey).toBe(gwKey);
+      expect(api.builtFor[0].baseUrl).toBe(GW_BASE);
+      expect(api.builtFor[0].locationId).toBe(GW_LOC);
+    });
+
+    it("syncCustomer REACHES GHL on the gateway creds (list fields + upsert) in production", async () => {
+      connections.getByLocationId.mockResolvedValue(null);
+      const { api, service } = wire(gatewayConfig());
+      api.transport.request.mockImplementation(async (cfg: { url: string }) =>
+        cfg.url.includes("customFields")
+          ? { data: { customFields: [{ id: "f_textjake", name: "text Jake" }] } }
+          : { data: { contact: { id: "ct_1" } } }
+      );
+
+      const result = await service.syncCustomer(input);
+
+      expect(result.status).toBe("synced");
+      expect(result.ghlContactId).toBe("ct_1");
+      // Both the read (list fields) and the write (upsert) authed with gateway creds.
+      expect(api.builtFor.every((c) => c.apiKey === gwKey)).toBe(true);
+      const upsert = api.transport.request.mock.calls.find((c) => c[0].url === "/contacts/upsert");
+      expect(upsert).toBeDefined();
+    });
+
+    it("an own_number location WITH a store connection still uses the store creds (multi-tenant intact)", async () => {
+      const ownKey = `pit-${randomUUID()}`;
+      connections.getByLocationId.mockResolvedValue({
+        id: "c1",
+        locationId: JAKE_LOC,
+        apiKey: ownKey,
+        baseUrl: "https://own.example.com",
+        phoneNumbers: [],
+        status: "active",
+        textMode: "own_number",
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
+      });
+      // Gateway is configured for a DIFFERENT location; this own_number tenant
+      // must never borrow the gateway key.
+      const api = new TestGhlApiClient(connections, guardWith(true), gatewayConfig());
+      const service = new TextCustomerGhlSyncService(api, configWith(JAKE_LOC), guardWith(true));
+      api.transport.request.mockResolvedValue({ data: { contact: { id: "ct_1" } } });
+
+      await service.findContact("+17865274077");
+
+      expect(api.builtFor[0].apiKey).toBe(ownKey);
+      expect(api.builtFor[0].apiKey).not.toBe(gwKey);
+    });
+
+    it("gateway apiKey absent → graceful not-connected message, no crash", async () => {
+      connections.getByLocationId.mockResolvedValue(null);
+      const { service } = wire(gatewayConfig({ apiKey: "" }));
+
+      const result = await service.findContact("+17865274077");
+
+      expect(result.found).toBe(false);
+      expect(result.message).toContain("connected");
+
+      const sync = await service.syncCustomer(input);
+      expect(sync.status).toBe("not_connected");
+    });
+
+    it("preserves the dev no-POST boundary on the gateway location (read-safe, no write)", async () => {
+      connections.getByLocationId.mockResolvedValue(null);
+      const { api, service } = wire(gatewayConfig(), false); // dev
+
+      const result = await service.syncCustomer(input);
+
+      // Dev skips the whole sync before any HTTP — no read, no write to the gateway.
+      expect(result.status).toBe("skipped");
+      expect(api.transport.request).not.toHaveBeenCalled();
     });
   });
 });
