@@ -13,6 +13,7 @@ import { SkipTraceSettingsPage } from "./pages/SkipTraceSettingsPage";
 import { CompsSettingsPage } from "./pages/CompsSettingsPage";
 import { CompsSelectionSettingsPage } from "./pages/CompsSelectionSettingsPage";
 import { CreditSettingsPage } from "./pages/CreditSettingsPage";
+import { OnboardingSettingsPage } from "./pages/OnboardingSettingsPage";
 import { AdminsPage } from "./pages/AdminsPage";
 import { ReactNode } from "react";
 
@@ -75,6 +76,8 @@ export function App() {
         <Route path="/comps-selection-settings" element={<CompsSelectionSettingsPage />} />
         {/* Credits (JAK-162) — per-feature default grants + out-of-credits messages. */}
         <Route path="/credit-settings" element={<CreditSettingsPage />} />
+        {/* Onboarding Ask (JAK-first-text-welcome) — editable after-3rd-report email ask. */}
+        <Route path="/onboarding-settings" element={<OnboardingSettingsPage />} />
         <Route
           path="/admins"
           element={

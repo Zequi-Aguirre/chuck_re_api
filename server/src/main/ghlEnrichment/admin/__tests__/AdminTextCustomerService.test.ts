@@ -95,6 +95,8 @@ const customer = (over: Partial<TextJakeCustomer> = {}): TextJakeCustomer => ({
   lastName: null,
   email: null,
   status: "active",
+  reportCount: 0,
+  onboardingAskedAt: null,
   // The credit account key IS the customer id (JAK-115).
   creditAccountId: "cust-1",
   createdAt: new Date("2026-07-01T00:00:00Z"),
@@ -110,6 +112,8 @@ const customerRow = (over: Partial<TextJakeCustomerRow> = {}): TextJakeCustomerR
   last_name: null,
   email: null,
   status: "active",
+  report_count: 0,
+  onboarding_asked_at: null,
   created_at: new Date("2026-07-01T00:00:00Z"),
   modified_at: new Date("2026-07-02T00:00:00Z"),
   deleted_at: null,

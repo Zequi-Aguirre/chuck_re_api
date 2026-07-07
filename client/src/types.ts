@@ -185,6 +185,20 @@ export interface ReportPromptView {
 }
 
 /**
+ * The editable wording of the DELAYED onboarding email ask
+ * (JAK-first-text-welcome) — the message Jake sends once, right after a customer's
+ * 3rd report, inviting them to share a name + email. `prompt` is the effective
+ * value (the stored edit, or the code default when `isDefault`); the
+ * GoTextJake.com footer is appended by the sender, never part of the stored copy.
+ */
+export interface OnboardingPromptView {
+  prompt: string;
+  isDefault: boolean;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+/**
  * The editable AI STYLE/CLASSIFICATION prompt for the text-Jake orchestrator /
  * router (JAK-135). `prompt` is the effective value (the stored edit, or the code
  * default when `isDefault`). The hard routing rules (fixed intent set, JSON-only

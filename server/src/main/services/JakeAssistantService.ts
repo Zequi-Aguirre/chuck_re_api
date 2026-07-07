@@ -47,6 +47,13 @@ import { CompsReportWriter } from "./comps/CompsReportWriter.ts";
 import { CompsMemoryService } from "./comps/CompsMemoryService.ts";
 import { CompsSettingsService } from "./comps/CompsSettingsService.ts";
 import { CompsSelectionEngine } from "./comps/CompsSelectionEngine.ts";
+import { OnboardingPromptService } from "./onboarding/OnboardingPromptService.ts";
+import {
+    CapturedProfile,
+    buildProfileAck,
+    buildWelcomeMessage,
+    parseProfileReply,
+} from "./onboarding/onboardingMessages.ts";
 import {
     CompParamOverrides,
     CompParams,
@@ -128,8 +135,15 @@ export class JakeAssistantService {
         private readonly comps: CompsMemoryService,
         private readonly compsSettings: CompsSettingsService,
         private readonly disambiguation: DisambiguationMemoryService,
-        private readonly compsEngine: CompsSelectionEngine
+        private readonly compsEngine: CompsSelectionEngine,
+        private readonly onboardingPrompt: OnboardingPromptService
     ) {}
+
+    /**
+     * How many delivered reports trigger the DELAYED onboarding email ask
+     * (JAK-first-text-welcome): fired ONCE, right after this many reports.
+     */
+    private static readonly ONBOARDING_AFTER_REPORTS = 3;
 
     /**
      * Core text-Jake path (JAK-115), MODE-AWARE, now ORCHESTRATED (JAK-135):
@@ -150,8 +164,13 @@ export class JakeAssistantService {
      * phone/credits.
      */
     public async handleInboundMessage(input: JakeInboundMessage): Promise<JakeInboundResult> {
-        // 1. Billing identity — the texting customer, keyed by sender phone.
-        const customer = await this.customers.resolveByPhone(input.senderPhone, input.contactId);
+        // 1. Billing identity — the texting customer, keyed by sender phone. The
+        //    `created` flag tells us this is their FIRST-EVER text so we send the
+        //    one-time welcome below (JAK-first-text-welcome).
+        const { customer, created: firstContact } = await this.customers.resolveByPhoneWithCreation(
+            input.senderPhone,
+            input.contactId
+        );
         const accountId = customer.creditAccountId;
         const phone = customer.phone;
 
@@ -182,6 +201,19 @@ export class JakeAssistantService {
         //    address (JAK-154) and enters the ordinal list for later references. The
         //    returned id links any resulting lookup snapshot back to this message.
         const inboundId = await this.rememberInbound(customer, phone, input.message, address, route);
+
+        // JAK-first-text-welcome. On the FIRST-EVER text: send the welcome + seeded
+        // credits announcement (no info ask), then STILL deliver their first report
+        // below. On a LATER text, once we've asked for their info, a follow-up reply
+        // that provides a name/email is captured into their profile and answered —
+        // WITHOUT blocking normal usage (an address/command falls through to the
+        // report path). Returning customers with nothing pending are unaffected.
+        if (firstContact) {
+            await this.sendWelcome(route, input, customer, phone);
+        } else {
+            const captured = await this.tryCaptureProfile({ input, route, customer, phone, address });
+            if (captured) return captured;
+        }
 
         // 4. Classify intent + resolve references against memory (JAK-135). The
         //    router reads the recent window + the ordered resolved-address list and
@@ -456,6 +488,12 @@ export class JakeAssistantService {
                 : `Jake (text): no property match for "${address}" — no charge.`
         );
 
+        // A delivered property report counts toward the delayed onboarding ask
+        // (JAK-first-text-welcome). A no-match reply is NOT a report, so skip it.
+        if (property) {
+            await this.recordReportDelivered(route, input, customer, phone);
+        }
+
         return { ok: true, address, reply, mode: route.mode, charged, refreshed: ctx.onOkRefresh || undefined };
     }
 
@@ -481,6 +519,9 @@ export class JakeAssistantService {
             input.contactId,
             `Jake (text): re-served cached report for "${address}" for FREE — no charge, no API call.`
         );
+        // A free re-serve is still a report the customer received, so it counts
+        // toward the delayed onboarding ask (JAK-first-text-welcome).
+        await this.recordReportDelivered(route, input, customer, phone);
         return { ok: true, address, reply, mode: route.mode, charged: 0, reserved: true };
     }
 
@@ -1761,6 +1802,127 @@ export class JakeAssistantService {
             charged: 0,
             intent: customer.status,
         };
+    }
+
+    // ── Onboarding (JAK-first-text-welcome) ──────────────────────────────────
+
+    /**
+     * Send the one-time WELCOME on a new customer's first-ever text: announce the
+     * seeded default credits (read LIVE from the admin-editable defaults, never
+     * hardcoded — the same values CreditService just seeded) and invite an address.
+     * Deliberately does NOT ask for name/email — that ask is delayed to after the
+     * 3rd report. Best-effort: a welcome hiccup must never block the first report.
+     */
+    private async sendWelcome(
+        route: TextRoute,
+        input: JakeInboundMessage,
+        customer: TextJakeCustomer,
+        phone: string
+    ): Promise<void> {
+        try {
+            const [report, skiptrace, comps] = await Promise.all([
+                this.creditSettings.defaultGrant("report"),
+                this.creditSettings.defaultGrant("skiptrace"),
+                this.creditSettings.defaultGrant("comps"),
+            ]);
+            const reply = this.withFooter(buildWelcomeMessage({ report, skiptrace, comps }));
+            await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+            await this.writeStatusNote(
+                route,
+                input.contactId,
+                `Jake (text): new customer — sent welcome with ${report}/${skiptrace}/${comps} starting credits.`
+            );
+        } catch (err) {
+            console.error("⚠️ Jake welcome send failed:", this.errorSummary(err));
+        }
+    }
+
+    /**
+     * Record one delivered report and, when the customer just hit the
+     * {@link ONBOARDING_AFTER_REPORTS}rd, send the DELAYED onboarding email ask
+     * ONCE (JAK-first-text-welcome). The once-guard is the atomic
+     * `markOnboardingAsked` (conditional on the stamp being unset), so even a fuzzy
+     * count can't double-ask. Skipped entirely when we already have the customer's
+     * name + email. Best-effort: a hiccup never affects the report the texter got.
+     */
+    private async recordReportDelivered(
+        route: TextRoute,
+        input: JakeInboundMessage,
+        customer: TextJakeCustomer,
+        phone: string
+    ): Promise<void> {
+        try {
+            const count = (await this.customers.incrementReportCount(customer.id)) ?? 0;
+            if (count < JakeAssistantService.ONBOARDING_AFTER_REPORTS) return;
+            // Already onboarded (we have their info) or already asked → never ask.
+            if (this.hasContactInfo(customer)) return;
+            if (customer.onboardingAskedAt) return;
+            const claimed = await this.customers.markOnboardingAsked(customer.id);
+            if (!claimed) return;
+
+            const ask = this.withFooter(await this.onboardingPrompt.getEffectivePrompt());
+            await this.sendAndRemember(route, input.contactId, customer, phone, ask);
+            await this.writeStatusNote(
+                route,
+                input.contactId,
+                `Jake (text): sent the onboarding email ask after report #${count} — no charge.`
+            );
+        } catch (err) {
+            console.error("⚠️ Jake onboarding ask failed:", this.errorSummary(err));
+        }
+    }
+
+    /**
+     * If this non-first-contact message is a profile answer (a name/email reply to
+     * the onboarding ask), capture it into the customer's profile and acknowledge —
+     * returning the handled result. Otherwise return null so normal dispatch runs.
+     *
+     * Gated so it NEVER hijacks real usage: only after we've actually asked
+     * (onboardingAskedAt set), only while the profile is still incomplete, only when
+     * the message carries no address to act on, and only when it parses to real
+     * profile info. Providing info is optional — anyone who ignores the ask and
+     * keeps texting addresses is unaffected.
+     */
+    private async tryCaptureProfile(ctx: {
+        input: JakeInboundMessage;
+        route: TextRoute;
+        customer: TextJakeCustomer;
+        phone: string;
+        address: string | null;
+    }): Promise<JakeInboundResult | null> {
+        const { input, route, customer, phone, address } = ctx;
+        if (address) return null;
+        if (!customer.onboardingAskedAt) return null;
+        if (this.hasContactInfo(customer)) return null;
+
+        const captured: CapturedProfile | null = parseProfileReply(input.message);
+        if (!captured) return null;
+
+        await this.customers.captureProfile(customer.id, captured);
+        const reply = this.withFooter(buildProfileAck(captured));
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        await this.writeStatusNote(
+            route,
+            input.contactId,
+            `Jake (text): captured profile info from a follow-up reply (${[
+                captured.firstName ? "first" : null,
+                captured.lastName ? "last" : null,
+                captured.email ? "email" : null,
+            ]
+                .filter(Boolean)
+                .join("+")}) — no charge.`
+        );
+        return { ok: true, address: null, reply, mode: route.mode, charged: 0 };
+    }
+
+    /** True once we have the customer's name AND email — the point of the ask. */
+    private hasContactInfo(customer: TextJakeCustomer): boolean {
+        return Boolean(customer.firstName?.trim() && customer.email?.trim());
+    }
+
+    /** Append the canonical GoTextJake.com footer to a message body. */
+    private withFooter(body: string): string {
+        return [body, PropertyReportWriter.FOOTER].join("\n\n");
     }
 
     /**

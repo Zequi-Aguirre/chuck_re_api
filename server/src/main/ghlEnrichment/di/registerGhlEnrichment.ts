@@ -6,6 +6,7 @@ import { ExternalActionGuard } from "../../safety/ExternalActionGuard";
 import { PostgresDatabase } from "../../data/PostgresDatabase";
 import { AppSettingsStore } from "../../data/AppSettingsStore";
 import { PropertyReportPromptService } from "../../services/PropertyReportPromptService";
+import { OnboardingPromptService } from "../../services/onboarding/OnboardingPromptService";
 import { OrchestratorPromptService } from "../../services/orchestrator/OrchestratorPromptService";
 import { SpecialistRegistry } from "../../services/orchestrator/SpecialistRegistry";
 import { JakeOrchestrator } from "../../services/orchestrator/JakeOrchestrator";
@@ -237,6 +238,13 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   }
   if (!c.isRegistered(PropertyReportPromptService)) {
     c.registerSingleton(PropertyReportPromptService);
+  }
+  // JAK-first-text-welcome — admin-editable wording of the DELAYED onboarding email
+  // ask (same app_settings pattern as the report prompt). Singleton so its cache is
+  // shared between the assistant (send time) and the admin resource (edit time), so
+  // an edit is reflected on the very next ask.
+  if (!c.isRegistered(OnboardingPromptService)) {
+    c.registerSingleton(OnboardingPromptService);
   }
 
   // JAK-134 — conversation memory + property lookup cache: the FOUNDATION of the
