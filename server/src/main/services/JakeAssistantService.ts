@@ -2142,9 +2142,18 @@ export class JakeAssistantService {
         // MASTER_API_KEY-guarded) and GHL only sends from a number provisioned in the
         // sub-account, so a mirrored destination is safe; absent → undefined, which
         // keeps the prior default-number behavior.
-        const gatewayReplyFrom = (input.candidateNumbers ?? [])
+        // Precedence (JAK-force-fromnumber-833):
+        //   1. mirror the inbound destination if the webhook supplied one (JAK-167);
+        //   2. else the CONFIGURED gateway default (JAKE_GATEWAY_FROM_NUMBER) — GHL's
+        //      inbound webhook does NOT include the destination, so candidateNumbers is
+        //      usually empty; without this Jake fell back to GHL's sub-account default
+        //      (the OLD number) even after the toll-free swap;
+        //   3. else undefined → GHL's sub-account default (unchanged when the var is
+        //      unset, so backward compatible).
+        const mirroredFrom = (input.candidateNumbers ?? [])
             .map((n) => (n ? String(n).trim() : ""))
             .find((n) => n.length > 0);
+        const gatewayReplyFrom = mirroredFrom || this.gateway.defaultFromNumber;
         return {
             mode: "gateway",
             send: (contactId, message) =>

@@ -48,11 +48,15 @@ export class GhlEnrichmentConfig {
    * strings when unset; {@link import("../gateway/JakeGatewayClient").JakeGatewayClient}
    * refuses to send if used unconfigured.
    */
-  get gateway(): { apiKey: string; locationId: string; baseUrl: string } {
+  get gateway(): { apiKey: string; locationId: string; baseUrl: string; fromNumber: string } {
     return {
       apiKey: this.env.jakeGatewayGhlApiKey,
       locationId: this.env.jakeGatewayLocationId,
       baseUrl: this.env.jakeGatewayBaseUrl,
+      // Configured DEFAULT reply-from number (JAK-force-fromnumber-833). Empty when
+      // unset → the gateway send path omits fromNumber and GHL uses the sub-account
+      // default, exactly as before.
+      fromNumber: this.env.jakeGatewayFromNumber,
     };
   }
 

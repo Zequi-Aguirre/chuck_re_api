@@ -106,6 +106,7 @@ Known, fixed, or generated values — set once and move on.
 | `MASTER_API_KEY` | Internal header secret guarding `POST /api/sms/inbound` and `GET /api/ghl/status/*`. Any long random string; used in the smoke test (step 8). |
 | `GHL_CREDENTIAL_ENC_KEY` | App-level secret that encrypts each tenant's GHL key at rest (AES-256-GCM, key = SHA-256 of this value). `openssl rand -base64 32`. |
 | `JAKE_GATEWAY_BASE_URL` | GHL API base for the gateway client: `https://services.leadconnectorhq.com`. |
+| `JAKE_GATEWAY_FROM_NUMBER` | *(optional)* Default reply-from number for gateway texts (E.164, e.g. `+18333105253`). Used when the inbound webhook carries no destination to mirror, so Jake replies from this provisioned number instead of GHL's sub-account default. **Must be provisioned in the `JAKE_GATEWAY_GHL_API_KEY` sub-account.** Unset → prior behavior (GHL sub-account default). |
 | `RE_API_KEY` | RealEstate API key (house key). Sent as `x-api-key` on text-Jake's property lookup. Unset → lookups return null and the smoke-test reply/note never happens. |
 | `RE_BASE_URL` | RealEstate API base: `https://api.realestateapi.com`. |
 | `ADMIN_SEED_EMAIL` | First-admin bootstrap email. Seeded once at boot, then unset (step 4). |

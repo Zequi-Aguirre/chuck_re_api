@@ -49,6 +49,17 @@ export class JakeGatewayClient {
   }
 
   /**
+   * The CONFIGURED default reply-from number for the gateway (JAK-force-fromnumber-833),
+   * from Doppler (JAKE_GATEWAY_FROM_NUMBER). Empty string when unset. The gateway send
+   * path uses it as the fallback when the inbound carries no destination to mirror, so
+   * Jake replies from the provisioned toll-free number instead of GHL's sub-account
+   * default. Must be a number provisioned in the gateway sub-account for GHL to send.
+   */
+  get defaultFromNumber(): string {
+    return this.config.gateway.fromNumber;
+  }
+
+  /**
    * Send an outbound SMS reply to a contact in the gateway sub-account. As the
    * master key is scoped to that ONE sub-account, no location id is sent — the
    * key IS the location. `fromNumber` is optional; omitted → the gateway's
