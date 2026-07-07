@@ -311,6 +311,10 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     credits.chargeForTextLookup.mockResolvedValue({ ok: true, balanceAfter: 9, entries: [] });
     gateway.sendSms.mockResolvedValue({ messageId: "gw_m1" });
     gateway.createContactNote.mockResolvedValue({ id: "n1", body: "note" });
+    // Default the configured gateway from-number to UNSET ("") — individual tests
+    // override it (JAK-force-fromnumber-833). Without this the auto-mocked getter
+    // returns a truthy stub, which would leak into the "omit" case.
+    (gateway as unknown as { defaultFromNumber: string }).defaultFromNumber = "";
     ghlClient.sendSms.mockResolvedValue({ messageId: "own_m1" });
     ghlClient.createNote.mockResolvedValue({ id: "n2", body: "note" });
 
@@ -390,6 +394,42 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
 
       expect(gateway.sendSms).toHaveBeenCalledWith(
         expect.objectContaining({ contactId: "ct_1", fromNumber: undefined })
+      );
+    });
+
+    it("falls back to the CONFIGURED gateway from-number when the inbound carries no destination (JAK-force-fromnumber-833)", async () => {
+      // GHL's inbound webhook has no destination → candidateNumbers empty. With the
+      // configured default set, Jake must still reply from the provisioned toll-free
+      // number instead of GHL's (old) sub-account default.
+      (gateway as unknown as { defaultFromNumber: string }).defaultFromNumber = "+18333105253";
+      realEstate.searchPropertyByAddress.mockResolvedValue({ address: "1 A St" } as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "1 A St",
+        // No candidateNumbers → nothing to mirror; the configured default takes over.
+      });
+
+      expect(gateway.sendSms).toHaveBeenCalledWith(
+        expect.objectContaining({ contactId: "ct_1", fromNumber: "+18333105253" })
+      );
+    });
+
+    it("mirrors the inbound destination even when a gateway default is configured (mirror wins)", async () => {
+      // Precedence: a real inbound destination always beats the configured default.
+      (gateway as unknown as { defaultFromNumber: string }).defaultFromNumber = "+18333105253";
+      realEstate.searchPropertyByAddress.mockResolvedValue({ address: "1 A St" } as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "1 A St",
+        candidateNumbers: ["+18449998888"],
+      });
+
+      expect(gateway.sendSms).toHaveBeenCalledWith(
+        expect.objectContaining({ contactId: "ct_1", fromNumber: "+18449998888" })
       );
     });
 

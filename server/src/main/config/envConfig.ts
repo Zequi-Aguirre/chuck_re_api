@@ -78,6 +78,7 @@ export class EnvConfig {
     public readonly jakeGatewayGhlApiKey: string;
     public readonly jakeGatewayLocationId: string;
     public readonly jakeGatewayBaseUrl: string;
+    public readonly jakeGatewayFromNumber: string;
 
     // 🧠 GoHighLevel Marketplace app (OAuth + webhooks) — Doppler-provided.
     // Wired now so all GHL secrets live in one place; consumed by later tickets
@@ -157,6 +158,11 @@ export class EnvConfig {
         this.jakeGatewayGhlApiKey = process.env.JAKE_GATEWAY_GHL_API_KEY ?? "";
         this.jakeGatewayLocationId = process.env.JAKE_GATEWAY_LOCATION_ID ?? "";
         this.jakeGatewayBaseUrl = process.env.JAKE_GATEWAY_BASE_URL ?? "";
+        // Configured DEFAULT from-number for gateway replies (JAK-force-fromnumber-833).
+        // When the inbound webhook carries no destination to mirror, Jake sends FROM
+        // this number instead of falling back to the sub-account's (old) default.
+        // Empty when unset → prior default-number behavior (backward compatible).
+        this.jakeGatewayFromNumber = process.env.JAKE_GATEWAY_FROM_NUMBER ?? "";
 
         // 🧠 GoHighLevel Marketplace app secrets (Doppler)
         this.ghlClientId = process.env.GHL_CLIENT_ID ?? "";
