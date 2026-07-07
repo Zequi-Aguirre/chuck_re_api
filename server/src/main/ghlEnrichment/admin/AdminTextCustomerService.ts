@@ -218,10 +218,11 @@ export class AdminTextCustomerService {
   }
 
   /**
-   * Reset a text customer's THREE credit buckets to the code-default opening
-   * grants (JAK-reset-credits-button) — report / skiptrace / comps from
-   * {@link CreditSettingsService.DEFAULT_GRANTS}, the SAME shared constant new
-   * customers are seeded from (never hardcoded here). Resolve-or-create by phone
+   * Reset a text customer's THREE credit buckets to the EFFECTIVE new-customer
+   * default grants (JAK-reset-credits-button) — report / skiptrace / comps from
+   * {@link CreditSettingsService.defaultGrant}, the SAME admin-editable value a
+   * brand-new customer is seeded with (so a later default retune is honored, and
+   * it stays consistent with the upcoming monthly-restore worker). Resolve-or-create by phone
    * (mirroring {@link grantCredits}, so a number that hasn't texted in yet can be
    * reset), delegate the set to {@link CreditService.resetToDefaults} — which
    * grants or charges each bucket's delta so the ledger keeps the audit trail —

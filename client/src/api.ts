@@ -194,10 +194,10 @@ export const api = {
       body: JSON.stringify({ phone, amount, reason, type }),
     });
   },
-  // Reset a texter's three buckets to the code-default opening grants
+  // Reset a texter's three buckets to the EFFECTIVE new-customer default grants
   // (JAK-reset-credits-button): report / skiptrace / comps. The server sets each
-  // bucket to its CreditSettingsService.DEFAULT_GRANTS value by granting/charging
-  // the delta, and returns all three resulting balances.
+  // bucket to its admin-editable defaultGrant value (what a new customer gets) by
+  // granting/charging the delta, and returns all three resulting balances.
   async resetTextCustomerCredits(
     phone: string
   ): Promise<{ customer: TextCustomerView; credits: CreditBalances }> {

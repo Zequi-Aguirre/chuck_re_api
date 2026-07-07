@@ -323,8 +323,43 @@ describe("CreditService", () => {
   });
 
   describe("resetToDefaults (JAK-reset-credits-button)", () => {
-    it("sets all three buckets to the SHARED DEFAULT_GRANTS constant (50/10/10)", async () => {
+    it("sets all three buckets to the EFFECTIVE new-customer default (defaultGrant), same as seedNewCustomer", async () => {
       // Start every bucket empty so each reset is a grant-up of the default.
+      store.getBalance.mockResolvedValue(0);
+      store.grant.mockResolvedValue(ledgerRow({ reason: "adjustment" }));
+
+      await service.resetToDefaults("acct_1");
+
+      // The targets come from creditSettings.defaultGrant (50/10/10 by default),
+      // NOT the frozen DEFAULT_GRANTS constant.
+      expect(creditSettings.defaultGrant).toHaveBeenCalledWith("report");
+      expect(creditSettings.defaultGrant).toHaveBeenCalledWith("skiptrace");
+      expect(creditSettings.defaultGrant).toHaveBeenCalledWith("comps");
+      expect(store.grant).toHaveBeenCalledWith({
+        locationId: "acct_1",
+        creditType: "report",
+        amount: 50,
+        reason: "adjustment",
+      });
+      expect(store.grant).toHaveBeenCalledWith({
+        locationId: "acct_1",
+        creditType: "skiptrace",
+        amount: 10,
+        reason: "adjustment",
+      });
+      expect(store.grant).toHaveBeenCalledWith({
+        locationId: "acct_1",
+        creditType: "comps",
+        amount: 10,
+        reason: "adjustment",
+      });
+    });
+
+    it("honors an ADMIN-CUSTOMIZED default — reset gives what a new customer would now get", async () => {
+      // Admin retuned the report default; reset must track it, not the frozen 50.
+      creditSettings.defaultGrant.mockImplementation(
+        async (type) => ({ report: 75, skiptrace: 10, comps: 10 }[type])
+      );
       store.getBalance.mockResolvedValue(0);
       store.grant.mockResolvedValue(ledgerRow({ reason: "adjustment" }));
 
@@ -333,25 +368,12 @@ describe("CreditService", () => {
       expect(store.grant).toHaveBeenCalledWith({
         locationId: "acct_1",
         creditType: "report",
-        amount: CreditSettingsService.DEFAULT_GRANTS.report,
-        reason: "adjustment",
-      });
-      expect(store.grant).toHaveBeenCalledWith({
-        locationId: "acct_1",
-        creditType: "skiptrace",
-        amount: CreditSettingsService.DEFAULT_GRANTS.skiptrace,
-        reason: "adjustment",
-      });
-      expect(store.grant).toHaveBeenCalledWith({
-        locationId: "acct_1",
-        creditType: "comps",
-        amount: CreditSettingsService.DEFAULT_GRANTS.comps,
+        amount: 75,
         reason: "adjustment",
       });
     });
 
     it("returns the resulting balances read back from the ledger", async () => {
-      store.getBalance.mockResolvedValue(0);
       store.grant.mockResolvedValue(ledgerRow({ reason: "adjustment" }));
       // The read-back after the sets returns the defaults now on the account.
       store.getBalance.mockImplementation(async (_acct, type) =>

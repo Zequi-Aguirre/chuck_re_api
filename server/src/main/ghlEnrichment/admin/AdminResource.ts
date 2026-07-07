@@ -477,10 +477,10 @@ export class AdminResource {
   }
 
   /**
-   * Reset a tier-1 texter's three credit buckets to the code-default opening
-   * grants (JAK-reset-credits-button): report / skiptrace / comps from the SAME
-   * shared CreditSettingsService.DEFAULT_GRANTS constant new customers are seeded
-   * from. Phone-keyed like the grant above; the customer is resolved-or-created,
+   * Reset a tier-1 texter's three credit buckets to the EFFECTIVE new-customer
+   * default grants (JAK-reset-credits-button): report / skiptrace / comps from the
+   * SAME admin-editable CreditSettingsService.defaultGrant value a new customer is
+   * seeded with. Phone-keyed like the grant above; the customer is resolved-or-created,
    * so a number that hasn't texted in yet can still be reset. Permission-gated by
    * the router-level requireAdminAuth, exactly like the grant. Returns the
    * customer view plus all three resulting balances.

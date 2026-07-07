@@ -126,18 +126,24 @@ export class CreditService {
   }
 
   /**
-   * Reset ALL THREE of an account's buckets to the code-default opening grants
-   * (JAK-reset-credits-button): report / skiptrace / comps taken from
-   * {@link CreditSettingsService.DEFAULT_GRANTS} — the SAME shared constant the
-   * JAK-report-default-50 change established and new customers are seeded from,
-   * never hardcoded here. Each bucket is set via {@link setBalance}, so an
-   * over-granted bucket is drawn back down and a spent-out one is topped back up.
-   * Returns all three resulting balances. Not atomic across buckets (mirrors
-   * {@link seedNewCustomer}); each bucket's set is individually atomic.
+   * Reset ALL THREE of an account's buckets to the EFFECTIVE new-customer default
+   * grants (JAK-reset-credits-button): report / skiptrace / comps from
+   * {@link CreditSettingsService.defaultGrant} — the SAME admin-editable value
+   * {@link seedNewCustomer} seeds a brand-new customer with (and the upcoming
+   * monthly-restore worker will restore to), NOT the frozen
+   * {@link CreditSettingsService.DEFAULT_GRANTS} code constant. So "reset to
+   * default" always gives a customer exactly what a new customer currently gets:
+   * if an admin retunes the defaults, reset honors the new value (today they're
+   * still 50/10/10, so no behavior change). Each bucket is set via
+   * {@link setBalance}, so an over-granted bucket is drawn back down and a
+   * spent-out one is topped back up. Returns all three resulting balances. Not
+   * atomic across buckets (mirrors {@link seedNewCustomer}); each set is
+   * individually atomic.
    */
   async resetToDefaults(accountId: string): Promise<CreditBalances> {
     for (const type of CREDIT_TYPES) {
-      await this.setBalance(accountId, type, CreditSettingsService.DEFAULT_GRANTS[type], "adjustment");
+      const target = await this.creditSettings.defaultGrant(type);
+      await this.setBalance(accountId, type, target, "adjustment");
     }
     return this.getBalances(accountId);
   }
