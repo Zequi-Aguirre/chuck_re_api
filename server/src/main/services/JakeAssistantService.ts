@@ -1971,9 +1971,22 @@ export class JakeAssistantService {
             };
         }
 
+        // Reply FROM the exact number the customer texted (the inbound destination),
+        // so Jake mirrors the number the text arrived on instead of letting GHL pick
+        // the gateway sub-account's default number. Before this, no fromNumber was
+        // sent → GHL fell back to that ONE default, so after a toll-free swap the
+        // inbound landed on the new number but the reply still went out from the OLD
+        // default (JAK-167). The candidate is GHL-supplied (the webhook is
+        // MASTER_API_KEY-guarded) and GHL only sends from a number provisioned in the
+        // sub-account, so a mirrored destination is safe; absent → undefined, which
+        // keeps the prior default-number behavior.
+        const gatewayReplyFrom = (input.candidateNumbers ?? [])
+            .map((n) => (n ? String(n).trim() : ""))
+            .find((n) => n.length > 0);
         return {
             mode: "gateway",
-            send: (contactId, message) => this.gateway.sendSms({ contactId, message }),
+            send: (contactId, message) =>
+                this.gateway.sendSms({ contactId, message, fromNumber: gatewayReplyFrom || undefined }),
             note: (contactId, body) => this.gateway.createContactNote(contactId, body),
         };
     }
