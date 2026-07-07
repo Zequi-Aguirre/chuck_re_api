@@ -268,6 +268,104 @@ describe("CreditService", () => {
     });
   });
 
+  describe("setBalance (JAK-reset-credits-button)", () => {
+    it("grants the delta up when the target is above the current balance", async () => {
+      store.getBalance.mockResolvedValue(3);
+      store.grant.mockResolvedValue(ledgerRow({ amount: 47, reason: "adjustment", balance_after: 50 }));
+
+      const result = await service.setBalance("acct_1", "report", 50);
+
+      expect(result).toBe(50);
+      expect(store.getBalance).toHaveBeenCalledWith("acct_1", "report");
+      expect(store.grant).toHaveBeenCalledWith({
+        locationId: "acct_1",
+        creditType: "report",
+        amount: 47,
+        reason: "adjustment",
+      });
+      expect(store.charge).not.toHaveBeenCalled();
+    });
+
+    it("charges the delta down when the target is below the current balance", async () => {
+      store.getBalance.mockResolvedValue(80);
+      store.charge.mockResolvedValue({ ok: true, balanceAfter: 50, entries: [] });
+
+      const result = await service.setBalance("acct_1", "report", 50);
+
+      expect(result).toBe(50);
+      expect(store.charge).toHaveBeenCalledWith({
+        locationId: "acct_1",
+        creditType: "report",
+        contactId: null,
+        lines: [{ reason: "adjustment", amount: 30 }],
+      });
+      expect(store.grant).not.toHaveBeenCalled();
+    });
+
+    it("is a no-op when the bucket is already at the target", async () => {
+      store.getBalance.mockResolvedValue(50);
+
+      const result = await service.setBalance("acct_1", "report", 50);
+
+      expect(result).toBe(50);
+      expect(store.grant).not.toHaveBeenCalled();
+      expect(store.charge).not.toHaveBeenCalled();
+    });
+
+    it("rejects a negative or non-integer target", async () => {
+      await expect(service.setBalance("acct_1", "report", -1)).rejects.toThrow(
+        "non-negative integer"
+      );
+      await expect(service.setBalance("acct_1", "report", 1.5)).rejects.toThrow(
+        "non-negative integer"
+      );
+    });
+  });
+
+  describe("resetToDefaults (JAK-reset-credits-button)", () => {
+    it("sets all three buckets to the SHARED DEFAULT_GRANTS constant (50/10/10)", async () => {
+      // Start every bucket empty so each reset is a grant-up of the default.
+      store.getBalance.mockResolvedValue(0);
+      store.grant.mockResolvedValue(ledgerRow({ reason: "adjustment" }));
+
+      await service.resetToDefaults("acct_1");
+
+      expect(store.grant).toHaveBeenCalledWith({
+        locationId: "acct_1",
+        creditType: "report",
+        amount: CreditSettingsService.DEFAULT_GRANTS.report,
+        reason: "adjustment",
+      });
+      expect(store.grant).toHaveBeenCalledWith({
+        locationId: "acct_1",
+        creditType: "skiptrace",
+        amount: CreditSettingsService.DEFAULT_GRANTS.skiptrace,
+        reason: "adjustment",
+      });
+      expect(store.grant).toHaveBeenCalledWith({
+        locationId: "acct_1",
+        creditType: "comps",
+        amount: CreditSettingsService.DEFAULT_GRANTS.comps,
+        reason: "adjustment",
+      });
+    });
+
+    it("returns the resulting balances read back from the ledger", async () => {
+      store.getBalance.mockResolvedValue(0);
+      store.grant.mockResolvedValue(ledgerRow({ reason: "adjustment" }));
+      // The read-back after the sets returns the defaults now on the account.
+      store.getBalance.mockImplementation(async (_acct, type) =>
+        ({ report: 50, skiptrace: 10, comps: 10 }[type as string] ?? 0)
+      );
+
+      expect(await service.resetToDefaults("acct_1")).toEqual({
+        report: 50,
+        skiptrace: 10,
+        comps: 10,
+      });
+    });
+  });
+
   describe("grantCredits", () => {
     it("grants to the report bucket by default, defaulting the reason to manual_grant", async () => {
       store.grant.mockResolvedValue(ledgerRow({ amount: 100, reason: "manual_grant" }));

@@ -97,6 +97,51 @@ export class CreditService {
     return this.ledger.grant({ locationId: accountId, creditType: type, amount, reason });
   }
 
+  /**
+   * Set ONE bucket to an exact `target` balance by granting or charging just the
+   * DELTA (JAK-reset-credits-button). Reuses the atomic {@link grant}/{@link charge}
+   * primitives — a shortfall is topped up, an excess is drawn back down — so the
+   * ledger keeps a full audit trail either way. A no-op when the bucket is already
+   * at `target`. `target` must be a non-negative integer; the draw-down removes at
+   * most the current balance, so it can never overdraw. Returns the resulting
+   * balance (always `target`).
+   */
+  async setBalance(
+    accountId: string,
+    type: CreditType,
+    target: number,
+    reason: CreditLedgerReason = "adjustment"
+  ): Promise<number> {
+    if (!Number.isInteger(target) || target < 0) {
+      throw new Error("setBalance target must be a non-negative integer");
+    }
+    const current = await this.ledger.getBalance(accountId, type);
+    const delta = target - current;
+    if (delta > 0) {
+      await this.grant(accountId, type, delta, reason);
+    } else if (delta < 0) {
+      await this.charge(accountId, type, -delta, reason);
+    }
+    return target;
+  }
+
+  /**
+   * Reset ALL THREE of an account's buckets to the code-default opening grants
+   * (JAK-reset-credits-button): report / skiptrace / comps taken from
+   * {@link CreditSettingsService.DEFAULT_GRANTS} — the SAME shared constant the
+   * JAK-report-default-50 change established and new customers are seeded from,
+   * never hardcoded here. Each bucket is set via {@link setBalance}, so an
+   * over-granted bucket is drawn back down and a spent-out one is topped back up.
+   * Returns all three resulting balances. Not atomic across buckets (mirrors
+   * {@link seedNewCustomer}); each bucket's set is individually atomic.
+   */
+  async resetToDefaults(accountId: string): Promise<CreditBalances> {
+    for (const type of CREDIT_TYPES) {
+      await this.setBalance(accountId, type, CreditSettingsService.DEFAULT_GRANTS[type], "adjustment");
+    }
+    return this.getBalances(accountId);
+  }
+
   /** All three of an account's balances at once (JAK-161) — the per-feature view. */
   async getBalances(accountId: string): Promise<CreditBalances> {
     const entries = await Promise.all(

@@ -73,6 +73,20 @@ function inMemoryLedger(): CreditLedgerStore {
         deleted_at: null,
       };
     },
+    async charge(input: {
+      locationId: string;
+      creditType?: string;
+      contactId?: string | null;
+      lines: { reason: string; amount: number }[];
+    }): Promise<{ ok: true; balanceAfter: number; entries: CreditLedgerRow[] } | { ok: false; balance: number; required: number }> {
+      const creditType = input.creditType ?? "report";
+      const required = input.lines.reduce((sum, l) => sum + l.amount, 0);
+      const balance = balances.get(key(input.locationId, creditType)) ?? 0;
+      if (balance < required) return { ok: false, balance, required };
+      const balanceAfter = balance - required;
+      balances.set(key(input.locationId, creditType), balanceAfter);
+      return { ok: true, balanceAfter, entries: [] };
+    },
     async seedInitialBalance(input: {
       locationId: string;
       creditType: string;
@@ -370,6 +384,47 @@ describe("AdminTextCustomerService", () => {
     expect(byId.get("cust-1")?.creditBalance).toBe(8);
     // A customer with no ledger rows reads all three buckets as 0, not undefined.
     expect(byId.get("cust-2")?.credits).toEqual({ report: 0, skiptrace: 0, comps: 0 });
+  });
+
+  // --- Reset to defaults (JAK-reset-credits-button) -------------------------
+
+  describe("resetCredits", () => {
+    it("sets all three buckets to the code defaults (50/10/10) by phone, topping up empties", async () => {
+      customers.resolveByPhone.mockResolvedValue(customer());
+
+      const result = await service.resetCredits("+17865274077");
+
+      expect(customers.resolveByPhone).toHaveBeenCalledWith("+17865274077");
+      expect(result.credits).toEqual({ report: 50, skiptrace: 10, comps: 10 });
+      expect(result.customer.credits).toEqual({ report: 50, skiptrace: 10, comps: 10 });
+      expect(result.customer.creditBalance).toBe(50);
+      expect(await credits.getBalance("cust-1", "report")).toBe(50);
+      expect(await credits.getBalance("cust-1", "skiptrace")).toBe(10);
+      expect(await credits.getBalance("cust-1", "comps")).toBe(10);
+    });
+
+    it("draws an over-granted bucket back DOWN to the default (not just tops up)", async () => {
+      customers.resolveByPhone.mockResolvedValue(customer());
+      // Report is way over the default; skiptrace is under it.
+      await ledger.grant({ locationId: "cust-1", creditType: "report", amount: 200, reason: "manual_grant" });
+      await ledger.grant({ locationId: "cust-1", creditType: "skiptrace", amount: 2, reason: "manual_grant" });
+
+      const result = await service.resetCredits("+17865274077");
+
+      // Both converge on the defaults regardless of starting balance.
+      expect(result.credits).toEqual({ report: 50, skiptrace: 10, comps: 10 });
+      expect(await credits.getBalance("cust-1", "report")).toBe(50);
+      expect(await credits.getBalance("cust-1", "skiptrace")).toBe(10);
+    });
+
+    it("resets a number that has never texted in (resolve-or-create by phone)", async () => {
+      customers.resolveByPhone.mockResolvedValue(customer({ id: "new-cust", creditAccountId: "new-cust" }));
+
+      const result = await service.resetCredits("+15550001111");
+
+      expect(result.credits).toEqual({ report: 50, skiptrace: 10, comps: 10 });
+      expect(await credits.hasCreditsForTextLookup("new-cust")).toBe(true);
+    });
   });
 
   // --- Two-level hold status changes (JAK-148) ------------------------------

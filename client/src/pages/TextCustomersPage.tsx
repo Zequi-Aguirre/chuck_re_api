@@ -307,6 +307,12 @@ export function TextCustomersPage() {
           setToast(`${phone} now has ${balance} ${creditTypeLabel(type).toLowerCase()} credits.`);
           load();
         }}
+        onReset={(phone, credits) => {
+          setToast(
+            `${phone} reset to defaults — report ${credits.report}, skip ${credits.skiptrace}, comps ${credits.comps}.`
+          );
+          load();
+        }}
       />
 
       <Snackbar

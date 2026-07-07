@@ -12,7 +12,7 @@ import Typography from "@mui/material/Typography";
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import { api, ApiError } from "../api";
-import { CreditType } from "../types";
+import { CreditBalances, CreditType } from "../types";
 import { CREDIT_TYPES, creditTypeLabel } from "../pages/creditsLayout";
 
 interface Props {
@@ -25,6 +25,11 @@ interface Props {
   phone?: string;
   onClose: () => void;
   onSaved: (phone: string, balance: number, type: CreditType) => void;
+  /**
+   * Called after a "Reset to default" completes with the three resulting balances
+   * (JAK-reset-credits-button). Only fired from the locked per-customer form.
+   */
+  onReset?: (phone: string, credits: CreditBalances) => void;
 }
 
 /**
@@ -34,7 +39,7 @@ interface Props {
  * the customer's OWN credit account (keyed by phone), not a connection — and only
  * the chosen bucket moves, so topping up comps never touches report or skip-trace.
  */
-export function GrantTextCreditsDialog({ open, phone, onClose, onSaved }: Props) {
+export function GrantTextCreditsDialog({ open, phone, onClose, onSaved, onReset }: Props) {
   const locked = phone !== undefined;
   const [phoneInput, setPhoneInput] = useState(phone ?? "");
   const [amount, setAmount] = useState("");
@@ -42,6 +47,10 @@ export function GrantTextCreditsDialog({ open, phone, onClose, onSaved }: Props)
   const [type, setType] = useState<CreditType>("report");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Reset-to-default (JAK-reset-credits-button): a two-step inline confirm, then
+  // the resulting balances the server sends back.
+  const [confirmReset, setConfirmReset] = useState(false);
+  const [resetResult, setResetResult] = useState<CreditBalances | null>(null);
 
   // Sync the locked phone in when the dialog is (re)opened for a specific row.
   useEffect(() => {
@@ -50,6 +59,8 @@ export function GrantTextCreditsDialog({ open, phone, onClose, onSaved }: Props)
       setAmount("");
       setType("report");
       setError(null);
+      setConfirmReset(false);
+      setResetResult(null);
     }
   }, [open, phone]);
 
@@ -82,11 +93,29 @@ export function GrantTextCreditsDialog({ open, phone, onClose, onSaved }: Props)
     }
   }
 
+  async function onResetToDefault() {
+    if (!locked) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const res = await api.resetTextCustomerCredits(phone);
+      setResetResult(res.credits);
+      setConfirmReset(false);
+      onReset?.(phone, res.credits);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Reset failed. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   function handleClose() {
     setPhoneInput(phone ?? "");
     setAmount("");
     setType("report");
     setError(null);
+    setConfirmReset(false);
+    setResetResult(null);
     onClose();
   }
 
@@ -139,6 +168,59 @@ export function GrantTextCreditsDialog({ open, phone, onClose, onSaved }: Props)
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
           />
+          {/* Reset-to-default (JAK-reset-credits-button): per-customer only, so it
+              acts on this locked phone. Mobile-first — full-width stacked buttons,
+              a two-step confirm since a reset can DEDUCT, and the resulting
+              balances shown inline after. */}
+          {locked && (
+            <Box sx={{ pt: 1.5, mt: 0.5, borderTop: 1, borderColor: "divider" }}>
+              <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 1 }}>
+                Reset this customer to the default opening credits (all three buckets).
+              </Typography>
+              {resetResult ? (
+                <Alert severity="success">
+                  Reset done. New balances —{" "}
+                  {CREDIT_TYPES.map((t) => `${creditTypeLabel(t)} ${resetResult[t]}`).join(", ")}.
+                </Alert>
+              ) : confirmReset ? (
+                <Stack spacing={1}>
+                  <Alert severity="warning">
+                    Reset all three buckets to their defaults? This overwrites the current balances.
+                  </Alert>
+                  <Stack direction="row" spacing={1}>
+                    <Button
+                      fullWidth
+                      size="small"
+                      onClick={() => setConfirmReset(false)}
+                      disabled={busy}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      fullWidth
+                      size="small"
+                      variant="contained"
+                      color="warning"
+                      onClick={onResetToDefault}
+                      disabled={busy}
+                    >
+                      {busy ? "Resetting…" : "Confirm reset"}
+                    </Button>
+                  </Stack>
+                </Stack>
+              ) : (
+                <Button
+                  fullWidth
+                  variant="outlined"
+                  color="warning"
+                  onClick={() => setConfirmReset(true)}
+                  disabled={busy}
+                >
+                  Reset to default
+                </Button>
+              )}
+            </Box>
+          )}
         </Stack>
       </DialogContent>
       <DialogActions>
