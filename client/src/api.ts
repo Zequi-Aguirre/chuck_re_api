@@ -15,6 +15,7 @@ import {
   LlmModelSettingView,
   LlmProvider,
   LocationStatusSummary,
+  OnboardingPromptView,
   OrchestratorPromptView,
   ReportPromptView,
   SkipTraceCostView,
@@ -205,6 +206,20 @@ export const api = {
   },
   async resetReportPrompt(): Promise<ReportPromptView> {
     return request<ReportPromptView>("/report-prompt/reset", { method: "POST" });
+  },
+
+  // --- Onboarding email ask (JAK-first-text-welcome) ---
+  async getOnboardingPrompt(): Promise<OnboardingPromptView> {
+    return request<OnboardingPromptView>("/onboarding-prompt");
+  },
+  async updateOnboardingPrompt(prompt: string): Promise<OnboardingPromptView> {
+    return request<OnboardingPromptView>("/onboarding-prompt", {
+      method: "PUT",
+      body: JSON.stringify({ prompt }),
+    });
+  },
+  async resetOnboardingPrompt(): Promise<OnboardingPromptView> {
+    return request<OnboardingPromptView>("/onboarding-prompt/reset", { method: "POST" });
   },
 
   // --- Orchestrator/router prompt (JAK-135) ---

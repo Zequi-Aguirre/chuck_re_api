@@ -34,6 +34,18 @@ export interface TextJakeCustomer {
   /** Two-level hold state (JAK-148). Defaults to `active`; never affects credits. */
   status: TextCustomerStatus;
   /**
+   * How many property reports Jake has delivered to this customer
+   * (JAK-first-text-welcome). Drives the DELAYED onboarding email ask, which fires
+   * once right after the 3rd report. Defaults to 0.
+   */
+  reportCount: number;
+  /**
+   * When the after-3rd-report onboarding email ask was sent, or null if it hasn't
+   * been (JAK-first-text-welcome). Doubles as the once-only guard and the flag
+   * that enables follow-up name/email capture for this customer.
+   */
+  onboardingAskedAt: Date | null;
+  /**
    * The account key this customer's credits are billed against in the JAK-109
    * ledger. Stable per customer — equals {@link id} — so a texter always draws
    * from the same balance.

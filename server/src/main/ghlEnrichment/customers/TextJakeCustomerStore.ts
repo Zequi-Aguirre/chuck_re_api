@@ -20,6 +20,10 @@ export interface TextJakeCustomerRow {
   // Two-level hold state (JAK-148): 'active' | 'on_hold' | 'deactivated'. Column
   // default is 'active', so a row created before this ticket reads as active.
   status: TextCustomerStatus;
+  // Delivered-report counter + onboarding email-ask stamp (JAK-first-text-welcome).
+  // report_count defaults to 0; onboarding_asked_at is null until the ask is sent.
+  report_count: number;
+  onboarding_asked_at: Date | null;
   created_at: Date;
   modified_at: Date;
   deleted_at: Date | null;
@@ -154,6 +158,66 @@ export class TextJakeCustomerStore {
        WHERE id = $1 AND deleted_at IS NULL
        RETURNING *`,
       [id, status]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  /**
+   * Increment a customer's delivered-report counter and return the NEW count
+   * (JAK-first-text-welcome). Atomic read-modify-write in one statement so two
+   * concurrent reports can't both read the same prior value. Returns null if no
+   * live customer has that id.
+   */
+  async incrementReportCount(id: string): Promise<number | null> {
+    const result = await this.db.query<{ report_count: number }>(
+      `UPDATE text_jake_customers
+       SET report_count = report_count + 1,
+           modified_at = now()
+       WHERE id = $1 AND deleted_at IS NULL
+       RETURNING report_count`,
+      [id]
+    );
+    return result.rows[0]?.report_count ?? null;
+  }
+
+  /**
+   * Mark that the after-3rd-report onboarding email ask was sent, ONCE
+   * (JAK-first-text-welcome). Conditional on `onboarding_asked_at IS NULL`, so it
+   * sets the stamp only the first time and returns true then; a second call (or a
+   * concurrent one that lost the race) matches no row and returns false. That
+   * makes the ask fire exactly once even if the report-count check is fuzzy.
+   */
+  async markOnboardingAsked(id: string): Promise<boolean> {
+    const result = await this.db.query(
+      `UPDATE text_jake_customers
+       SET onboarding_asked_at = now(),
+           modified_at = now()
+       WHERE id = $1 AND deleted_at IS NULL AND onboarding_asked_at IS NULL`,
+      [id]
+    );
+    return (result.rowCount ?? 0) > 0;
+  }
+
+  /**
+   * Merge captured profile fields onto a customer (JAK-first-text-welcome). Only
+   * the fields the texter actually provided (non-null) overwrite what's on record
+   * — a null argument leaves that column untouched (COALESCE(new, existing)) — so
+   * a name-only reply never wipes a previously captured email and vice-versa.
+   * Returns the updated row, or null if no live customer has that id.
+   */
+  async captureProfile(
+    id: string,
+    profile: Partial<TextJakeCustomerProfile>
+  ): Promise<TextJakeCustomerRow | null> {
+    const result = await this.db.query<TextJakeCustomerRow>(
+      `UPDATE text_jake_customers
+       SET first_name = COALESCE($2, first_name),
+           last_name  = COALESCE($3, last_name),
+           email      = COALESCE($4, email),
+           modified_at = now()
+       WHERE id = $1 AND deleted_at IS NULL
+       RETURNING *`,
+      [id, profile.firstName ?? null, profile.lastName ?? null, profile.email ?? null]
     );
     return result.rows[0] ?? null;
   }

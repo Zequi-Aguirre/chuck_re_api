@@ -22,6 +22,7 @@ import PersonSearchIcon from "@mui/icons-material/PersonSearch";
 import HomeWorkIcon from "@mui/icons-material/HomeWork";
 import TravelExploreIcon from "@mui/icons-material/TravelExplore";
 import PaidIcon from "@mui/icons-material/Paid";
+import WavingHandIcon from "@mui/icons-material/WavingHand";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import LogoutIcon from "@mui/icons-material/Logout";
 import { useAuth } from "../auth";
@@ -55,6 +56,8 @@ export function Layout() {
     { label: "Comps Selection", to: "/comps-selection-settings", icon: <TravelExploreIcon />, show: true },
     // Credits (JAK-162) — per-feature default grants + out-of-credits messages.
     { label: "Credits", to: "/credit-settings", icon: <PaidIcon />, show: true },
+    // Onboarding Ask (JAK-first-text-welcome) — editable after-3rd-report email ask.
+    { label: "Onboarding Ask", to: "/onboarding-settings", icon: <WavingHandIcon />, show: true },
     {
       label: "Admins",
       to: "/admins",

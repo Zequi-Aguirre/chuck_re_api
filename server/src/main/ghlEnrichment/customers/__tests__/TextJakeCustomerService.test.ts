@@ -26,6 +26,8 @@ describe("TextJakeCustomerService", () => {
     last_name: null,
     email: null,
     status: "active",
+    report_count: 0,
+    onboarding_asked_at: null,
     created_at: new Date("2026-07-01T00:00:00Z"),
     modified_at: new Date("2026-07-01T00:00:00Z"),
     deleted_at: null,
@@ -94,5 +96,44 @@ describe("TextJakeCustomerService", () => {
 
   it("normalizePhone strips whitespace", () => {
     expect(normalizePhone("  +1 555 123 4567 ")).toBe("+15551234567");
+  });
+
+  it("resolveByPhoneWithCreation reports whether THIS call created the customer", async () => {
+    store.upsertByPhone.mockResolvedValue(upserted(row({ id: "cust-new" }), true));
+    const fresh = await service.resolveByPhoneWithCreation("+15559990000", "ct_1");
+    expect(fresh.created).toBe(true);
+    expect(fresh.customer.id).toBe("cust-new");
+    expect(credits.seedNewCustomer).toHaveBeenCalledWith("cust-new");
+
+    store.upsertByPhone.mockResolvedValue(upserted(row({ id: "cust-new" }), false));
+    const returning = await service.resolveByPhoneWithCreation("+15559990000");
+    expect(returning.created).toBe(false);
+  });
+
+  it("maps the new report-count + onboarding-stamp fields through (JAK-first-text-welcome)", async () => {
+    store.upsertByPhone.mockResolvedValue(
+      upserted(row({ report_count: 2, onboarding_asked_at: new Date("2026-07-07T00:00:00Z") }))
+    );
+    const customer = await service.resolveByPhone("+15559990000");
+    expect(customer.reportCount).toBe(2);
+    expect(customer.onboardingAskedAt).toEqual(new Date("2026-07-07T00:00:00Z"));
+  });
+
+  it("delegates incrementReportCount / markOnboardingAsked / captureProfile to the store", async () => {
+    store.incrementReportCount.mockResolvedValue(3);
+    expect(await service.incrementReportCount("cust-1")).toBe(3);
+    expect(store.incrementReportCount).toHaveBeenCalledWith("cust-1");
+
+    store.markOnboardingAsked.mockResolvedValue(true);
+    expect(await service.markOnboardingAsked("cust-1")).toBe(true);
+
+    store.captureProfile.mockResolvedValue(row({ first_name: "Sara", email: "sara@example.com" }));
+    const updated = await service.captureProfile("cust-1", { firstName: "Sara", email: "sara@example.com" });
+    expect(store.captureProfile).toHaveBeenCalledWith("cust-1", {
+      firstName: "Sara",
+      email: "sara@example.com",
+    });
+    expect(updated?.firstName).toBe("Sara");
+    expect(updated?.email).toBe("sara@example.com");
   });
 });

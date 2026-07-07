@@ -10,6 +10,8 @@ const row = (over: Partial<TextJakeCustomerRow> = {}): TextJakeCustomerRow => ({
   last_name: null,
   email: null,
   status: "active",
+  report_count: 0,
+  onboarding_asked_at: null,
   created_at: new Date("2026-07-01T00:00:00Z"),
   modified_at: new Date("2026-07-02T00:00:00Z"),
   deleted_at: null,
@@ -87,6 +89,59 @@ describe("TextJakeCustomerStore profile create/update (JAK-146)", () => {
       email: null,
     });
     expect(result).toBeNull();
+  });
+});
+
+describe("TextJakeCustomerStore report-count + onboarding (JAK-first-text-welcome)", () => {
+  let db: MockProxy<PostgresDatabase>;
+  let store: TextJakeCustomerStore;
+
+  beforeEach(() => {
+    db = mock<PostgresDatabase>();
+    store = new TextJakeCustomerStore(db);
+  });
+
+  it("incrementReportCount atomically bumps and returns the NEW count", async () => {
+    (db.query as jest.Mock).mockResolvedValue({ rows: [{ report_count: 3 }] });
+    const result = await store.incrementReportCount("cust-1");
+    expect(result).toBe(3);
+    const [sql, params] = (db.query as jest.Mock).mock.calls[0];
+    expect(String(sql)).toContain("report_count = report_count + 1");
+    expect(String(sql)).toContain("deleted_at IS NULL");
+    expect(params).toEqual(["cust-1"]);
+  });
+
+  it("incrementReportCount returns null for an unknown id", async () => {
+    (db.query as jest.Mock).mockResolvedValue({ rows: [] });
+    expect(await store.incrementReportCount("nope")).toBeNull();
+  });
+
+  it("markOnboardingAsked sets the stamp ONLY when still unset (once-guard)", async () => {
+    (db.query as jest.Mock).mockResolvedValue({ rowCount: 1 });
+    expect(await store.markOnboardingAsked("cust-1")).toBe(true);
+    const [sql, params] = (db.query as jest.Mock).mock.calls[0];
+    expect(String(sql)).toContain("onboarding_asked_at = now()");
+    expect(String(sql)).toContain("onboarding_asked_at IS NULL");
+    expect(params).toEqual(["cust-1"]);
+  });
+
+  it("markOnboardingAsked returns false when the stamp was already set", async () => {
+    (db.query as jest.Mock).mockResolvedValue({ rowCount: 0 });
+    expect(await store.markOnboardingAsked("cust-1")).toBe(false);
+  });
+
+  it("captureProfile only overwrites the fields provided (COALESCE), keeps the rest", async () => {
+    const updated = row({ first_name: "Sara", last_name: "Kim", email: "sara@example.com" });
+    (db.query as jest.Mock).mockResolvedValue({ rows: [updated] });
+
+    const result = await store.captureProfile("cust-1", { firstName: "Sara", email: "sara@example.com" });
+
+    expect(result).toEqual(updated);
+    const [sql, params] = (db.query as jest.Mock).mock.calls[0];
+    expect(String(sql)).toContain("COALESCE($2, first_name)");
+    expect(String(sql)).toContain("COALESCE($4, email)");
+    // A field not provided is passed as null, so COALESCE leaves the column untouched.
+    expect(params).toEqual(["cust-1", "Sara", null, "sara@example.com"]);
   });
 });
 

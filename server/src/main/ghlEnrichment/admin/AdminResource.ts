@@ -7,6 +7,7 @@ import { AdminTextCustomerService, TextCustomerInput } from "./AdminTextCustomer
 import { requireAdminAuth, requireSuperadmin } from "./requireAdminAuth";
 import { AdminRole } from "./AdminTypes";
 import { PropertyReportPromptService } from "../../services/PropertyReportPromptService";
+import { OnboardingPromptService } from "../../services/onboarding/OnboardingPromptService";
 import { OrchestratorPromptService } from "../../services/orchestrator/OrchestratorPromptService";
 import { SkipTracePromptService } from "../../services/skiptrace/SkipTracePromptService";
 import { SkipTraceSettingsService } from "../../services/skiptrace/SkipTraceSettingsService";
@@ -65,6 +66,7 @@ export class AdminResource {
     @inject(AdminTextCustomerService) private readonly textCustomers: AdminTextCustomerService,
     @inject(GhlStatusService) private readonly status: GhlStatusService,
     @inject(PropertyReportPromptService) private readonly reportPrompt: PropertyReportPromptService,
+    @inject(OnboardingPromptService) private readonly onboardingPrompt: OnboardingPromptService,
     @inject(OrchestratorPromptService) private readonly orchestratorPrompt: OrchestratorPromptService,
     @inject(SkipTracePromptService) private readonly skipTracePrompt: SkipTracePromptService,
     @inject(SkipTraceSettingsService) private readonly skipTraceSettings: SkipTraceSettingsService,
@@ -123,6 +125,11 @@ export class AdminResource {
     this.router.get("/report-prompt", this.getReportPrompt.bind(this));
     this.router.put("/report-prompt", this.updateReportPrompt.bind(this));
     this.router.post("/report-prompt/reset", this.resetReportPrompt.bind(this));
+
+    // JAK-first-text-welcome — editable wording of the after-3rd-report email ask.
+    this.router.get("/onboarding-prompt", this.getOnboardingPrompt.bind(this));
+    this.router.put("/onboarding-prompt", this.updateOnboardingPrompt.bind(this));
+    this.router.post("/onboarding-prompt/reset", this.resetOnboardingPrompt.bind(this));
 
     // AI prompt — the admin-editable STYLE/CLASSIFICATION prompt for the JAK-135
     // orchestrator/router (same editable pattern as JAK-131). Available to ANY
@@ -628,6 +635,51 @@ export class AdminResource {
   private async resetReportPrompt(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     try {
       const view = await this.reportPrompt.resetPrompt();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  // --- Onboarding email ask (JAK-first-text-welcome) ------------------------
+
+  /** Return the effective after-3rd-report email-ask wording + whether it's default. */
+  private async getOnboardingPrompt(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.onboardingPrompt.getView();
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /**
+   * Save an admin-edited email-ask wording. Only rejects an empty or over-long
+   * value; the GoTextJake.com footer is appended by the sender regardless. Records
+   * the editing admin (req.admin.sub) for the audit stamp.
+   */
+  private async updateOnboardingPrompt(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const prompt = typeof req.body?.prompt === "string" ? req.body.prompt.trim() : "";
+      if (!prompt) {
+        return res.status(400).json({ error: "prompt is required" });
+      }
+      if (prompt.length > MAX_PROMPT_LENGTH) {
+        return res
+          .status(400)
+          .json({ error: `prompt must be at most ${MAX_PROMPT_LENGTH} characters` });
+      }
+      const view = await this.onboardingPrompt.setPrompt(prompt, req.admin?.sub ?? null);
+      return res.status(200).json(view);
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /** Revert the email-ask wording to the code default (clears the stored value). */
+  private async resetOnboardingPrompt(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const view = await this.onboardingPrompt.resetPrompt();
       return res.status(200).json(view);
     } catch (err) {
       return next(err);

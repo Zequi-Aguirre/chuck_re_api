@@ -9,6 +9,7 @@ import { TextCustomerSyncResult } from "../../customers/TextCustomerGhlSyncServi
 import { AdminResource } from "../AdminResource";
 import { AdminConnectionView, AdminTextCustomerView } from "../AdminTypes";
 import { PropertyReportPromptService } from "../../../services/PropertyReportPromptService";
+import { OnboardingPromptService } from "../../../services/onboarding/OnboardingPromptService";
 import { OrchestratorPromptService } from "../../../services/orchestrator/OrchestratorPromptService";
 import { SkipTracePromptService } from "../../../services/skiptrace/SkipTracePromptService";
 import { SkipTraceSettingsService } from "../../../services/skiptrace/SkipTraceSettingsService";
@@ -41,6 +42,7 @@ describe("AdminResource", () => {
   let textCustomers: MockProxy<AdminTextCustomerService>;
   let status: MockProxy<GhlStatusService>;
   let reportPrompt: MockProxy<PropertyReportPromptService>;
+  let onboardingPrompt: MockProxy<OnboardingPromptService>;
   let orchestratorPrompt: MockProxy<OrchestratorPromptService>;
   let skipTracePrompt: MockProxy<SkipTracePromptService>;
   let skipTraceSettings: MockProxy<SkipTraceSettingsService>;
@@ -57,6 +59,7 @@ describe("AdminResource", () => {
     textCustomers = mock<AdminTextCustomerService>();
     status = mock<GhlStatusService>();
     reportPrompt = mock<PropertyReportPromptService>();
+    onboardingPrompt = mock<OnboardingPromptService>();
     orchestratorPrompt = mock<OrchestratorPromptService>();
     skipTracePrompt = mock<SkipTracePromptService>();
     skipTraceSettings = mock<SkipTraceSettingsService>();
@@ -79,6 +82,7 @@ describe("AdminResource", () => {
         textCustomers,
         status,
         reportPrompt,
+        onboardingPrompt,
         orchestratorPrompt,
         skipTracePrompt,
         skipTraceSettings,
@@ -680,6 +684,56 @@ describe("AdminResource", () => {
       expect(res.status).toBe(200);
       expect(res.body.isDefault).toBe(true);
       expect(reportPrompt.resetPrompt).toHaveBeenCalled();
+    });
+  });
+
+  describe("onboarding email ask (onboarding-prompt) [JAK-first-text-welcome]", () => {
+    const promptView = (over: Record<string, unknown> = {}) => ({
+      prompt: OnboardingPromptService.DEFAULT_PROMPT,
+      isDefault: true,
+      updatedAt: null,
+      updatedBy: null,
+      ...over,
+    });
+
+    it("is behind the auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app).get("/api/admin/onboarding-prompt");
+      expect(res.status).toBe(401);
+      expect(onboardingPrompt.getView).not.toHaveBeenCalled();
+    });
+
+    it("GET returns the effective ask + isDefault", async () => {
+      onboardingPrompt.getView.mockResolvedValue(promptView() as never);
+      const res = await asAdmin(request(app).get("/api/admin/onboarding-prompt"));
+      expect(res.status).toBe(200);
+      expect(res.body.prompt).toBe(OnboardingPromptService.DEFAULT_PROMPT);
+      expect(res.body.isDefault).toBe(true);
+    });
+
+    it("PUT saves a trimmed, non-empty ask attributed to the editing admin", async () => {
+      onboardingPrompt.setPrompt.mockResolvedValue(
+        promptView({ prompt: "Send your name and email.", isDefault: false }) as never
+      );
+      const res = await asAdmin(
+        request(app).put("/api/admin/onboarding-prompt").send({ prompt: "  Send your name and email.  " })
+      );
+      expect(res.status).toBe(200);
+      expect(onboardingPrompt.setPrompt).toHaveBeenCalledWith("Send your name and email.", "admin-id");
+    });
+
+    it("PUT 400s an empty ask", async () => {
+      const res = await asAdmin(request(app).put("/api/admin/onboarding-prompt").send({ prompt: "   " }));
+      expect(res.status).toBe(400);
+      expect(onboardingPrompt.setPrompt).not.toHaveBeenCalled();
+    });
+
+    it("reset reverts to the default", async () => {
+      onboardingPrompt.resetPrompt.mockResolvedValue(promptView({ isDefault: true }) as never);
+      const res = await asAdmin(request(app).post("/api/admin/onboarding-prompt/reset"));
+      expect(res.status).toBe(200);
+      expect(res.body.isDefault).toBe(true);
+      expect(onboardingPrompt.resetPrompt).toHaveBeenCalled();
     });
   });
 

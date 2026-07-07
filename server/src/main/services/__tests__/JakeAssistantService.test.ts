@@ -29,6 +29,7 @@ import { CompsSelectionEngine } from "../comps/CompsSelectionEngine";
 import { CompsData, CompsPendingRow, CompsRow, DEFAULT_COMP_PARAMS } from "../comps/CompsTypes";
 import { DisambiguationMemoryService } from "../disambiguation/DisambiguationMemoryService";
 import { DisambiguationPendingRow } from "../disambiguation/DisambiguationTypes";
+import { OnboardingPromptService } from "../onboarding/OnboardingPromptService";
 
 /**
  * JakeAssistantService is mode-aware (JAK-115). These tests pin the two text
@@ -59,6 +60,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
   let compsSettings: MockProxy<CompsSettingsService>;
   let disambiguation: MockProxy<DisambiguationMemoryService>;
   let compsEngine: MockProxy<CompsSelectionEngine>;
+  let onboardingPrompt: MockProxy<OnboardingPromptService>;
   let service: JakeAssistantService;
 
   const reportSpecialist = () => [{ name: "report", needsConfirmation: false, estimatedCredits: 1 }];
@@ -162,6 +164,8 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     lastName: null,
     email: null,
     status: "active",
+    reportCount: 0,
+    onboardingAskedAt: null,
     creditAccountId: `acct_${phone}`,
     createdAt: new Date("2026-07-01T00:00:00Z"),
     modifiedAt: new Date("2026-07-01T00:00:00Z"),
@@ -186,6 +190,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     compsEngine = mock<CompsSelectionEngine>();
     compsSettings = mock<CompsSettingsService>();
     disambiguation = mock<DisambiguationMemoryService>();
+    onboardingPrompt = mock<OnboardingPromptService>();
 
     // The router is exercised in its own suite (JakeOrchestrator.test.ts); here it
     // defaults to the deterministic classification the pre-router single path used
@@ -280,6 +285,22 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     });
 
     customers.resolveByPhone.mockImplementation(async (phone) => customerFor(phone));
+    // The assistant resolves via resolveByPhoneWithCreation (JAK-first-text-welcome).
+    // Default: a RETURNING customer (created:false) so the classic tests are unaffected
+    // and no welcome fires; the first-contact suite overrides created to true.
+    customers.resolveByPhoneWithCreation.mockImplementation(async (phone) => ({
+      customer: customerFor(phone),
+      created: false,
+    }));
+    // Report counter + onboarding ask (JAK-first-text-welcome). Default: a low count
+    // and a no-op ask-claim, so the delayed ask never fires unless a test drives it.
+    customers.incrementReportCount.mockResolvedValue(1);
+    customers.markOnboardingAsked.mockResolvedValue(true);
+    customers.captureProfile.mockResolvedValue(customerFor("+15559990000"));
+    creditSettings.defaultGrant.mockImplementation(async (type) =>
+      ({ report: 50, skiptrace: 10, comps: 10 } as Record<string, number>)[type]
+    );
+    onboardingPrompt.getEffectivePrompt.mockResolvedValue(OnboardingPromptService.DEFAULT_PROMPT);
     // Per-feature out-of-credits copy (JAK-161): echo the bucket so a test can
     // assert the RIGHT message went out (the sender appends the JAK-158 footer).
     creditSettings.outOfCreditsMessage.mockImplementation(
@@ -311,7 +332,8 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       comps,
       compsSettings,
       disambiguation,
-      compsEngine
+      compsEngine,
+      onboardingPrompt
     );
   });
 
@@ -404,9 +426,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
 
   describe("two-level hold (JAK-148)", () => {
     it("on_hold: replies the hold notice, runs NO specialist, and charges NOTHING", async () => {
-      customers.resolveByPhone.mockResolvedValue({
-        ...customerFor("+15559990000"),
-        status: "on_hold",
+      customers.resolveByPhoneWithCreation.mockResolvedValue({
+        customer: { ...customerFor("+15559990000"), status: "on_hold" },
+        created: false,
       });
       // A real address would normally run a property_report; on hold it must not.
       realEstate.searchPropertyByAddress.mockResolvedValue({ address: "123 Main St" } as never);
@@ -432,9 +454,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     });
 
     it("deactivated: backstop refuses to process/charge if an inbound still arrives", async () => {
-      customers.resolveByPhone.mockResolvedValue({
-        ...customerFor("+15559990000"),
-        status: "deactivated",
+      customers.resolveByPhoneWithCreation.mockResolvedValue({
+        customer: { ...customerFor("+15559990000"), status: "deactivated" },
+        created: false,
       });
 
       const result = await service.handleInboundMessage({
@@ -2320,6 +2342,160 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(messages[0]).toBe("Working on it, one moment.");
       expect(messages.length).toBeGreaterThanOrEqual(2);
       expect(messages.at(-1)).toContain("Comparable sales");
+    });
+  });
+
+  describe("JAK-first-text-welcome", () => {
+    // Every message these paths send must stay emoji-free (the no-emoji rule).
+    const EMOJI_RE =
+      /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}️]/u;
+    const sent = () => gateway.sendSms.mock.calls.map((c) => (c[0] as { message: string }).message);
+    const firstContact = (over: Partial<TextJakeCustomer> = {}) =>
+      customers.resolveByPhoneWithCreation.mockResolvedValue({
+        customer: { ...customerFor("+15559990000"), ...over },
+        created: true,
+      });
+    const returning = (over: Partial<TextJakeCustomer> = {}) =>
+      customers.resolveByPhoneWithCreation.mockResolvedValue({
+        customer: { ...customerFor("+15559990000"), ...over },
+        created: false,
+      });
+
+    it("first-ever text: welcomes with the seeded 50/10/10 credits, no info ask, and STILL returns the first report", async () => {
+      firstContact();
+      realEstate.searchPropertyByAddress.mockResolvedValue({ address: "1 A St" } as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "1 A St, Town, CA 90000",
+      });
+
+      const messages = sent();
+      const welcome = messages.find((m) => m.includes("Welcome to Jake"));
+      expect(welcome).toBeDefined();
+      // Announces the LIVE default grants (JAK-report-default-50: 50/10/10).
+      expect(welcome).toContain("50 report credits");
+      expect(welcome).toContain("10 skip trace credits");
+      expect(welcome).toContain("10 comps credits");
+      // The info ask is DELAYED — the first text never asks for name/email.
+      expect(welcome!.toLowerCase()).not.toContain("email");
+      expect(EMOJI_RE.test(welcome!)).toBe(false);
+      // The first report is still delivered + charged in the SAME interaction.
+      expect(messages.some((m) => m.includes("Jake Property Report"))).toBe(true);
+      expect(result.charged).toBe(1);
+    });
+
+    it("returning customer does NOT get the welcome again", async () => {
+      returning();
+      realEstate.searchPropertyByAddress.mockResolvedValue({ address: "1 A St" } as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "1 A St, Town, CA 90000",
+      });
+
+      expect(sent().some((m) => m.includes("Welcome to Jake"))).toBe(false);
+    });
+
+    it("sends the onboarding email ask exactly ONCE, right after the 3rd report", async () => {
+      returning(); // established customer, no profile yet
+      realEstate.searchPropertyByAddress.mockResolvedValue({ address: "1 A St" } as never);
+      customers.incrementReportCount.mockResolvedValue(3); // this delivery is their 3rd
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "1 A St, Town, CA 90000",
+      });
+
+      // Guarded once via markOnboardingAsked; the ask uses the editable wording.
+      expect(customers.markOnboardingAsked).toHaveBeenCalledWith("cust_+15559990000");
+      const ask = sent().find((m) => m.includes("getting to know each other"));
+      expect(ask).toBeDefined();
+      expect(ask!.toLowerCase()).toContain("name and email");
+      expect(EMOJI_RE.test(ask!)).toBe(false);
+    });
+
+    it("uses the ADMIN-EDITED wording for the ask when set", async () => {
+      returning();
+      realEstate.searchPropertyByAddress.mockResolvedValue({ address: "1 A St" } as never);
+      customers.incrementReportCount.mockResolvedValue(3);
+      onboardingPrompt.getEffectivePrompt.mockResolvedValue("Drop your name and email for the full report.");
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "1 A St, Town, CA 90000",
+      });
+
+      expect(sent().some((m) => m.includes("Drop your name and email for the full report."))).toBe(true);
+    });
+
+    it("does NOT ask before the 3rd report", async () => {
+      returning();
+      realEstate.searchPropertyByAddress.mockResolvedValue({ address: "1 A St" } as never);
+      customers.incrementReportCount.mockResolvedValue(2);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "1 A St, Town, CA 90000",
+      });
+
+      expect(customers.markOnboardingAsked).not.toHaveBeenCalled();
+      expect(sent().some((m) => m.includes("getting to know each other"))).toBe(false);
+    });
+
+    it("does NOT ask a customer who already gave their name + email", async () => {
+      returning({ firstName: "Sara", lastName: "Kim", email: "sara@example.com" });
+      realEstate.searchPropertyByAddress.mockResolvedValue({ address: "1 A St" } as never);
+      customers.incrementReportCount.mockResolvedValue(3);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "1 A St, Town, CA 90000",
+      });
+
+      expect(customers.markOnboardingAsked).not.toHaveBeenCalled();
+      expect(sent().some((m) => m.includes("getting to know each other"))).toBe(false);
+    });
+
+    it("captures a follow-up name + email reply into the profile and acknowledges (after the ask)", async () => {
+      // The ask has already been sent (onboardingAskedAt set), profile still empty.
+      returning({ onboardingAskedAt: new Date("2026-07-07T00:00:00Z") });
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "Sara Kim, sara@example.com",
+      });
+
+      expect(customers.captureProfile).toHaveBeenCalledWith("cust_+15559990000", {
+        firstName: "Sara",
+        lastName: "Kim",
+        email: "sara@example.com",
+      });
+      expect(result.reply).toContain("Sara");
+      // A profile reply is not a lookup — no routing, no charge.
+      expect(orchestrator.plan).not.toHaveBeenCalled();
+      expect(result.charged).toBe(0);
+    });
+
+    it("does NOT hijack a name-like message when no ask is pending", async () => {
+      returning(); // onboardingAskedAt null → capture stays off
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "Sara Kim, sara@example.com",
+      });
+
+      expect(customers.captureProfile).not.toHaveBeenCalled();
+      // Falls through to normal routing instead.
+      expect(orchestrator.plan).toHaveBeenCalled();
     });
   });
 });
