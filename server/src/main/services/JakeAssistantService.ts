@@ -52,7 +52,7 @@ import { buildCreditBalanceMessage } from "./creditStatusMessage.ts";
 import {
     CapturedProfile,
     buildProfileAck,
-    buildWelcomeMessage,
+    buildIntroMessage,
     parseProfileReply,
 } from "./onboarding/onboardingMessages.ts";
 import {
@@ -219,14 +219,19 @@ export class JakeAssistantService {
             return this.replyCreditBalance({ input, route, customer, phone, firstContact });
         }
 
-        // JAK-first-text-welcome. On the FIRST-EVER text: send the welcome + seeded
-        // credits announcement (no info ask), then STILL deliver their first report
-        // below. On a LATER text, once we've asked for their info, a follow-up reply
-        // that provides a name/email is captured into their profile and answered —
-        // WITHOUT blocking normal usage (an address/command falls through to the
-        // report path). Returning customers with nothing pending are unaffected.
+        // JAK-silent-credits-intro. First contact is CLEAN — credits are seeded
+        // silently (at customer creation) and NEVER announced. On the FIRST-EVER text:
+        //   - a GREETING / non-address → a simple intro (no credits, no menu) and STOP;
+        //   - an ADDRESS → no intro at all, just fall through and return the report.
+        // On a LATER text, once we've asked for their info, a follow-up reply that
+        // provides a name/email is captured into their profile and answered — WITHOUT
+        // blocking normal usage (an address/command falls through to the report path).
+        // Returning customers with nothing pending are unaffected.
         if (firstContact) {
-            await this.sendWelcome(route, input, customer, phone);
+            if (!address) {
+                const intro = await this.sendIntro(route, input, customer, phone);
+                return { ok: true, address: null, reply: intro ?? "", mode: route.mode, charged: 0 };
+            }
         } else {
             const captured = await this.tryCaptureProfile({ input, route, customer, phone, address });
             if (captured) return captured;
@@ -529,7 +534,7 @@ export class JakeAssistantService {
         cached: LookupRow;
     }): Promise<JakeInboundResult> {
         const { input, route, customer, phone, address, cached } = ctx;
-        const reply = this.withReserveNotice(cached.report_text, this.credits.costOfTextLookup());
+        const reply = this.withReserveNotice(cached.report_text);
         await this.sendAndRemember(route, input.contactId, customer, phone, reply);
         await this.writeStatusNote(
             route,
@@ -1824,36 +1829,33 @@ export class JakeAssistantService {
     // ── Onboarding (JAK-first-text-welcome) ──────────────────────────────────
 
     /**
-     * Send the one-time WELCOME on a new customer's first-ever text: announce the
-     * seeded default credits (read LIVE from the admin-editable defaults, never
-     * hardcoded — the same values CreditService just seeded) and invite an address.
-     * Deliberately does NOT ask for name/email — that ask is delayed to after the
-     * 3rd report. Best-effort: a welcome hiccup must never block the first report.
-     * Returns the reply that was sent (so a first-contact 'credit' can surface it as
-     * its result, JAK-credit-keyword), or null if the welcome couldn't be built.
+     * Send the one-time INTRO on a new customer's first-ever NON-ADDRESS text
+     * (JAK-silent-credits-intro): a clean greeting that invites an address. The
+     * seeded starting credits are granted SILENTLY (CreditService already did it at
+     * customer creation) and are NEVER announced — the only place credits are ever
+     * surfaced is the out-of-credits message. Deliberately does NOT ask for
+     * name/email — that ask is delayed to after the 3rd report. Best-effort: an intro
+     * hiccup must never block anything. Returns the reply that was sent (so a
+     * first-contact 'credit' can surface it as its result, JAK-credit-keyword), or
+     * null if the intro couldn't be built.
      */
-    private async sendWelcome(
+    private async sendIntro(
         route: TextRoute,
         input: JakeInboundMessage,
         customer: TextJakeCustomer,
         phone: string
     ): Promise<string | null> {
         try {
-            const [report, skiptrace, comps] = await Promise.all([
-                this.creditSettings.defaultGrant("report"),
-                this.creditSettings.defaultGrant("skiptrace"),
-                this.creditSettings.defaultGrant("comps"),
-            ]);
-            const reply = this.withFooter(buildWelcomeMessage({ report, skiptrace, comps }));
+            const reply = this.withFooter(buildIntroMessage());
             await this.sendAndRemember(route, input.contactId, customer, phone, reply);
             await this.writeStatusNote(
                 route,
                 input.contactId,
-                `Jake (text): new customer — sent welcome with ${report}/${skiptrace}/${comps} starting credits.`
+                "Jake (text): new customer — sent first-contact intro (starting credits granted silently, none announced)."
             );
             return reply;
         } catch (err) {
-            console.error("⚠️ Jake welcome send failed:", this.errorSummary(err));
+            console.error("⚠️ Jake intro send failed:", this.errorSummary(err));
             return null;
         }
     }
@@ -1877,10 +1879,11 @@ export class JakeAssistantService {
      * reports the three current per-bucket balances (report / skip-trace / comps) and
      * the next reset date, and charges/deducts NOTHING.
      *
-     * New-customer edge case: when the FIRST-EVER text is 'credit', the one-time
-     * welcome already announces the freshly-seeded starting balances and invites an
-     * address — that IS the balance answer — so we send only the welcome, not a
-     * second, redundant balance message.
+     * New-customer edge case: when the FIRST-EVER text is 'credit', we keep first
+     * contact clean (JAK-silent-credits-intro) — credits are seeded silently and
+     * never announced, so we send the plain intro (no balances) rather than surfacing
+     * numbers on the very first message. Balances are only ever reported to an
+     * ESTABLISHED customer who asks, or via the out-of-credits message.
      */
     private async replyCreditBalance(ctx: {
         input: JakeInboundMessage;
@@ -1892,11 +1895,11 @@ export class JakeAssistantService {
         const { input, route, customer, phone, firstContact } = ctx;
 
         if (firstContact) {
-            const welcome = await this.sendWelcome(route, input, customer, phone);
+            const intro = await this.sendIntro(route, input, customer, phone);
             return {
                 ok: true,
                 address: null,
-                reply: welcome ?? "",
+                reply: intro ?? "",
                 mode: route.mode,
                 charged: 0,
                 intent: "credit_balance",
@@ -2011,9 +2014,9 @@ export class JakeAssistantService {
 
     /**
      * The help / capability menu (JAK-138) — sent for a greeting, an unrecognized
-     * message, or an explicit "help". It plainly lists what Jake can do WITH each
-     * action's live credit cost pulled from the current admin settings (never
-     * hardcoded), so the numbers always match what the specialists actually charge.
+     * message, or an explicit "help". It plainly lists what Jake can do. Per
+     * JAK-silent-credits-intro it NO LONGER shows per-action credit costs: credits
+     * are never surfaced to a customer anywhere except the out-of-credits message.
      * Emoji-free, GoTextJake.com footer last. No lookup, no charge.
      */
     private async sendGuidance(
@@ -2022,7 +2025,7 @@ export class JakeAssistantService {
         customer: TextJakeCustomer,
         phone: string
     ): Promise<JakeInboundResult> {
-        const reply = await this.buildHelpReply();
+        const reply = this.buildHelpReply();
         await this.sendAndRemember(route, input.contactId, customer, phone, reply);
         await this.writeStatusNote(
             route,
@@ -2033,23 +2036,17 @@ export class JakeAssistantService {
     }
 
     /**
-     * Compose the capability menu with LIVE costs read from the admin settings
-     * (report = text-lookup cost, skip-trace = its cost knob, comps = its cost knob).
-     * Costs are fetched fresh here so an admin retune shows up immediately.
+     * Compose the capability menu. Lists what Jake can do WITHOUT any credit costs
+     * (JAK-silent-credits-intro) — the only place credits are ever surfaced to a
+     * customer is the out-of-credits message.
      */
-    private async buildHelpReply(): Promise<string> {
-        const [skipCost, compsCost] = await Promise.all([
-            this.skipTraceSettings.costOfSkipTrace(),
-            this.compsSettings.costOfComps(),
-        ]);
-        const reportCost = this.credits.costOfTextLookup();
-        const credit = (n: number) => `${n} credit${n === 1 ? "" : "s"}`;
+    private buildHelpReply(): string {
         return [
             "Hi! I'm Jake. Here's what I can do — just text a full property address to start:",
             [
-                `- Property report (${credit(reportCost)}) — owner, value, equity, and distress signals.`,
-                `- Find the owner / skip trace (${credit(skipCost)}) — their phone and contact info.`,
-                `- Comparable sales / comps (${credit(compsCost)}) — recent nearby sales for a property.`,
+                "- Property report — owner, value, equity, and distress signals.",
+                "- Find the owner / skip trace — their phone and contact info.",
+                "- Comparable sales / comps — recent nearby sales for a property.",
             ].join("\n"),
             'You can refer back to an address you already sent ("the 2nd one", "the last address").',
             PropertyReportWriter.FOOTER,
@@ -2157,11 +2154,14 @@ export class JakeAssistantService {
      * Append the free-re-serve notice to a stored report, KEEPING the mandatory
      * GoTextJake.com footer last. The notice sits just above the footer so the
      * message still ends with the exact two footer lines (JAK-131 guardrail).
+     * Per JAK-silent-credits-intro the notice does NOT state a credit price — credits
+     * are never surfaced to a customer anywhere except the out-of-credits message; it
+     * still tells the texter this copy is free and that OK fetches a fresh one.
      */
-    private withReserveNotice(reportText: string, cost: number): string {
+    private withReserveNotice(reportText: string): string {
         const notice =
             "This address is already on record, so this copy is free. " +
-            `Reply OK for a fresh copy (costs ${cost} credit${cost === 1 ? "" : "s"}).`;
+            "Reply OK for a fresh copy.";
         const footer = PropertyReportWriter.FOOTER;
         const trimmed = reportText.trimEnd();
         const body = trimmed.endsWith(footer)

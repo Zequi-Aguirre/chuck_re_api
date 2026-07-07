@@ -911,7 +911,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       const sent = (gateway.sendSms.mock.calls[0]![0] as { message: string }).message;
       expect(sent).toContain("123 Main St");
       expect(sent).toContain("already on record");
-      expect(sent).toMatch(/reply ok for a fresh copy \(costs 1 credit\)/i);
+      // JAK-silent-credits-intro: OK still fetches a fresh copy, but NO credit price is shown.
+      expect(sent).toMatch(/reply ok for a fresh copy\./i);
+      expect(sent.toLowerCase()).not.toContain("credit");
       expect(sent.endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
       // No emojis in the re-served copy.
       expect(sent).not.toMatch(/\p{Extended_Pictographic}/u);
@@ -2316,16 +2318,13 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
   describe("JAK-138 help / capability menu", () => {
     const sent = () => (gateway.sendSms.mock.calls.at(-1)![0] as { message: string }).message;
 
-    it("lists the capabilities with LIVE credit costs pulled from settings (not hardcoded)", async () => {
+    it("lists the capabilities WITHOUT any credit costs (JAK-silent-credits-intro)", async () => {
       orchestrator.plan.mockResolvedValue({
         intent: "chitchat",
         targetEntity: null,
         specialists: [],
         userFacingNote: "",
       });
-      credits.costOfTextLookup.mockReturnValue(2);
-      skipTraceSettings.costOfSkipTrace.mockResolvedValue(4);
-      compsSettings.costOfComps.mockResolvedValue(6);
 
       await service.handleInboundMessage({
         contactId: "ct_1",
@@ -2333,29 +2332,15 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
         message: "help",
       });
 
-      expect(sent()).toContain("Property report (2 credits)");
-      expect(sent()).toContain("skip trace (4 credits)");
-      expect(sent()).toContain("comps (6 credits)");
+      // The capabilities are still listed...
+      expect(sent()).toContain("Property report");
+      expect(sent()).toContain("skip trace");
+      expect(sent()).toContain("comps");
+      // ...but NO credit costs are surfaced (credits never appear outside out-of-credits).
+      expect(sent().toLowerCase()).not.toContain("credit");
+      expect(sent()).not.toMatch(/\(\d+ credit/);
       expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
       expect(sent()).not.toMatch(/\p{Extended_Pictographic}/u);
-    });
-
-    it("uses the singular 'credit' when a cost is exactly 1", async () => {
-      orchestrator.plan.mockResolvedValue({
-        intent: "chitchat",
-        targetEntity: null,
-        specialists: [],
-        userFacingNote: "",
-      });
-      credits.costOfTextLookup.mockReturnValue(1);
-
-      await service.handleInboundMessage({
-        contactId: "ct_1",
-        senderPhone: "+15559990000",
-        message: "what can you do?",
-      });
-
-      expect(sent()).toContain("Property report (1 credit)");
     });
   });
 
@@ -2402,7 +2387,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
         created: false,
       });
 
-    it("first-ever text: welcomes with the seeded 50/10/10 credits, no info ask, and STILL returns the first report", async () => {
+    it("first-ever text is an ADDRESS: returns the report ONLY, credits granted silently, NO credit announcement", async () => {
       firstContact();
       realEstate.searchPropertyByAddress.mockResolvedValue({ address: "1 A St" } as never);
 
@@ -2413,21 +2398,38 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       });
 
       const messages = sent();
-      const welcome = messages.find((m) => m.includes("Welcome to Jake"));
-      expect(welcome).toBeDefined();
-      // Announces the LIVE default grants (JAK-report-default-50: 50/10/10).
-      expect(welcome).toContain("50 report credits");
-      expect(welcome).toContain("10 skip trace credits");
-      expect(welcome).toContain("10 comps credits");
-      // The info ask is DELAYED — the first text never asks for name/email.
-      expect(welcome!.toLowerCase()).not.toContain("email");
-      expect(EMOJI_RE.test(welcome!)).toBe(false);
-      // The first report is still delivered + charged in the SAME interaction.
+      // The report is delivered + charged in the SAME interaction.
       expect(messages.some((m) => m.includes("Jake Property Report"))).toBe(true);
       expect(result.charged).toBe(1);
+      // No welcome, no intro, and NOTHING that announces credits/balances (silent grant).
+      expect(messages.some((m) => m.includes("Welcome to Jake"))).toBe(false);
+      expect(messages.some((m) => m.includes("this is Jake. Text me any address"))).toBe(false);
+      expect(messages.some((m) => m.toLowerCase().includes("credit"))).toBe(false);
     });
 
-    it("returning customer does NOT get the welcome again", async () => {
+    it("first-ever text is a GREETING: sends the simple intro ONLY — no credits, no menu, no report", async () => {
+      firstContact();
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "hey",
+      });
+
+      const messages = sent();
+      // Exactly the intro (plus footer) — nothing else.
+      expect(result.reply).toContain("Hey, this is Jake. Text me any address and I'll tell you everything I know about it.");
+      expect(messages.length).toBe(1);
+      // No credits mentioned, no capability menu, no lookup.
+      expect(result.reply.toLowerCase()).not.toContain("credit");
+      expect(result.reply).not.toContain("Here's what I can do");
+      expect(orchestrator.plan).not.toHaveBeenCalled();
+      expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
+      expect(result.charged).toBe(0);
+      expect(EMOJI_RE.test(result.reply)).toBe(false);
+    });
+
+    it("returning customer does NOT get the intro again", async () => {
       returning();
       realEstate.searchPropertyByAddress.mockResolvedValue({ address: "1 A St" } as never);
 
@@ -2438,6 +2440,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       });
 
       expect(sent().some((m) => m.includes("Welcome to Jake"))).toBe(false);
+      expect(sent().some((m) => m.includes("this is Jake. Text me any address"))).toBe(false);
     });
 
     it("sends the onboarding email ask exactly ONCE, right after the 3rd report", async () => {
@@ -2640,7 +2643,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(sent().at(-1)!).toContain("Jake Property Report");
     });
 
-    it("new customer's FIRST-EVER text is 'credit': sends the welcome only, no charge", async () => {
+    it("new customer's FIRST-EVER text is 'credit': keeps first contact clean — sends the intro, never a balance", async () => {
       customers.resolveByPhoneWithCreation.mockResolvedValue({
         customer: customerFor("+15559990000"),
         created: true,
@@ -2653,9 +2656,10 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       });
 
       const messages = sent();
-      // The welcome (which announces the seeded starting credits) is the answer.
-      expect(messages.some((m) => m.includes("Welcome to Jake"))).toBe(true);
-      // No SECOND, separate balance message and no balance read.
+      // The clean intro is the answer — credits are seeded silently, never announced.
+      expect(messages.some((m) => m.includes("Hey, this is Jake. Text me any address"))).toBe(true);
+      expect(messages.some((m) => m.toLowerCase().includes("credit"))).toBe(false);
+      // No balance message and no balance read on the very first message.
       expect(messages.some((m) => m.startsWith("You have"))).toBe(false);
       expect(credits.getBalances).not.toHaveBeenCalled();
       expect(orchestrator.plan).not.toHaveBeenCalled();

@@ -1,20 +1,14 @@
 /**
- * Pure text helpers for the first-text welcome + delayed onboarding capture
- * (JAK-first-text-welcome). No I/O, no DI — just string in/out — so the wording,
- * the no-emoji rule, and the reply parsing are all exhaustively unit-testable.
+ * Pure text helpers for the first-contact intro + delayed onboarding capture
+ * (JAK-first-text-welcome / JAK-silent-credits-intro). No I/O, no DI — just string
+ * in/out — so the wording, the no-emoji rule, and the reply parsing are all
+ * exhaustively unit-testable.
  *
  * The GoTextJake.com footer is NOT added here: like the out-of-credits copy, the
  * SENDER appends the canonical footer at send time, so it can never be edited or
  * built away. Every string these builders return is deliberately emoji-free and
  * TTS-friendly.
  */
-
-/** The three new-customer opening grants announced in the welcome. */
-export interface WelcomeGrants {
-  report: number;
-  skiptrace: number;
-  comps: number;
-}
 
 /** The profile fields we can pull out of a follow-up reply. */
 export interface CapturedProfile {
@@ -23,24 +17,17 @@ export interface CapturedProfile {
   email?: string;
 }
 
-/** "50 report credits" / "1 report credit" — pluralized for clean TTS. */
-function creditPhrase(n: number, label: string): string {
-  return `${n} ${label} credit${n === 1 ? "" : "s"}`;
-}
-
 /**
- * The one-time WELCOME sent on a NEW number's first-ever text
- * (JAK-first-text-welcome): announce the seeded credits and invite an address.
- * Deliberately does NOT ask for name/email — that ask is DELAYED to after the 3rd
- * report. Emoji-free, TTS-friendly; the sender appends the footer.
+ * The one-time INTRO sent on a NEW number's first-ever NON-ADDRESS text
+ * (JAK-silent-credits-intro): a clean greeting that just invites an address. The
+ * seeded starting credits are granted SILENTLY and are NEVER announced here — the
+ * only place credits are ever surfaced to a customer is the out-of-credits message,
+ * once a bucket hits 0. When the first text IS an address we skip this entirely and
+ * return only the report. No menu, no credits. Emoji-free, TTS-friendly; the sender
+ * appends the footer.
  */
-export function buildWelcomeMessage(grants: WelcomeGrants): string {
-  return [
-    `Welcome to Jake. You've got ${creditPhrase(grants.report, "report")}, ` +
-      `${creditPhrase(grants.skiptrace, "skip trace")}, and ` +
-      `${creditPhrase(grants.comps, "comps")} to start.`,
-    "Text me a full property address any time and I'll pull you a report.",
-  ].join("\n\n");
+export function buildIntroMessage(): string {
+  return "Hey, this is Jake. Text me any address and I'll tell you everything I know about it.";
 }
 
 /**
