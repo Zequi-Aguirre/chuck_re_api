@@ -112,6 +112,9 @@ function toCustomer(row: TextJakeCustomerRow): TextJakeCustomer {
     // defaults (0 / null) cover any row created before this ticket.
     reportCount: row.report_count ?? 0,
     onboardingAskedAt: row.onboarding_asked_at ?? null,
+    // When credits next restore to the effective default (JAK-monthly-credit-restore).
+    // Surfaced for the read-only balance reply (JAK-credit-keyword).
+    nextResetAt: row.next_reset_at ?? null,
     // The credit account key IS the customer id — stable per customer.
     creditAccountId: row.id,
     createdAt: row.created_at,

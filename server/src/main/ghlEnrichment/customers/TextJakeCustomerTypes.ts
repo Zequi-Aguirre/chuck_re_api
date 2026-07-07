@@ -46,6 +46,14 @@ export interface TextJakeCustomer {
    */
   onboardingAskedAt: Date | null;
   /**
+   * When this customer's credits are next restored to the effective default
+   * (JAK-monthly-credit-restore), anchored to their signup day-of-month. Surfaced
+   * so a READ-ONLY status reply (JAK-credit-keyword) can tell the texter when their
+   * balances reset. The DB column is NOT NULL, but kept nullable here so a row
+   * predating the column (or an unset value) resolves gracefully to "unknown".
+   */
+  nextResetAt: Date | null;
+  /**
    * The account key this customer's credits are billed against in the JAK-109
    * ledger. Stable per customer — equals {@link id} — so a texter always draws
    * from the same balance.

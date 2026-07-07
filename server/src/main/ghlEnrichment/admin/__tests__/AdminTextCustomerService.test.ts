@@ -111,6 +111,7 @@ const customer = (over: Partial<TextJakeCustomer> = {}): TextJakeCustomer => ({
   status: "active",
   reportCount: 0,
   onboardingAskedAt: null,
+  nextResetAt: new Date("2026-08-01T00:00:00Z"),
   // The credit account key IS the customer id (JAK-115).
   creditAccountId: "cust-1",
   createdAt: new Date("2026-07-01T00:00:00Z"),
