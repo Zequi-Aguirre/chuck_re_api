@@ -128,6 +128,7 @@ const customerRow = (over: Partial<TextJakeCustomerRow> = {}): TextJakeCustomerR
   status: "active",
   report_count: 0,
   onboarding_asked_at: null,
+  next_reset_at: new Date("2026-08-01T00:00:00Z"),
   created_at: new Date("2026-07-01T00:00:00Z"),
   modified_at: new Date("2026-07-02T00:00:00Z"),
   deleted_at: null,

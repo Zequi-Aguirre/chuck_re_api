@@ -43,6 +43,8 @@ import { GhlEnrichmentWorker } from "../worker/GhlEnrichmentWorker";
 import { CreditLedgerStore } from "../metering/CreditLedgerStore";
 import { CreditService } from "../metering/CreditService";
 import { CreditSettingsService } from "../metering/CreditSettingsService";
+import { MonthlyCreditRestoreService } from "../metering/MonthlyCreditRestoreService";
+import { MonthlyCreditRestoreQueueService } from "../../services/MonthlyCreditRestoreQueueService";
 import { GhlStatusService } from "../status/GhlStatusService";
 import { GhlStatusResource } from "../status/GhlStatusResource";
 import { AdminUserStore } from "../admin/AdminUserStore";
@@ -175,6 +177,22 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   }
   if (!c.isRegistered(CreditService)) {
     c.registerSingleton(CreditService);
+  }
+
+  // JAK-monthly-credit-restore — the scheduled sweep that restores every text
+  // customer's three buckets back to the effective default once a month, anchored
+  // to their signup date (the `next_reset_at` clock added in this ticket's
+  // migration). The service composes the customer store's atomic due-claim with
+  // CreditService.resetToDefaults (so it restores to the SAME admin-editable
+  // default a new customer / the reset button gets). The queue service fronts a
+  // BullMQ repeatable cron that fires the sweep; it's started (Redis-gated) in
+  // JakeServer, mirroring the lead-enrichment worker. Both singletons; share the
+  // one Postgres pool.
+  if (!c.isRegistered(MonthlyCreditRestoreService)) {
+    c.registerSingleton(MonthlyCreditRestoreService);
+  }
+  if (!c.isRegistered(MonthlyCreditRestoreQueueService)) {
+    c.registerSingleton(MonthlyCreditRestoreQueueService);
   }
 
   if (!c.isRegistered(GhlEnrichmentWorker)) {
