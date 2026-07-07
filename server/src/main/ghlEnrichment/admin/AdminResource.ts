@@ -107,6 +107,10 @@ export class AdminResource {
     this.router.post("/text-customers/find-contact", this.findTextCustomerContact.bind(this));
     this.router.put("/text-customers/:id", this.updateTextCustomer.bind(this));
     this.router.post("/text-customers/credits", this.grantTextCustomerCredits.bind(this));
+    // Reset ONE texter's three buckets to the code-default opening grants
+    // (JAK-reset-credits-button). A literal sub-path of /credits, so it never
+    // collides with the grant above or the PUT /:id edit route.
+    this.router.post("/text-customers/credits/reset", this.resetTextCustomerCredits.bind(this));
     // Two-level hold controls (JAK-148). Sub-paths under :id, so no collision with
     // the literal /credits or /find-contact routes or the PUT /:id edit above.
     //   hold       — SOFT: GHL keeps forwarding; Jake replies "on hold", no charge.
@@ -466,6 +470,31 @@ export class AdminResource {
         balance: result.balance,
         customer: result.customer,
         entry: result.entry,
+      });
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  /**
+   * Reset a tier-1 texter's three credit buckets to the EFFECTIVE new-customer
+   * default grants (JAK-reset-credits-button): report / skiptrace / comps from the
+   * SAME admin-editable CreditSettingsService.defaultGrant value a new customer is
+   * seeded with. Phone-keyed like the grant above; the customer is resolved-or-created,
+   * so a number that hasn't texted in yet can still be reset. Permission-gated by
+   * the router-level requireAdminAuth, exactly like the grant. Returns the
+   * customer view plus all three resulting balances.
+   */
+  private async resetTextCustomerCredits(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const phone = str(req.body?.phone);
+      if (!phone) {
+        return res.status(400).json({ error: "phone is required" });
+      }
+      const result = await this.textCustomers.resetCredits(phone);
+      return res.status(200).json({
+        customer: result.customer,
+        credits: result.credits,
       });
     } catch (err) {
       return next(err);

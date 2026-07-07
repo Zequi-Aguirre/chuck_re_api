@@ -9,6 +9,7 @@ import {
   CompsParamsView,
   CompsPromptView,
   CompsSelectionPromptView,
+  CreditBalances,
   CreditDefaultView,
   CreditType,
   OutOfCreditsMessageView,
@@ -191,6 +192,18 @@ export const api = {
     return request("/text-customers/credits", {
       method: "POST",
       body: JSON.stringify({ phone, amount, reason, type }),
+    });
+  },
+  // Reset a texter's three buckets to the EFFECTIVE new-customer default grants
+  // (JAK-reset-credits-button): report / skiptrace / comps. The server sets each
+  // bucket to its admin-editable defaultGrant value (what a new customer gets) by
+  // granting/charging the delta, and returns all three resulting balances.
+  async resetTextCustomerCredits(
+    phone: string
+  ): Promise<{ customer: TextCustomerView; credits: CreditBalances }> {
+    return request("/text-customers/credits/reset", {
+      method: "POST",
+      body: JSON.stringify({ phone }),
     });
   },
 

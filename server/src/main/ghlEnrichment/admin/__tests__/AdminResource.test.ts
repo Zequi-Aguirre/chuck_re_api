@@ -348,6 +348,28 @@ describe("AdminResource", () => {
     });
   });
 
+  describe("POST /text-customers/credits/reset (JAK-reset-credits-button)", () => {
+    it("400s a missing phone without touching the ledger", async () => {
+      const res = await asAdmin(request(app).post("/api/admin/text-customers/credits/reset").send({}));
+      expect(res.status).toBe(400);
+      expect(textCustomers.resetCredits).not.toHaveBeenCalled();
+    });
+
+    it("resets the three buckets to defaults and returns the resulting balances", async () => {
+      textCustomers.resetCredits.mockResolvedValue({
+        customer: textCustomerView({ creditBalance: 50, credits: { report: 50, skiptrace: 10, comps: 10 } }),
+        credits: { report: 50, skiptrace: 10, comps: 10 },
+      });
+      const res = await asAdmin(
+        request(app).post("/api/admin/text-customers/credits/reset").send({ phone: "+17865274077" })
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.credits).toEqual({ report: 50, skiptrace: 10, comps: 10 });
+      expect(res.body.customer.creditBalance).toBe(50);
+      expect(textCustomers.resetCredits).toHaveBeenCalledWith("+17865274077");
+    });
+  });
+
   // --- Text-customer profile create/update (JAK-146) ------------------------
 
   describe("POST /text-customers", () => {

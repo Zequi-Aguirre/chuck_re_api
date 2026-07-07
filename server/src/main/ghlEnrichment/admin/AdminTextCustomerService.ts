@@ -19,6 +19,12 @@ export interface TextCustomerGrantResult {
   balance: number;
 }
 
+/** The three resulting balances after a reset-to-defaults, plus the customer view. */
+export interface TextCustomerResetResult {
+  customer: AdminTextCustomerView;
+  credits: CreditBalances;
+}
+
 /** The admin-editable identity + profile for a text customer (JAK-146). */
 export interface TextCustomerInput {
   phone: string;
@@ -208,6 +214,38 @@ export class AdminTextCustomerService {
       },
       entry,
       balance: entry.balance_after,
+    };
+  }
+
+  /**
+   * Reset a text customer's THREE credit buckets to the EFFECTIVE new-customer
+   * default grants (JAK-reset-credits-button) — report / skiptrace / comps from
+   * {@link CreditSettingsService.defaultGrant}, the SAME admin-editable value a
+   * brand-new customer is seeded with (so a later default retune is honored, and
+   * it stays consistent with the upcoming monthly-restore worker). Resolve-or-create by phone
+   * (mirroring {@link grantCredits}, so a number that hasn't texted in yet can be
+   * reset), delegate the set to {@link CreditService.resetToDefaults} — which
+   * grants or charges each bucket's delta so the ledger keeps the audit trail —
+   * and return the customer view carrying all three resulting balances.
+   */
+  async resetCredits(phone: string): Promise<TextCustomerResetResult> {
+    const customer = await this.customers.resolveByPhone(phone);
+    const credits = await this.credits.resetToDefaults(customer.creditAccountId);
+    return {
+      customer: {
+        id: customer.id,
+        phone: customer.phone,
+        firstName: customer.firstName,
+        lastName: customer.lastName,
+        email: customer.email,
+        ghlContactId: customer.ghlContactId,
+        status: customer.status,
+        creditBalance: credits.report,
+        credits,
+        createdAt: customer.createdAt,
+        lastSeenAt: customer.modifiedAt,
+      },
+      credits,
     };
   }
 

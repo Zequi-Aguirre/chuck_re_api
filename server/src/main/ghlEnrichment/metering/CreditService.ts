@@ -97,6 +97,57 @@ export class CreditService {
     return this.ledger.grant({ locationId: accountId, creditType: type, amount, reason });
   }
 
+  /**
+   * Set ONE bucket to an exact `target` balance by granting or charging just the
+   * DELTA (JAK-reset-credits-button). Reuses the atomic {@link grant}/{@link charge}
+   * primitives — a shortfall is topped up, an excess is drawn back down — so the
+   * ledger keeps a full audit trail either way. A no-op when the bucket is already
+   * at `target`. `target` must be a non-negative integer; the draw-down removes at
+   * most the current balance, so it can never overdraw. Returns the resulting
+   * balance (always `target`).
+   */
+  async setBalance(
+    accountId: string,
+    type: CreditType,
+    target: number,
+    reason: CreditLedgerReason = "adjustment"
+  ): Promise<number> {
+    if (!Number.isInteger(target) || target < 0) {
+      throw new Error("setBalance target must be a non-negative integer");
+    }
+    const current = await this.ledger.getBalance(accountId, type);
+    const delta = target - current;
+    if (delta > 0) {
+      await this.grant(accountId, type, delta, reason);
+    } else if (delta < 0) {
+      await this.charge(accountId, type, -delta, reason);
+    }
+    return target;
+  }
+
+  /**
+   * Reset ALL THREE of an account's buckets to the EFFECTIVE new-customer default
+   * grants (JAK-reset-credits-button): report / skiptrace / comps from
+   * {@link CreditSettingsService.defaultGrant} — the SAME admin-editable value
+   * {@link seedNewCustomer} seeds a brand-new customer with (and the upcoming
+   * monthly-restore worker will restore to), NOT the frozen
+   * {@link CreditSettingsService.DEFAULT_GRANTS} code constant. So "reset to
+   * default" always gives a customer exactly what a new customer currently gets:
+   * if an admin retunes the defaults, reset honors the new value (today they're
+   * still 50/10/10, so no behavior change). Each bucket is set via
+   * {@link setBalance}, so an over-granted bucket is drawn back down and a
+   * spent-out one is topped back up. Returns all three resulting balances. Not
+   * atomic across buckets (mirrors {@link seedNewCustomer}); each set is
+   * individually atomic.
+   */
+  async resetToDefaults(accountId: string): Promise<CreditBalances> {
+    for (const type of CREDIT_TYPES) {
+      const target = await this.creditSettings.defaultGrant(type);
+      await this.setBalance(accountId, type, target, "adjustment");
+    }
+    return this.getBalances(accountId);
+  }
+
   /** All three of an account's balances at once (JAK-161) — the per-feature view. */
   async getBalances(accountId: string): Promise<CreditBalances> {
     const entries = await Promise.all(
