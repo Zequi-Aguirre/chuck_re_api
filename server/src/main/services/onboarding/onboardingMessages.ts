@@ -27,7 +27,7 @@ export interface CapturedProfile {
  * appends the footer.
  */
 export function buildIntroMessage(): string {
-  return "Hey, this is Jake. Text me any address and I'll tell you everything about it.";
+  return "Hey, this is Jake. Text me any address and I'll tell you everything I know about it.";
 }
 
 /**

@@ -10,7 +10,7 @@ const EMOJI_RE = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}
 describe("buildIntroMessage (JAK-silent-credits-intro)", () => {
   it("is a clean greeting that just invites an address", () => {
     expect(buildIntroMessage()).toBe(
-      "Hey, this is Jake. Text me any address and I'll tell you everything about it."
+      "Hey, this is Jake. Text me any address and I'll tell you everything I know about it."
     );
   });
 

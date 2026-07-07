@@ -2418,7 +2418,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
 
       const messages = sent();
       // Exactly the intro (plus footer) — nothing else.
-      expect(result.reply).toContain("Hey, this is Jake. Text me any address and I'll tell you everything about it.");
+      expect(result.reply).toContain("Hey, this is Jake. Text me any address and I'll tell you everything I know about it.");
       expect(messages.length).toBe(1);
       // No credits mentioned, no capability menu, no lookup.
       expect(result.reply.toLowerCase()).not.toContain("credit");
