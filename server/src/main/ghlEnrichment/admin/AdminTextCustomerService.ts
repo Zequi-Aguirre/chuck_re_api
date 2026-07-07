@@ -34,13 +34,12 @@ export interface TextCustomerWriteResult {
 }
 
 /**
- * The result of a two-level hold status change (JAK-148): the updated customer
- * view plus the GHL "text Jake" field-flip outcome. `sync` is null for the soft
- * on_hold path, which leaves the approval field untouched.
+ * The result of a two-level hold status change (JAK-148/JAK-remove-ghl-hold):
+ * the updated customer view. Holding/deactivating is now SERVER-SIDE ONLY — the
+ * status change never writes to GHL, so there is no sync outcome to return.
  */
 export interface TextCustomerStatusResult {
   customer: AdminTextCustomerView;
-  sync: TextCustomerSyncResult | null;
 }
 
 /**
@@ -213,18 +212,16 @@ export class AdminTextCustomerService {
   }
 
   /**
-   * Change a text customer's two-level hold status (JAK-148) and, for the hard
-   * states, flip the GHL "text Jake" approval field through the JAK-147 sync:
-   *  - `on_hold`     — SOFT: persist the status ONLY. The approval field STAYS
-   *    set, so GHL keeps forwarding their texts; Jake intercepts inbound and
-   *    replies a hold notice server-side (no GHL write here, no sync outcome).
-   *  - `deactivated` — HARD: persist, then set "text Jake" UNAPPROVED so GHL
-   *    stops forwarding entirely.
-   *  - `active`      — reactivate: persist, then re-approve "text Jake" so GHL
-   *    forwards again (covers coming back from either hold state; idempotent).
+   * Change a text customer's two-level hold status — now SERVER-SIDE ONLY
+   * (JAK-remove-ghl-hold). Zequi removed the GHL automation filter that read the
+   * "text Jake" approval field, so hold/deactivate no longer touches GHL at all;
+   * this method only persists the status. Jake enforces the hold itself on the
+   * inbound path ({@link JakeAssistantService.handleInboundMessage}):
+   *  - `on_hold`     — Jake replies a hold notice, no work / no charge.
+   *  - `deactivated` — Jake refuses to process the inbound, no charge.
+   *  - `active`      — normal processing resumes.
    * Credits are NEVER read or written here — a hold can't move a balance. Returns
-   * the updated view + the GHL sync outcome (null for the soft on_hold path), or
-   * null if no live customer has that id.
+   * the updated view, or null if no live customer has that id.
    */
   async changeStatus(
     id: string,
@@ -233,20 +230,9 @@ export class AdminTextCustomerService {
     const row = await this.customerStore.setStatus(id, status);
     if (!row) return null;
 
-    // Only the hard states touch GHL: deactivate unapproves, reactivate re-approves.
-    // The soft on_hold intentionally leaves the approval field alone.
-    let sync: TextCustomerSyncResult | null = null;
-    if (status === "deactivated" || status === "active") {
-      sync = await this.sync.setApproval(
-        { phone: row.phone, firstName: row.first_name, lastName: row.last_name, email: row.email },
-        status === "active"
-      );
-    }
-
-    const finalRow = sync ? await this.persistContactId(row, sync) : row;
     // Read-only balance fetch for the view — the ledger is never mutated here.
-    const credits = await this.credits.getBalances(finalRow.id);
-    return { customer: toView(finalRow, credits), sync };
+    const credits = await this.credits.getBalances(row.id);
+    return { customer: toView(row, credits) };
   }
 }
 

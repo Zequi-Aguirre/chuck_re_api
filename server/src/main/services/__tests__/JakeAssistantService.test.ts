@@ -423,8 +423,8 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(gateway.sendSms).toHaveBeenCalledWith(
         expect.objectContaining({ contactId: "ct_1", message: expect.stringContaining("on hold") })
       );
-      // No work: the router never ran, no lookup, no specialist, no charge. The GHL
-      // approval field is never touched here, so it stays approved (GHL keeps sending).
+      // No work: the router never ran, no lookup, no specialist, no charge. The hold
+      // is enforced entirely server-side (JAK-remove-ghl-hold) — no GHL write at all.
       expect(orchestrator.plan).not.toHaveBeenCalled();
       expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
       expect(credits.chargeForTextLookup).not.toHaveBeenCalled();

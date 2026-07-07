@@ -370,53 +370,36 @@ describe("AdminTextCustomerService", () => {
 
   // --- Two-level hold status changes (JAK-148) ------------------------------
 
-  describe("changeStatus (JAK-148)", () => {
-    it("on_hold: persists the status and does NOT flip the GHL approval field", async () => {
+  describe("changeStatus (JAK-148 / JAK-remove-ghl-hold: server-side only)", () => {
+    it("on_hold: persists the status and writes NOTHING to GHL", async () => {
       customerStore.setStatus.mockResolvedValue(customerRow({ status: "on_hold" }));
 
       const result = await service.changeStatus("cust-1", "on_hold");
 
       expect(customerStore.setStatus).toHaveBeenCalledWith("cust-1", "on_hold");
-      // SOFT hold: GHL keeps forwarding, so the approval field is left untouched.
-      expect(sync.setApproval).not.toHaveBeenCalled();
+      // Hold/deactivate is server-side only now — the status change never syncs GHL.
+      expect(sync.syncCustomer).not.toHaveBeenCalled();
       expect(result?.customer.status).toBe("on_hold");
-      expect(result?.sync).toBeNull();
     });
 
-    it("deactivated: persists and flips 'text Jake' to UNAPPROVED via the sync", async () => {
+    it("deactivated: persists the status and writes NOTHING to GHL", async () => {
       customerStore.setStatus.mockResolvedValue(customerRow({ status: "deactivated" }));
-      sync.setApproval.mockResolvedValue({
-        status: "synced",
-        ghlContactId: "ghl_1",
-        message: "Updated in GoHighLevel — texts to Jake are turned off.",
-      });
 
       const result = await service.changeStatus("cust-1", "deactivated");
 
       expect(customerStore.setStatus).toHaveBeenCalledWith("cust-1", "deactivated");
-      // approved=false → GHL stops forwarding.
-      expect(sync.setApproval).toHaveBeenCalledWith(
-        { phone: "+17865274077", firstName: null, lastName: null, email: null },
-        false
-      );
+      // No "text Jake" field flip — deactivate no longer touches GHL at all.
+      expect(sync.syncCustomer).not.toHaveBeenCalled();
+      expect(customerStore.setGhlContactId).not.toHaveBeenCalled();
       expect(result?.customer.status).toBe("deactivated");
-      expect(result?.sync?.status).toBe("synced");
     });
 
-    it("active: persists and RE-APPROVES 'text Jake' so GHL forwards again", async () => {
+    it("active: persists the status and writes NOTHING to GHL", async () => {
       customerStore.setStatus.mockResolvedValue(customerRow({ status: "active" }));
-      sync.setApproval.mockResolvedValue({
-        status: "synced",
-        ghlContactId: "ghl_1",
-        message: "Synced to GoHighLevel and approved to text Jake.",
-      });
 
       const result = await service.changeStatus("cust-1", "active");
 
-      expect(sync.setApproval).toHaveBeenCalledWith(
-        { phone: "+17865274077", firstName: null, lastName: null, email: null },
-        true
-      );
+      expect(sync.syncCustomer).not.toHaveBeenCalled();
       expect(result?.customer.status).toBe("active");
     });
 
@@ -426,13 +409,12 @@ describe("AdminTextCustomerService", () => {
       const result = await service.changeStatus("nope", "on_hold");
 
       expect(result).toBeNull();
-      expect(sync.setApproval).not.toHaveBeenCalled();
+      expect(sync.syncCustomer).not.toHaveBeenCalled();
     });
 
     it("NEVER moves the credit balance across a hold/deactivate/reactivate", async () => {
       // Seed a balance, then run every transition and assert it's unchanged.
       await ledger.grant({ locationId: "cust-1", amount: 7, reason: "manual_grant" });
-      sync.setApproval.mockResolvedValue(skippedSync);
 
       for (const status of ["on_hold", "deactivated", "active"] as const) {
         customerStore.setStatus.mockResolvedValue(customerRow({ status }));

@@ -568,7 +568,7 @@ describe("AdminResource", () => {
   // --- Two-level hold controls (JAK-148) ------------------------------------
 
   describe("POST /text-customers/:id hold controls", () => {
-    const okStatus = (over = {}) => ({ customer: textCustomerView(over), sync: null });
+    const okStatus = (over = {}) => ({ customer: textCustomerView(over) });
 
     it.each([
       ["hold", "on_hold"],
@@ -589,17 +589,15 @@ describe("AdminResource", () => {
       expect(textCustomers.changeStatus).toHaveBeenCalledWith("cust-1", "on_hold");
     });
 
-    it("deactivate → changeStatus(id, 'deactivated') and returns the sync outcome", async () => {
-      textCustomers.changeStatus.mockResolvedValue({
-        customer: textCustomerView({ status: "deactivated" }),
-        sync: { status: "synced", ghlContactId: "ghl_1", message: "off" },
-      });
+    it("deactivate → changeStatus(id, 'deactivated'), server-side only (no GHL sync in the response)", async () => {
+      textCustomers.changeStatus.mockResolvedValue(okStatus({ status: "deactivated" }));
       const res = await asAdmin(
         request(app).post("/api/admin/text-customers/cust-1/deactivate").send({})
       );
       expect(res.status).toBe(200);
       expect(res.body.customer.status).toBe("deactivated");
-      expect(res.body.sync.status).toBe("synced");
+      // Deactivate no longer writes GHL, so there is no sync outcome to return.
+      expect(res.body.sync).toBeUndefined();
       expect(textCustomers.changeStatus).toHaveBeenCalledWith("cust-1", "deactivated");
     });
 

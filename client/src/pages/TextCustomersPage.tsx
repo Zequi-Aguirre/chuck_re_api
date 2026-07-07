@@ -98,8 +98,8 @@ export function TextCustomersPage() {
               : await api.reactivateTextCustomer(c.id);
         const savedName = customerDisplayName(res.customer) || res.customer.phone;
         const label = customerStatusLabel(res.customer.status);
-        // Surface the GHL flip outcome inline when there was one (deactivate/reactivate).
-        setToast(res.sync?.message ? `${savedName}: ${label}. ${res.sync.message}` : `${savedName}: ${label}.`);
+        // Status change is server-side only now (JAK-remove-ghl-hold) — no GHL write.
+        setToast(`${savedName}: ${label}.`);
         await load();
       } catch {
         setError("Couldn't update that customer's status. Please try again.");
