@@ -1,5 +1,6 @@
 import { injectable } from "tsyringe";
 import { PostgresDatabase } from "../../data/PostgresDatabase";
+import { normalizePhone } from "./phoneNormalization";
 import { TextCustomerStatus } from "./TextJakeCustomerTypes";
 
 /**
@@ -62,7 +63,9 @@ export class TextJakeCustomerStore {
          ghl_contact_id = COALESCE(text_jake_customers.ghl_contact_id, EXCLUDED.ghl_contact_id),
          modified_at = now()
        RETURNING *, (xmax = 0) AS created`,
-      [phone, ghlContactId]
+      // Canonicalize here too (JAK-dedup-customers) so NO create/lookup path can
+      // persist an un-normalized phone and re-open the duplicate-row bug. Idempotent.
+      [normalizePhone(phone), ghlContactId]
     );
     const { created, ...row } = result.rows[0];
     return { row: row as TextJakeCustomerRow, created };
@@ -82,7 +85,7 @@ export class TextJakeCustomerStore {
       `INSERT INTO text_jake_customers (phone, first_name, last_name, email)
        VALUES ($1, $2, $3, $4)
        RETURNING *`,
-      [phone, profile.firstName, profile.lastName, profile.email]
+      [normalizePhone(phone), profile.firstName, profile.lastName, profile.email]
     );
     return result.rows[0];
   }
@@ -106,7 +109,7 @@ export class TextJakeCustomerStore {
            modified_at = now()
        WHERE id = $1 AND deleted_at IS NULL
        RETURNING *`,
-      [id, phone, profile.firstName, profile.lastName, profile.email]
+      [id, normalizePhone(phone), profile.firstName, profile.lastName, profile.email]
     );
     return result.rows[0] ?? null;
   }
@@ -155,11 +158,12 @@ export class TextJakeCustomerStore {
     return result.rows[0] ?? null;
   }
 
-  /** Look up a customer by phone without creating one. */
+  /** Look up a customer by phone without creating one. Canonicalizes the input so
+   * a lookup matches regardless of the format it's given in (JAK-dedup-customers). */
   async findByPhone(phone: string): Promise<TextJakeCustomerRow | null> {
     const result = await this.db.query<TextJakeCustomerRow>(
       `SELECT * FROM text_jake_customers WHERE phone = $1`,
-      [phone]
+      [normalizePhone(phone)]
     );
     return result.rows[0] ?? null;
   }

@@ -60,9 +60,11 @@ describe("Credit buckets (real Postgres integration) — JAK-161", () => {
     pool = pg.pool;
     await pool.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`);
 
-    // Apply the full production chain EXCEPT the JAK-161 migration — i.e. the exact
-    // pre-split schema. (JAK-161 is newest, so "everything before it" is everything.)
-    for (const file of allMigrations().filter((f) => f !== THIS_MIGRATION)) {
+    // Apply every migration STRICTLY BEFORE the JAK-161 one — i.e. the exact
+    // pre-split schema. Filenames sort by their 14-digit timestamp prefix, so a
+    // lexicographic `< THIS_MIGRATION` is "everything older than JAK-161" and also
+    // excludes any migration added AFTER it (which may depend on JAK-161's schema).
+    for (const file of allMigrations().filter((f) => f < THIS_MIGRATION)) {
       await pool.query(readMigration(file));
     }
 

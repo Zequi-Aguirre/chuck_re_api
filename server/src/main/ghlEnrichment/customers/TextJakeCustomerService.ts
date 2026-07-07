@@ -1,7 +1,13 @@
 import { injectable } from "tsyringe";
 import { CreditService } from "../metering/CreditService";
+import { normalizePhone } from "./phoneNormalization";
 import { TextJakeCustomerRow, TextJakeCustomerStore } from "./TextJakeCustomerStore";
 import { TextJakeCustomer } from "./TextJakeCustomerTypes";
+
+// Re-export so existing importers (AdminTextCustomerService) keep their import
+// path; the canonical E.164 implementation now lives in one leaf module
+// (phoneNormalization) that the store can also import without a circular dep.
+export { normalizePhone };
 
 /**
  * The text-Jake customer service (JAK-115) — resolves the tier-1 billing identity.
@@ -41,15 +47,6 @@ export class TextJakeCustomerService {
     }
     return toCustomer(row);
   }
-}
-
-/**
- * Normalize a phone to a stable key: trim and strip internal whitespace. GHL
- * sends E.164 already; this just guards against stray spaces so the same number
- * never splits into two customers.
- */
-export function normalizePhone(phone: string): string {
-  return String(phone).replace(/\s+/g, "").trim();
 }
 
 function toCustomer(row: TextJakeCustomerRow): TextJakeCustomer {
