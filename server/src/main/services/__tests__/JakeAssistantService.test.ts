@@ -338,6 +338,39 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(ghlClient.createNote).not.toHaveBeenCalled();
     });
 
+    it("replies FROM the inbound destination number (mirrors the number texted, JAK-167)", async () => {
+      realEstate.searchPropertyByAddress.mockResolvedValue({ address: "1 A St" } as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "1 A St",
+        // The customer texted the NEW toll-free number; the reply must go out from it,
+        // not the gateway sub-account's old default number.
+        candidateNumbers: ["+18333105253"],
+      });
+
+      expect(result.mode).toBe("gateway");
+      expect(gateway.sendSms).toHaveBeenCalledWith(
+        expect.objectContaining({ contactId: "ct_1", fromNumber: "+18333105253" })
+      );
+    });
+
+    it("omits fromNumber (GHL default) when the inbound carries no destination number", async () => {
+      realEstate.searchPropertyByAddress.mockResolvedValue({ address: "1 A St" } as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "1 A St",
+        // No candidateNumbers → nothing to mirror; preserve prior default-number behavior.
+      });
+
+      expect(gateway.sendSms).toHaveBeenCalledWith(
+        expect.objectContaining({ contactId: "ct_1", fromNumber: undefined })
+      );
+    });
+
     it("used even when a connection exists but is set to text_mode='gateway'", async () => {
       connections.getByLocationId.mockResolvedValue(connection({ textMode: "gateway" }));
       realEstate.searchPropertyByAddress.mockResolvedValue(null);

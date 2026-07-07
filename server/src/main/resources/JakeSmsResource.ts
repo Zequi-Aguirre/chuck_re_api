@@ -116,6 +116,7 @@ export class JakeSmsResource {
             console.log("JAK inbound", {
                 bodyKeys: Object.keys(body),
                 from: senderPhone,
+                to: toNumber ?? "(absent)",
                 contactId,
                 message: message && String(message).trim() ? message : "(empty)",
                 locationId,
