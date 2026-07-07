@@ -2163,7 +2163,9 @@ export class JakeAssistantService {
             "This address is already on record, so this copy is free. " +
             "Reply OK for a fresh copy.";
         const footer = PropertyReportWriter.FOOTER;
-        const trimmed = reportText.trimEnd();
+        // A report cached BEFORE JAK-kill-report-menu may still carry the old
+        // "Next Commands" menu; strip it so even a free re-serve comes back clean.
+        const trimmed = PropertyReportWriter.stripCommandMenu(reportText).trimEnd();
         const body = trimmed.endsWith(footer)
             ? trimmed.slice(0, trimmed.length - footer.length).trimEnd()
             : trimmed;
