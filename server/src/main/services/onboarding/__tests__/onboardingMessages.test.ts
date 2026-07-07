@@ -1,41 +1,34 @@
 import {
   buildProfileAck,
-  buildWelcomeMessage,
+  buildIntroMessage,
   parseProfileReply,
 } from "../onboardingMessages";
 
 /** No message these builders produce may contain an emoji (the no-emoji rule). */
 const EMOJI_RE = /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}️]/u;
 
-describe("buildWelcomeMessage (JAK-first-text-welcome)", () => {
-  it("announces the three seeded grants with clean pluralization", () => {
-    const msg = buildWelcomeMessage({ report: 50, skiptrace: 10, comps: 10 });
-    expect(msg).toContain("Welcome to Jake.");
-    expect(msg).toContain("50 report credits");
-    expect(msg).toContain("10 skip trace credits");
-    expect(msg).toContain("10 comps credits");
+describe("buildIntroMessage (JAK-silent-credits-intro)", () => {
+  it("is a clean greeting that just invites an address", () => {
+    expect(buildIntroMessage()).toBe(
+      "Hey, this is Jake. Text me any address and I'll tell you everything about it."
+    );
   });
 
-  it("uses the LIVE grant numbers, not hardcoded ones", () => {
-    const msg = buildWelcomeMessage({ report: 25, skiptrace: 3, comps: 7 });
-    expect(msg).toContain("25 report credits");
-    expect(msg).toContain("3 skip trace credits");
-    expect(msg).toContain("7 comps credits");
-    expect(msg).not.toContain("50 report");
-  });
-
-  it("singularizes a grant of 1", () => {
-    expect(buildWelcomeMessage({ report: 1, skiptrace: 1, comps: 10 })).toContain("1 report credit,");
+  it("NEVER mentions credits, balances, or grant numbers", () => {
+    const msg = buildIntroMessage().toLowerCase();
+    expect(msg).not.toContain("credit");
+    expect(msg).not.toContain("balance");
+    expect(msg).not.toMatch(/\d/); // no seeded 50/10/10 or any number
   });
 
   it("does NOT ask for name/email on the first text (the ask is delayed)", () => {
-    const msg = buildWelcomeMessage({ report: 50, skiptrace: 10, comps: 10 }).toLowerCase();
+    const msg = buildIntroMessage().toLowerCase();
     expect(msg).not.toContain("name");
     expect(msg).not.toContain("email");
   });
 
   it("is emoji-free", () => {
-    expect(EMOJI_RE.test(buildWelcomeMessage({ report: 50, skiptrace: 10, comps: 10 }))).toBe(false);
+    expect(EMOJI_RE.test(buildIntroMessage())).toBe(false);
   });
 });
 
