@@ -41,9 +41,9 @@ describe("CreditSettingsService", () => {
   });
 
   describe("default grants", () => {
-    it("falls back to the code defaults (100/10/10) when unset", async () => {
+    it("falls back to the code defaults (50/10/10) when unset", async () => {
       store.get.mockResolvedValue(null);
-      expect(await service.defaultGrant("report")).toBe(100);
+      expect(await service.defaultGrant("report")).toBe(50);
       expect(await service.defaultGrant("skiptrace")).toBe(10);
       expect(await service.defaultGrant("comps")).toBe(10);
     });

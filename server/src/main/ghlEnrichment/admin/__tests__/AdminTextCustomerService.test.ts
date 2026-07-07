@@ -130,7 +130,7 @@ describe("AdminTextCustomerService", () => {
     ledger = inMemoryLedger();
     const creditSettings = mock<CreditSettingsService>();
     creditSettings.defaultGrant.mockImplementation(async (type) =>
-      ({ report: 100, skiptrace: 10, comps: 10 }[type])
+      ({ report: 50, skiptrace: 10, comps: 10 }[type])
     );
     credits = new CreditService(ledger, config(), creditSettings);
     sync = mock<TextCustomerGhlSyncService>();
@@ -191,8 +191,8 @@ describe("AdminTextCustomerService", () => {
     expect(customer.firstName).toBe("Ada");
     expect(customer.email).toBe("ada@example.com");
     // JAK-161: a brand-new customer is seeded from the default grants, so the
-    // returned (report) balance is the 100-credit report default, not 0.
-    expect(customer.creditBalance).toBe(100);
+    // returned (report) balance is the 50-credit report default, not 0.
+    expect(customer.creditBalance).toBe(50);
   });
 
   it("seeds the three per-feature credit buckets on create (JAK-161)", async () => {
@@ -200,8 +200,8 @@ describe("AdminTextCustomerService", () => {
 
     await service.create({ phone: "+17865270000", firstName: null, lastName: null, email: null });
 
-    // The three independent buckets are seeded from the defaults (100/10/10).
-    expect(await credits.getBalance("cust-seeded", "report")).toBe(100);
+    // The three independent buckets are seeded from the defaults (50/10/10).
+    expect(await credits.getBalance("cust-seeded", "report")).toBe(50);
     expect(await credits.getBalance("cust-seeded", "skiptrace")).toBe(10);
     expect(await credits.getBalance("cust-seeded", "comps")).toBe(10);
   });

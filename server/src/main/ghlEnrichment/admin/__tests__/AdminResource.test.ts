@@ -1112,7 +1112,7 @@ describe("AdminResource", () => {
 
     it("GET returns all three default grants", async () => {
       creditSettings.getDefaultViews.mockResolvedValue([
-        defView({ type: "report", value: 100 }),
+        defView({ type: "report", value: 50 }),
         defView({ type: "skiptrace", value: 10 }),
         defView({ type: "comps", value: 10 }),
       ] as never);
