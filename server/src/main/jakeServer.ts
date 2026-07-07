@@ -24,6 +24,7 @@ import {
 } from "./ghlEnrichment/index.ts";
 // Services
 import { LeadEnrichmentQueueService } from "./services/LeadEnrichmentQueueService.ts";
+import { MonthlyCreditRestoreQueueService } from "./services/MonthlyCreditRestoreQueueService.ts";
 
 dotenv.config();
 
@@ -107,8 +108,23 @@ export class JakeServer {
             } catch (err) {
                 console.error("❌ Failed to start Lead Enrichment Worker:", err);
             }
+
+            // 💳 JAK-monthly-credit-restore — start the repeatable cron sweep that
+            // restores each customer's credits to the effective default on their
+            // monthly signup anniversary. Gated on Redis (BullMQ), like the
+            // enrichment worker; the per-customer next_reset_at guard makes the
+            // frequent cadence a cheap no-op for anyone not yet due.
+            try {
+                const restoreQueue = container.resolve(MonthlyCreditRestoreQueueService);
+                await restoreQueue.startWorker();
+                console.log("💳 Monthly Credit-Restore Worker started successfully.");
+            } catch (err) {
+                console.error("❌ Failed to start Monthly Credit-Restore Worker:", err);
+            }
         } else {
-            console.log("ℹ️ Redis not configured — Lead Enrichment Worker not started.");
+            console.log(
+                "ℹ️ Redis not configured — Lead Enrichment + Monthly Credit-Restore Workers not started."
+            );
         }
 
         // Global error handling

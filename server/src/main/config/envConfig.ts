@@ -27,6 +27,13 @@ export class EnvConfig {
     public readonly upstashRedisTcpUrl: string;
     public readonly enrichQueueName: string;
     public readonly enrichRatePerSecond: number;
+    // Monthly credit-restore worker (JAK-monthly-credit-restore). Its own BullMQ
+    // queue + a repeatable (cron) scheduler that periodically sweeps customers
+    // due for a restore. The cron cadence is how OFTEN the sweep runs, NOT how
+    // often a customer is restored — the per-customer `next_reset_at` guard caps
+    // that at once a month — so a frequent, cheap cadence is safe. Default hourly.
+    public readonly monthlyRestoreQueueName: string;
+    public readonly monthlyRestoreCron: string;
 
     // 🏡 RealEstate API
     public readonly realEstateApiKey: string;
@@ -120,6 +127,11 @@ export class EnvConfig {
         this.upstashRedisTcpUrl = process.env.UPSTASH_REDIS_TCP_URL!;
         this.enrichQueueName = process.env.ENRICH_QUEUE_NAME ?? "lead-enrichment";
         this.enrichRatePerSecond = Number(process.env.ENRICH_RPS ?? "5");
+        // Monthly credit-restore sweep (JAK-monthly-credit-restore). Own queue;
+        // repeatable cron cadence defaults to hourly (top of the hour). The atomic
+        // per-customer guard makes a frequent cadence a no-op for anyone not due.
+        this.monthlyRestoreQueueName = process.env.MONTHLY_RESTORE_QUEUE_NAME ?? "monthly-credit-restore";
+        this.monthlyRestoreCron = process.env.MONTHLY_RESTORE_CRON ?? "0 * * * *";
 
         // 🏡 RealEstate API
         this.realEstateApiKey = process.env.RE_API_KEY!;

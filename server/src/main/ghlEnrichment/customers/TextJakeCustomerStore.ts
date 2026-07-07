@@ -24,6 +24,11 @@ export interface TextJakeCustomerRow {
   // report_count defaults to 0; onboarding_asked_at is null until the ask is sent.
   report_count: number;
   onboarding_asked_at: Date | null;
+  // When this customer's credits are next due to be RESTORED to the effective
+  // default (JAK-monthly-credit-restore). Anchored to signup: seeded to
+  // created_at + 1 month and advanced by whole months on each restore, so it
+  // always lands on the signup day-of-month. NOT NULL (DB default now() + 1 month).
+  next_reset_at: Date;
   created_at: Date;
   modified_at: Date;
   deleted_at: Date | null;
@@ -228,6 +233,48 @@ export class TextJakeCustomerStore {
     const result = await this.db.query<TextJakeCustomerRow>(
       `SELECT * FROM text_jake_customers WHERE phone = $1`,
       [normalizePhone(phone)]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  /**
+   * Atomically CLAIM the next customer whose monthly credit restore is due as of
+   * `asOf` (JAK-monthly-credit-restore), advancing their `next_reset_at` to the
+   * next FUTURE signup-anniversary boundary in the SAME statement. Returns the
+   * claimed row, or null when none are due.
+   *
+   * This single UPDATE is the whole idempotency + concurrency story:
+   *   - `next_reset_at <= asOf` selects a due customer; `FOR UPDATE SKIP LOCKED`
+   *     lets several worker runs sweep in parallel without ever handing the same
+   *     customer to two of them.
+   *   - Advancing `next_reset_at` PAST `asOf` in the same statement means a
+   *     re-run (or a worker firing many times an hour) can't reclaim the customer
+   *     this cycle — each customer is restored AT MOST ONCE per monthly cycle.
+   *   - A worker that was down for months advances in ONE hop to the next future
+   *     boundary (whole-month count from `age`), so it restores once, never once
+   *     per missed month. `make_interval(months => ...)` keeps the anchor on the
+   *     signup day-of-month (clamping short months).
+   *
+   * The caller performs the actual credit reset for the returned account AFTER
+   * this claim commits; advancing the clock first (not last) is deliberate —
+   * at-most-once is safer than a double restore if the process dies mid-sweep.
+   */
+  async claimDueForReset(asOf: Date): Promise<TextJakeCustomerRow | null> {
+    const result = await this.db.query<TextJakeCustomerRow>(
+      `UPDATE text_jake_customers
+       SET next_reset_at = next_reset_at + make_interval(months =>
+             (extract(year  from age($1::timestamptz, next_reset_at))::int * 12
+            + extract(month from age($1::timestamptz, next_reset_at))::int) + 1),
+           modified_at = now()
+       WHERE id = (
+         SELECT id FROM text_jake_customers
+         WHERE deleted_at IS NULL AND next_reset_at <= $1::timestamptz
+         ORDER BY next_reset_at
+         FOR UPDATE SKIP LOCKED
+         LIMIT 1
+       )
+       RETURNING *`,
+      [asOf]
     );
     return result.rows[0] ?? null;
   }
