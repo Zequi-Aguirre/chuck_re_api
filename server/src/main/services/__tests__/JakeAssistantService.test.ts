@@ -919,37 +919,6 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(sent).not.toMatch(/\p{Extended_Pictographic}/u);
     });
 
-    it("strips a stale Next Commands menu from a report cached before JAK-kill-report-menu", async () => {
-      memory.checkCache.mockResolvedValue(
-        lookupRow({
-          report_text: [
-            "Jake Property Report",
-            "123 Main St",
-            "",
-            "Next Commands:",
-            "- Text SKIP for owner contact",
-            "- Text COMP for comparables",
-            "",
-            "Every Lead Deserves Jake.",
-            "GoTextJake.com/CRM",
-          ].join("\n"),
-        })
-      );
-
-      await service.handleInboundMessage({
-        contactId: "ct_1",
-        senderPhone: "+15559990000",
-        message: "123 Main St, Springfield, IL 62704",
-      });
-
-      const sent = (gateway.sendSms.mock.calls[0]![0] as { message: string }).message;
-      expect(sent).not.toMatch(/Next Commands|Text SKIP|Text COMP/i);
-      // The report body, the free-re-serve notice, and the footer all survive.
-      expect(sent).toContain("123 Main St");
-      expect(sent).toContain("already on record");
-      expect(sent.endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
-    });
-
     it("re-serves for free EVEN when the customer is out of credits", async () => {
       memory.checkCache.mockResolvedValue(lookupRow());
       credits.hasCreditsForTextLookup.mockResolvedValue(false);

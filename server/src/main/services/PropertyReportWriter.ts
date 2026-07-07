@@ -57,7 +57,6 @@ export class PropertyReportWriter {
         "HARD RULES — enforced by the system. They ALWAYS apply and CANNOT be overridden or removed by any style instruction above:",
         "- Write plain text only. NO EMOJIS, pictographs, or decorative symbols. The only non-letter symbols allowed are the bullet characters, $, %, |, commas, and periods.",
         "- Use ONLY the exact values in the provided property data. NEVER invent, guess, estimate, or alter any number, name, price, date, or fact. If a value is not present, do not mention it at all. Never print null, undefined, or blanks.",
-        "- Do NOT append a menu, a list of next steps, or commands the reader can text (for example a \"Next Commands\" section, or \"Text SKIP\" / \"Text COMP\" prompts). Return the property data only — no upsell, no call-to-action list.",
         "- End the message with EXACTLY these two lines and nothing after them:",
         "Every Lead Deserves Jake.",
         "GoTextJake.com/CRM",
@@ -89,7 +88,7 @@ export class PropertyReportWriter {
             try {
                 const style = await this.promptService.getEffectivePrompt();
                 const raw = await this.generateWithLlm(llm, data, style, fullRecord);
-                const clean = PropertyReportWriter.stripCommandMenu(this.stripEmojis(raw)).trim();
+                const clean = this.stripEmojis(raw).trim();
                 if (clean) return this.enforceFooter(clean);
                 console.warn("⚠️ PropertyReportWriter: empty LLM output — using deterministic fallback.");
             } catch (err) {
@@ -307,50 +306,6 @@ export class PropertyReportWriter {
             .replace(/\n*(every lead deserves|get more property info)[\s\S]*$/i, "")
             .trimEnd();
         return `${withoutTail}\n\n${PropertyReportWriter.FOOTER}`;
-    }
-
-    /**
-     * Remove the advertised "Next Commands" menu from the report OUTPUT
-     * (JAK-kill-report-menu). Zequi: it's too much info on every message — a fresh
-     * report should come back clean, with the property data + footer only.
-     *
-     * Enforced in CODE on the output — exactly like {@link stripEmojis} and
-     * {@link enforceFooter} — so it holds no matter what the admin-editable STYLE
-     * prompt says, AND so a report that was CACHED with the menu still re-serves
-     * clean (the cache path shares this same stripper). Static for that reuse.
-     *
-     * This removes only the ADVERTISEMENT: the "Next Commands" header and the
-     * "Text SKIP" / "Text COMP" call-to-action lines. The SKIP and COMP commands
-     * themselves are unaffected — a customer who texts SKIP/COMP still gets the
-     * owner contact / comps.
-     */
-    static stripCommandMenu(text: string): string {
-        // A line that belongs to the menu block under a "Next Commands" header:
-        // a bullet, or any line naming the SKIP/COMP commands.
-        const isMenuItem = (t: string): boolean =>
-            /^[-*•]/.test(t) || /\b(?:skip|comp)\b/i.test(t);
-        const lines = text.split("\n");
-        const kept: string[] = [];
-        for (let i = 0; i < lines.length; i++) {
-            const t = lines[i]!.trim();
-            // A "Next Commands" header opens the menu: drop it and the consecutive
-            // command/bullet lines beneath it (stopping at a blank line or any line
-            // that isn't a menu item, so the footer and real content are untouched).
-            if (/^next\s+commands?\b\s*:?\s*$/i.test(t)) {
-                while (i + 1 < lines.length) {
-                    const next = lines[i + 1]!.trim();
-                    if (next === "" || !isMenuItem(next)) break;
-                    i++;
-                }
-                continue;
-            }
-            // Belt-and-suspenders: a stray advertised command line even without the
-            // header ("Text SKIP for owner contact", "- Reply COMP for comparables").
-            if (/^[-*•]?\s*(?:text|reply|send)\s+(?:skip|comp)\b/i.test(t)) continue;
-            kept.push(lines[i]!);
-        }
-        // Collapse any blank-line run the removal left behind.
-        return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
     }
 
     /**
