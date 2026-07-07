@@ -227,8 +227,19 @@ export class JakeAssistantService {
         // provides a name/email is captured into their profile and answered — WITHOUT
         // blocking normal usage (an address/command falls through to the report path).
         // Returning customers with nothing pending are unaffected.
+        //
+        // JAK-onboarding-address-routing: the greeting-vs-address decision must NOT
+        // key off the strict inline parser (`address` above), which returns null when
+        // the address has PREAMBLE ("Hey Jake, look up this address 123 Main St") and
+        // so misclassifies an address-containing first text as a greeting → wrong intro.
+        // Instead we ATTEMPT ADDRESS RESOLUTION FIRST via the SAME orchestrator/LLM path
+        // the report flow uses (it handles preamble); the intro fires ONLY when that
+        // resolves NO address. Classify eagerly here so first contact can inspect the
+        // plan and, when an address IS present, reuse the very same plan for the report.
+        let plan: DispatchPlan | null = null;
         if (firstContact) {
-            if (!address) {
+            plan = await this.classify(input, phone, address);
+            if (!this.planResolvesAddress(plan)) {
                 const intro = await this.sendIntro(route, input, customer, phone);
                 return { ok: true, address: null, reply: intro ?? "", mode: route.mode, charged: 0 };
             }
@@ -239,13 +250,11 @@ export class JakeAssistantService {
 
         // 4. Classify intent + resolve references against memory (JAK-135). The
         //    router reads the recent window + the ordered resolved-address list and
-        //    returns a typed plan; we dispatch on it below.
-        const plan = await this.orchestrator.plan({
-            phone,
-            message: input.message,
-            parsedAddress: address,
-            isAffirmative: this.isAffirmativeOk(input.message),
-        });
+        //    returns a typed plan; we dispatch on it below. (First contact already
+        //    classified above to make the greeting-vs-address call; reuse that plan.)
+        if (!plan) {
+            plan = await this.classify(input, phone, address);
+        }
 
         const result = await this.dispatch(plan, {
             input,
@@ -256,6 +265,35 @@ export class JakeAssistantService {
             requestingMessageId: inboundId,
         });
         return { ...result, intent: plan.intent };
+    }
+
+    /**
+     * Classify one inbound message into a dispatch plan (JAK-135) via the router
+     * LLM. Factored out so BOTH the first-contact greeting-vs-address decision
+     * (JAK-onboarding-address-routing) and the normal report dispatch resolve the
+     * address through the exact SAME path — the lenient LLM resolver that handles
+     * preamble the strict inline parser misses.
+     */
+    private classify(input: JakeInboundMessage, phone: string, parsedAddress: string | null): Promise<DispatchPlan> {
+        return this.orchestrator.plan({
+            phone,
+            message: input.message,
+            parsedAddress,
+            isAffirmative: this.isAffirmativeOk(input.message),
+        });
+    }
+
+    /**
+     * JAK-onboarding-address-routing: does this plan resolve a concrete address to
+     * act on? The orchestrator only sets `targetEntity` for address-acting intents
+     * (property_report / skip_trace / comps) with a resolved target, so a genuine
+     * greeting ("hey", "hi") leaves it null. Used by the first-contact decision so a
+     * first message that CONTAINS an address — even behind preamble the strict inline
+     * parser misses ("Hey Jake, look up 123 Main St") — runs the report instead of the
+     * greeting intro.
+     */
+    private planResolvesAddress(plan: DispatchPlan): boolean {
+        return plan.targetEntity != null;
     }
 
     /**

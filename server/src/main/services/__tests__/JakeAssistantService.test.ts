@@ -2454,7 +2454,10 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       // No credits mentioned, no capability menu, no lookup.
       expect(result.reply.toLowerCase()).not.toContain("credit");
       expect(result.reply).not.toContain("Here's what I can do");
-      expect(orchestrator.plan).not.toHaveBeenCalled();
+      // JAK-onboarding-address-routing: the intro decision now ATTEMPTS address
+      // resolution via the orchestrator first (so preamble addresses aren't misread
+      // as greetings), so plan() IS consulted — but a true greeting resolves NO
+      // address, so nothing is looked up.
       expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
       expect(result.charged).toBe(0);
       expect(EMOJI_RE.test(result.reply)).toBe(false);
@@ -2472,6 +2475,79 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
 
       expect(sent().some((m) => m.includes("Welcome to Jake"))).toBe(false);
       expect(sent().some((m) => m.includes("this is Jake. Text me any address"))).toBe(false);
+    });
+
+    // JAK-onboarding-address-routing: a first message that CONTAINS an address behind
+    // PREAMBLE ("Hey Jake, look up this address 123 Main St") reads as null to the
+    // strict inline parser, so the old code sent the greeting intro instead of the
+    // report. The intro decision now attempts resolution via the SAME orchestrator/LLM
+    // path the report flow uses, so a resolvable address runs the report — no intro.
+    describe("first-contact address behind preamble runs the report, not the intro", () => {
+      // The LLM router resolves the address out of the preamble (the strict inline
+      // parser can't); mock plan() to mirror that so the assistant sees a real target.
+      const resolveViaLlm = (targetEntity: string) =>
+        orchestrator.plan.mockResolvedValue({
+          intent: "property_report",
+          targetEntity,
+          specialists: reportSpecialist(),
+          userFacingNote: "",
+        } as DispatchPlan);
+
+      it("EXACT repro: 'Hey Jake, look up this address 7704 Deer Run Rd Henryville Indiana' → REPORT, no intro", async () => {
+        firstContact();
+        resolveViaLlm("7704 Deer Run Rd, Henryville, IN");
+        realEstate.searchPropertyByAddress.mockResolvedValue({ address: "7704 Deer Run Rd" } as never);
+
+        const result = await service.handleInboundMessage({
+          contactId: "ct_1",
+          senderPhone: "+15559990000",
+          message: "Hey Jake, look up this address 7704 Deer Run Rd Henryville Indiana",
+        });
+
+        const messages = sent();
+        // The report is delivered + charged — NOT the greeting intro.
+        expect(messages.some((m) => m.includes("Jake Property Report"))).toBe(true);
+        expect(result.charged).toBe(1);
+        expect(messages.some((m) => m.includes("this is Jake. Text me any address"))).toBe(false);
+        // And credits stay silent (nothing announces a balance/grant on first contact).
+        expect(messages.some((m) => m.toLowerCase().includes("credit"))).toBe(false);
+      });
+
+      it.each([
+        ["hey can you look up 123 Main St", "123 Main St, Tampa, FL"],
+        ["what about 456 Oak Ave", "456 Oak Ave, Austin, TX"],
+      ])("preamble variant %p → report, not intro", async (message, resolved) => {
+        firstContact();
+        resolveViaLlm(resolved);
+        realEstate.searchPropertyByAddress.mockResolvedValue({ address: resolved } as never);
+
+        const result = await service.handleInboundMessage({
+          contactId: "ct_1",
+          senderPhone: "+15559990000",
+          message,
+        });
+
+        const messages = sent();
+        expect(messages.some((m) => m.includes("Jake Property Report"))).toBe(true);
+        expect(messages.some((m) => m.includes("this is Jake. Text me any address"))).toBe(false);
+        expect(result.charged).toBe(1);
+      });
+
+      it.each(["hey", "hi"])("plain greeting %p (NO address) still sends the intro ONLY", async (message) => {
+        firstContact();
+        // Default plan() mock returns chitchat with a null target for a non-address.
+
+        const result = await service.handleInboundMessage({
+          contactId: "ct_1",
+          senderPhone: "+15559990000",
+          message,
+        });
+
+        expect(result.reply).toContain("Hey, this is Jake. Text me any address and I'll tell you everything I know about it.");
+        expect(sent().length).toBe(1);
+        expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
+        expect(result.charged).toBe(0);
+      });
     });
 
     it("sends the onboarding email ask exactly ONCE, right after the 3rd report", async () => {
