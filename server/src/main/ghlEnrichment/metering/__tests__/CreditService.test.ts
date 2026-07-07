@@ -39,7 +39,7 @@ describe("CreditService", () => {
     store = mock<CreditLedgerStore>();
     creditSettings = mock<CreditSettingsService>();
     creditSettings.defaultGrant.mockImplementation(
-      async (type) => ({ report: 100, skiptrace: 10, comps: 10 }[type])
+      async (type) => ({ report: 50, skiptrace: 10, comps: 10 }[type])
     );
     service = newService();
   });
@@ -249,7 +249,7 @@ describe("CreditService", () => {
       expect(store.seedInitialBalance).toHaveBeenCalledWith({
         locationId: "acct_new",
         creditType: "report",
-        amount: 100,
+        amount: 50,
         reason: "manual_grant",
       });
       expect(store.seedInitialBalance).toHaveBeenCalledWith({

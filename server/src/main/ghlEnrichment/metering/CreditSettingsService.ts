@@ -47,7 +47,7 @@ export interface OutOfCreditsMessageView {
  * economics + the copy without a redeploy, with code defaults as the single
  * source of truth for the fallbacks.
  *
- *   report    — freely granted (default 100), still gated.
+ *   report    — freely granted (default 50), still gated.
  *   skiptrace — PAID (default opening grant 10).
  *   comps     — PAID (default opening grant 10).
  *
@@ -61,9 +61,14 @@ export interface OutOfCreditsMessageView {
  */
 @injectable()
 export class CreditSettingsService {
-  /** Code-default opening grants — MIRROR the seed in the JAK-161 migration. */
+  /**
+   * Code-default opening grants (the fallback when `app_settings` has no stored
+   * value). report=50 per JAK-report-default-50 — the JAK-161 seed of 100 was a
+   * voice-to-text slip; the corrective migration flips any still-100 stored value
+   * to 50, so the effective default matches this constant.
+   */
   static readonly DEFAULT_GRANTS: Readonly<Record<CreditType, number>> = {
-    report: 100,
+    report: 50,
     skiptrace: 10,
     comps: 10,
   };
@@ -94,7 +99,7 @@ export class CreditSettingsService {
 
   // ── New-customer default grants ─────────────────────────────────────────────
 
-  /** The effective opening grant for a bucket (default 100/10/10). Cached for the TTL. */
+  /** The effective opening grant for a bucket (default 50/10/10). Cached for the TTL. */
   async defaultGrant(type: CreditType): Promise<number> {
     const now = this.clock();
     const cached = this.grantCache.get(type);
