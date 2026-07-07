@@ -48,6 +48,7 @@ import { CompsMemoryService } from "./comps/CompsMemoryService.ts";
 import { CompsSettingsService } from "./comps/CompsSettingsService.ts";
 import { CompsSelectionEngine } from "./comps/CompsSelectionEngine.ts";
 import { OnboardingPromptService } from "./onboarding/OnboardingPromptService.ts";
+import { buildCreditBalanceMessage } from "./creditStatusMessage.ts";
 import {
     CapturedProfile,
     buildProfileAck,
@@ -105,6 +106,14 @@ const ACCOUNT_ON_HOLD_REPLY = [
 
 @injectable()
 export class JakeAssistantService {
+    /**
+     * The bare tokens that trigger the READ-ONLY credit-status reply
+     * (JAK-credit-keyword): 'credit'/'credits', case-insensitive + trimmed. Kept
+     * tight to exactly these two words (see {@link isCreditKeyword}) so an address
+     * or a phrase like "credit balance" is never mistaken for the status command.
+     */
+    private static readonly CREDIT_KEYWORDS = new Set(["credit", "credits"]);
+
     /** The bare tokens that count as a spend confirmation (JAK-138 unified confirm). */
     private static readonly AFFIRMATIVES = new Set([
         "ok",
@@ -201,6 +210,14 @@ export class JakeAssistantService {
         //    address (JAK-154) and enters the ordinal list for later references. The
         //    returned id links any resulting lookup snapshot back to this message.
         const inboundId = await this.rememberInbound(customer, phone, input.message, address, route);
+
+        // JAK-credit-keyword: 'credit'/'credits' is a READ-ONLY status command, not
+        // an address — recognized BEFORE the welcome + orchestrated dispatch paths so
+        // it reports the customer's balances instead of being routed as a report
+        // request. No charge, no deduction, no orchestrator call.
+        if (this.isCreditKeyword(input.message)) {
+            return this.replyCreditBalance({ input, route, customer, phone, firstContact });
+        }
 
         // JAK-first-text-welcome. On the FIRST-EVER text: send the welcome + seeded
         // credits announcement (no info ask), then STILL deliver their first report
@@ -1812,13 +1829,15 @@ export class JakeAssistantService {
      * hardcoded — the same values CreditService just seeded) and invite an address.
      * Deliberately does NOT ask for name/email — that ask is delayed to after the
      * 3rd report. Best-effort: a welcome hiccup must never block the first report.
+     * Returns the reply that was sent (so a first-contact 'credit' can surface it as
+     * its result, JAK-credit-keyword), or null if the welcome couldn't be built.
      */
     private async sendWelcome(
         route: TextRoute,
         input: JakeInboundMessage,
         customer: TextJakeCustomer,
         phone: string
-    ): Promise<void> {
+    ): Promise<string | null> {
         try {
             const [report, skiptrace, comps] = await Promise.all([
                 this.creditSettings.defaultGrant("report"),
@@ -1832,9 +1851,74 @@ export class JakeAssistantService {
                 input.contactId,
                 `Jake (text): new customer — sent welcome with ${report}/${skiptrace}/${comps} starting credits.`
             );
+            return reply;
         } catch (err) {
             console.error("⚠️ Jake welcome send failed:", this.errorSummary(err));
+            return null;
         }
+    }
+
+    // ── Credit-status keyword (JAK-credit-keyword) ────────────────────────────
+
+    /**
+     * True when the inbound is the bare status command 'credit'/'credits'
+     * (case-insensitive, trimmed). Non-letters are stripped before the match so
+     * "Credits!", " credit " etc. still count, while a phrase ("credit balance") or
+     * an address ("123 Credit St") collapses to something outside the keyword set —
+     * so the keyword never over-matches a real report request.
+     */
+    private isCreditKeyword(message: string): boolean {
+        const compact = String(message).trim().toLowerCase().replace(/[^a-z]/g, "");
+        return JakeAssistantService.CREDIT_KEYWORDS.has(compact);
+    }
+
+    /**
+     * Reply to a 'credit'/'credits' status command (JAK-credit-keyword). READ-ONLY:
+     * reports the three current per-bucket balances (report / skip-trace / comps) and
+     * the next reset date, and charges/deducts NOTHING.
+     *
+     * New-customer edge case: when the FIRST-EVER text is 'credit', the one-time
+     * welcome already announces the freshly-seeded starting balances and invites an
+     * address — that IS the balance answer — so we send only the welcome, not a
+     * second, redundant balance message.
+     */
+    private async replyCreditBalance(ctx: {
+        input: JakeInboundMessage;
+        route: TextRoute;
+        customer: TextJakeCustomer;
+        phone: string;
+        firstContact: boolean;
+    }): Promise<JakeInboundResult> {
+        const { input, route, customer, phone, firstContact } = ctx;
+
+        if (firstContact) {
+            const welcome = await this.sendWelcome(route, input, customer, phone);
+            return {
+                ok: true,
+                address: null,
+                reply: welcome ?? "",
+                mode: route.mode,
+                charged: 0,
+                intent: "credit_balance",
+            };
+        }
+
+        const balances = await this.credits.getBalances(customer.creditAccountId);
+        const reply = this.withFooter(
+            buildCreditBalanceMessage({
+                report: balances.report,
+                skiptrace: balances.skiptrace,
+                comps: balances.comps,
+                nextResetAt: customer.nextResetAt,
+            })
+        );
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        await this.writeStatusNote(
+            route,
+            input.contactId,
+            `Jake (text): reported credit balances (report ${balances.report}, skiptrace ${balances.skiptrace}, comps ${balances.comps}) — read-only, no charge.`
+        );
+        return { ok: true, address: null, reply, mode: route.mode, charged: 0, intent: "credit_balance" };
     }
 
     /**

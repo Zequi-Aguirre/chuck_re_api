@@ -166,6 +166,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     status: "active",
     reportCount: 0,
     onboardingAskedAt: null,
+    nextResetAt: new Date("2026-08-07T00:00:00Z"),
     creditAccountId: `acct_${phone}`,
     createdAt: new Date("2026-07-01T00:00:00Z"),
     modifiedAt: new Date("2026-07-01T00:00:00Z"),
@@ -2536,6 +2537,130 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(customers.captureProfile).not.toHaveBeenCalled();
       // Falls through to normal routing instead.
       expect(orchestrator.plan).toHaveBeenCalled();
+    });
+  });
+
+  describe("JAK-credit-keyword (READ-ONLY balance status)", () => {
+    const EMOJI_RE =
+      /[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2190}-\u{21FF}\u{2B00}-\u{2BFF}️]/u;
+    const sent = () => gateway.sendSms.mock.calls.map((c) => (c[0] as { message: string }).message);
+    // A returning customer with a known reset date and specific per-bucket balances.
+    const withBalances = (
+      balances: { report: number; skiptrace: number; comps: number },
+      over: Partial<TextJakeCustomer> = {}
+    ) => {
+      customers.resolveByPhoneWithCreation.mockResolvedValue({
+        customer: { ...customerFor("+15559990000"), ...over },
+        created: false,
+      });
+      credits.getBalances.mockResolvedValue(balances);
+    };
+
+    it("'credit' reports all three balances + the reset date, with no charge and no routing", async () => {
+      withBalances(
+        { report: 50, skiptrace: 10, comps: 10 },
+        { nextResetAt: new Date("2026-08-07T00:00:00Z") }
+      );
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "credit",
+      });
+
+      // Read the RIGHT customer's bucket balances.
+      expect(credits.getBalances).toHaveBeenCalledWith("acct_+15559990000");
+      const reply = sent().at(-1)!;
+      expect(reply).toContain("50 report credits");
+      expect(reply).toContain("10 skip trace credits");
+      expect(reply).toContain("10 comps credits");
+      expect(reply).toContain("They reset on August 7.");
+      expect(EMOJI_RE.test(reply)).toBe(false);
+      // Status command — never orchestrated as a report/address.
+      expect(orchestrator.plan).not.toHaveBeenCalled();
+      // READ-ONLY: nothing charged or deducted from any bucket.
+      expect(result.charged).toBe(0);
+      expect(credits.chargeForTextLookup).not.toHaveBeenCalled();
+      expect(credits.chargeForSkipTrace).not.toHaveBeenCalled();
+      expect(credits.chargeForComps).not.toHaveBeenCalled();
+      expect(credits.charge).not.toHaveBeenCalled();
+      expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
+      expect(result.intent).toBe("credit_balance");
+    });
+
+    it("also handles the plural 'Credits', case-insensitive and trimmed", async () => {
+      withBalances(
+        { report: 1, skiptrace: 0, comps: 3 },
+        { nextResetAt: new Date("2026-09-01T00:00:00Z") }
+      );
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "  Credits!  ",
+      });
+
+      const reply = sent().at(-1)!;
+      // Pluralization is per-bucket (1 credit vs 0/N credits).
+      expect(reply).toContain("1 report credit,");
+      expect(reply).toContain("0 skip trace credits");
+      expect(reply).toContain("3 comps credits");
+      expect(reply).toContain("They reset on September 1.");
+      expect(orchestrator.plan).not.toHaveBeenCalled();
+    });
+
+    it("omits the reset sentence when next_reset_at is unknown (null)", async () => {
+      withBalances({ report: 5, skiptrace: 3, comps: 4 }, { nextResetAt: null });
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "credit",
+      });
+
+      const reply = sent().at(-1)!;
+      expect(reply).toContain("You have 5 report credits, 3 skip trace credits, and 4 comps credits.");
+      expect(reply).not.toContain("reset");
+    });
+
+    it("does NOT over-match: a real address still routes to a property report", async () => {
+      // "123 Credit St" contains 'credit' but is not the bare keyword.
+      realEstate.searchPropertyByAddress.mockResolvedValue({ address: "123 Credit St" } as never);
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "123 Credit St, Springfield, IL 62704",
+      });
+
+      // Routed + priced as a normal report — the keyword path never fired.
+      expect(orchestrator.plan).toHaveBeenCalled();
+      expect(credits.getBalances).not.toHaveBeenCalled();
+      expect(result.charged).toBe(1);
+      expect(sent().at(-1)!).toContain("Jake Property Report");
+    });
+
+    it("new customer's FIRST-EVER text is 'credit': sends the welcome only, no charge", async () => {
+      customers.resolveByPhoneWithCreation.mockResolvedValue({
+        customer: customerFor("+15559990000"),
+        created: true,
+      });
+
+      const result = await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "credit",
+      });
+
+      const messages = sent();
+      // The welcome (which announces the seeded starting credits) is the answer.
+      expect(messages.some((m) => m.includes("Welcome to Jake"))).toBe(true);
+      // No SECOND, separate balance message and no balance read.
+      expect(messages.some((m) => m.startsWith("You have"))).toBe(false);
+      expect(credits.getBalances).not.toHaveBeenCalled();
+      expect(orchestrator.plan).not.toHaveBeenCalled();
+      expect(result.charged).toBe(0);
+      expect(result.intent).toBe("credit_balance");
     });
   });
 });
