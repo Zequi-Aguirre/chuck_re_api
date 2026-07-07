@@ -159,11 +159,11 @@ export class JakeAssistantService {
         const route = await this.resolveRoute(input);
 
         // JAK-148 two-level hold — enforced BEFORE any work (no orchestrator, no
-        // specialist, no charge). on_hold: GHL still forwards their texts, so Jake
-        // intercepts and replies a friendly hold notice. deactivated: GHL's "text
-        // Jake" field is unapproved so it should have stopped forwarding, but if an
-        // inbound still slips through we refuse to process it too (backstop).
-        // NEITHER path touches credits.
+        // specialist, no charge). Server-side only (JAK-remove-ghl-hold): the GHL
+        // automation filter that used to gate on the "text Jake" field is gone, so
+        // BOTH held states now reach Jake and are stopped here. on_hold: reply a
+        // friendly hold notice. deactivated: refuse to process. NEITHER path
+        // touches credits.
         if (customer.status !== "active") {
             return this.replyAccountHeld(input, route, customer, phone);
         }

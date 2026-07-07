@@ -152,50 +152,6 @@ describe("TextCustomerGhlSyncService", () => {
     });
   });
 
-  describe("setApproval (JAK-148 two-level hold)", () => {
-    it("deactivate flips 'text Jake' to an EMPTY (unapproved) value via upsert", async () => {
-      client.listCustomFields.mockResolvedValue([field({ id: "f_textjake", name: "text Jake" })]);
-      client.upsertContact.mockResolvedValue({ id: "ct_1" } as never);
-
-      const result = await build(true).setApproval(input, false);
-
-      // The approval field is cleared so GHL stops forwarding — value is empty,
-      // never the truthy approved value.
-      expect(client.upsertContact).toHaveBeenCalledWith(JAKE_LOC, {
-        phone: "+17865274077",
-        firstName: "Ada",
-        lastName: "Lovelace",
-        email: "ada@example.com",
-        customFields: [{ id: "f_textjake", value: "" }],
-      });
-      expect(result.status).toBe("synced");
-      expect(result.ghlContactId).toBe("ct_1");
-    });
-
-    it("reactivate re-approves 'text Jake' (truthy value) via upsert", async () => {
-      client.listCustomFields.mockResolvedValue([field({ id: "f_textjake", name: "text Jake" })]);
-      client.upsertContact.mockResolvedValue({ id: "ct_1" } as never);
-
-      await build(true).setApproval(input, true);
-
-      expect(client.upsertContact.mock.calls[0][1].customFields).toEqual([
-        { id: "f_textjake", value: true },
-      ]);
-    });
-
-    it("in DEV, skips the field flip entirely — no read, no write to GHL (JAK-110)", async () => {
-      const guard = guardWith(false);
-      const service = new TextCustomerGhlSyncService(client, configWith(JAKE_LOC), guard);
-
-      const result = await service.setApproval(input, false);
-
-      expect(result.status).toBe("skipped");
-      expect(client.listCustomFields).not.toHaveBeenCalled();
-      expect(client.upsertContact).not.toHaveBeenCalled();
-      expect(guard.echoSkipped).toHaveBeenCalled();
-    });
-  });
-
   describe("findContact", () => {
     it("returns an existing contact for prefill (find-existing-contact-by-phone)", async () => {
       client.findContactByPhone.mockResolvedValue({

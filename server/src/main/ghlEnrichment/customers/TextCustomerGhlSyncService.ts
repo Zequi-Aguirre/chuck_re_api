@@ -44,36 +44,20 @@ export class TextCustomerGhlSyncService {
    * so the customer's DB row (the billing identity) is never lost to a sync hiccup.
    */
   async syncCustomer(input: TextCustomerSyncInput): Promise<TextCustomerSyncResult> {
-    return this.applyApproval(input, true);
+    return this.applyApproval(input);
   }
 
   /**
-   * Flip the "text Jake" approval field for a two-level hold (JAK-148), reusing
-   * the SAME find-or-create-by-phone + field-lookup path as {@link syncCustomer}:
-   *  - `approved = true`  — re-approve so GHL forwards their texts to Jake again
-   *    (reactivate, from either hold state).
-   *  - `approved = false` — set the field EMPTY / not-allowed so GHL STOPS
-   *    forwarding their texts entirely (hard deactivate).
-   * Idempotent (upsert by phone) and gated by the same JAK-110 write-safety
-   * boundary, so dev never writes to a real sub-account. Never throws.
+   * Upsert the customer's contact by phone and set the "text Jake" field
+   * approved. The one place the onboarding contact write happens (JAK-147), so
+   * the write-safety gate, field lookup, and error handling stay in one place.
+   *
+   * NOTE (JAK-remove-ghl-hold): this only ever APPROVES. The old two-level hold
+   * (JAK-148) also flipped this field to empty on deactivate, but Zequi removed
+   * the GHL automation filter that read it, so hold/deactivate is now server-side
+   * only and never writes GHL. The un-approve path was removed with it.
    */
-  async setApproval(
-    input: TextCustomerSyncInput,
-    approved: boolean
-  ): Promise<TextCustomerSyncResult> {
-    return this.applyApproval(input, approved);
-  }
-
-  /**
-   * Upsert the customer's contact by phone and set the "text Jake" field to the
-   * approved (`true`) or unapproved (empty) value. The one place the contact
-   * write happens for both onboarding (JAK-147) and the two-level hold (JAK-148),
-   * so the write-safety gate, field lookup, and error handling never drift apart.
-   */
-  private async applyApproval(
-    input: TextCustomerSyncInput,
-    approved: boolean
-  ): Promise<TextCustomerSyncResult> {
+  private async applyApproval(input: TextCustomerSyncInput): Promise<TextCustomerSyncResult> {
     const locationId = this.jakeLocationId();
     if (!locationId) {
       return {
@@ -112,15 +96,13 @@ export class TextCustomerGhlSyncService {
         firstName: input.firstName,
         lastName: input.lastName,
         email: input.email,
-        customFields: [{ id: fieldId, value: approved ? APPROVED_VALUE : UNAPPROVED_VALUE }],
+        customFields: [{ id: fieldId, value: APPROVED_VALUE }],
       });
 
       return {
         status: "synced",
         ghlContactId: contact?.id ?? null,
-        message: approved
-          ? "Synced to GoHighLevel and approved to text Jake."
-          : "Updated in GoHighLevel — texts to Jake are turned off.",
+        message: "Synced to GoHighLevel and approved to text Jake.",
       };
     } catch (err) {
       return this.classifyError(err);
@@ -211,11 +193,6 @@ export class TextCustomerGhlSyncService {
  * boolean/approval field; GHL takes a raw `true` for a checkbox/approval value,
  * mirroring how the enrichment write-back sets its CHECKBOX fields (JAK-108). */
 const APPROVED_VALUE = true;
-
-/** The value that marks a contact NOT approved to text Jake (JAK-148) — an empty
- * value clears the approval field so GHL's automation stops forwarding their
- * texts, mirroring how the approval is SET with a truthy value above. */
-const UNAPPROVED_VALUE = "";
 
 /** The human name of the pre-existing approval field, as shown in GHL. */
 export const TEXT_JAKE_FIELD_NAME = "text Jake";

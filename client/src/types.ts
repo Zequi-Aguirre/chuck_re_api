@@ -94,20 +94,19 @@ export type CreditType = "report" | "skiptrace" | "comps";
 export type CreditBalances = Record<CreditType, number>;
 
 /**
- * The two-level hold state of a text customer (JAK-148):
- *  - `active`      — normal: GHL forwards their texts; Jake processes + charges.
- *  - `on_hold`     — SOFT hold: GHL still forwards, but Jake replies a hold notice
- *                    and does no work / no charge.
- *  - `deactivated` — HARD off: the "text Jake" field is unapproved so GHL stops
- *                    forwarding entirely.
+ * The two-level hold state of a text customer (JAK-148). Enforcement is
+ * SERVER-SIDE ONLY (JAK-remove-ghl-hold) — Jake decides whether to respond; no
+ * GHL field is written on a status change:
+ *  - `active`      — normal: Jake processes + charges.
+ *  - `on_hold`     — SOFT hold: Jake replies a hold notice, no work / no charge.
+ *  - `deactivated` — HARD off: Jake refuses to process the inbound, no charge.
  */
 export type TextCustomerStatus = "active" | "on_hold" | "deactivated";
 
-/** The result of a hold status change (JAK-148): updated view + GHL flip outcome. */
+/** The result of a hold status change (JAK-148): the updated view. Server-side
+ * only (JAK-remove-ghl-hold) — no GHL write, so there is no sync outcome. */
 export interface TextCustomerStatusResult {
   customer: TextCustomerView;
-  /** The "text Jake" field-flip outcome; null for the soft on_hold path. */
-  sync: TextCustomerSyncResult | null;
 }
 
 /** The editable identity + profile for a text customer (JAK-146). */

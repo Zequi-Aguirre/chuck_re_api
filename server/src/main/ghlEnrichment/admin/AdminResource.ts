@@ -530,29 +530,29 @@ export class AdminResource {
   }
 
   /**
-   * Put a text customer on SOFT hold (JAK-148). GHL keeps forwarding their texts
-   * (the "text Jake" field stays approved); Jake intercepts inbound server-side
-   * and replies a hold notice without processing or charging. No GHL write, no
-   * credit change. 404 if no live customer has that id.
+   * Put a text customer on SOFT hold (JAK-148). Server-side only
+   * (JAK-remove-ghl-hold): no GHL write. Jake intercepts the inbound and replies
+   * a hold notice without processing or charging. No credit change. 404 if no
+   * live customer has that id.
    */
   private async holdTextCustomer(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     return this.changeTextCustomerStatus(req, res, next, "on_hold");
   }
 
   /**
-   * HARD-deactivate a text customer (JAK-148). Flips the GHL "text Jake" field to
-   * unapproved via the JAK-147 sync so GHL STOPS forwarding their texts entirely;
-   * a backstop still refuses to process/charge if one slips through. No credit
-   * change. 404 if no live customer has that id.
+   * HARD-deactivate a text customer (JAK-148). Server-side only
+   * (JAK-remove-ghl-hold): no GHL write. Jake refuses to process/charge a
+   * deactivated customer's inbound. No credit change. 404 if no live customer
+   * has that id.
    */
   private async deactivateTextCustomer(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     return this.changeTextCustomerStatus(req, res, next, "deactivated");
   }
 
   /**
-   * Reactivate a text customer (JAK-148) from either hold state. Re-approves the
-   * GHL "text Jake" field so GHL forwards again and clears the hold so normal
-   * processing resumes. No credit change. 404 if no live customer has that id.
+   * Reactivate a text customer (JAK-148) from either hold state. Server-side only
+   * (JAK-remove-ghl-hold): no GHL write. Clears the hold so normal processing
+   * resumes. No credit change. 404 if no live customer has that id.
    */
   private async reactivateTextCustomer(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
     return this.changeTextCustomerStatus(req, res, next, "active");
@@ -574,7 +574,7 @@ export class AdminResource {
       if (!result) {
         return res.status(404).json({ error: "unknown customer" });
       }
-      return res.status(200).json({ customer: result.customer, sync: result.sync });
+      return res.status(200).json({ customer: result.customer });
     } catch (err) {
       return next(err);
     }

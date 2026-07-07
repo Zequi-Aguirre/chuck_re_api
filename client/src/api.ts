@@ -159,10 +159,11 @@ export const api = {
       body: JSON.stringify({ phone }),
     });
   },
-  // Two-level hold controls (JAK-148). None of these touch credits.
-  //   hold       — SOFT: GHL keeps forwarding; Jake replies "on hold", no charge.
-  //   deactivate — HARD: flip "text Jake" unapproved so GHL stops forwarding.
-  //   reactivate — back to active: re-approve so normal processing resumes.
+  // Two-level hold controls (JAK-148). Server-side only (JAK-remove-ghl-hold):
+  // none of these write to GHL and none touch credits.
+  //   hold       — SOFT: Jake replies "on hold", no charge.
+  //   deactivate — HARD: Jake refuses to process the inbound, no charge.
+  //   reactivate — back to active: normal processing resumes.
   async holdTextCustomer(id: string): Promise<TextCustomerStatusResult> {
     return request<TextCustomerStatusResult>(`/text-customers/${encodeURIComponent(id)}/hold`, {
       method: "POST",
