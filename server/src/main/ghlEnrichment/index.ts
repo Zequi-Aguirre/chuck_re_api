@@ -141,3 +141,28 @@ export type {
   AdminTokenPayload,
   AdminConnectionView,
 } from "./admin/AdminTypes";
+
+// JAK-184 — deterministic REAPI PropertyDetail → GHL auto-enrichment formatter
+// (epic JAK-180). Pure functions, NO LLM: maps a PropertyDetail subject into the
+// logical auto-enrichment field VALUES (deal signals, MLS status, equity/mortgage,
+// ownership, structure). JAK-185 maps these logical keys → per-location GHL field
+// ids; JAK-183 wires it into the worker. This ticket ships the formatter + types
+// + tests only — no endpoint/worker wiring.
+export {
+  formatPropertyDetailEnrichment,
+  extractEnrichmentSubject,
+} from "./autoEnrichment/PropertyDetailEnrichmentFormatter";
+export type { FormatEnrichmentOptions } from "./autoEnrichment/PropertyDetailEnrichmentFormatter";
+export type {
+  AutoEnrichmentFields,
+  MlsStatus,
+  ReapiPropertyDetailSubject,
+  ReapiPropertyDetailEnvelope,
+  ReapiEnrichmentOwnerInfo,
+  ReapiEnrichmentPropertyInfo,
+  ReapiEnrichmentLotInfo,
+  ReapiEnrichmentForeclosureItem,
+  ReapiEnrichmentLastSale,
+  ReapiEnrichmentAddress,
+  ReapiNumberLike,
+} from "./autoEnrichment/AutoEnrichmentTypes";
