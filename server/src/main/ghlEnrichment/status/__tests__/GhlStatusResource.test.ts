@@ -16,6 +16,7 @@ const summary = (): LocationStatusSummary => ({
     baseUrl: "https://services.leadconnectorhq.com",
     phoneNumberCount: 1,
     provisionedFieldCount: 7,
+    autoEnrichmentEnabled: false,
     installedAt: new Date("2026-06-01T00:00:00Z"),
     updatedAt: new Date("2026-06-15T00:00:00Z"),
   },

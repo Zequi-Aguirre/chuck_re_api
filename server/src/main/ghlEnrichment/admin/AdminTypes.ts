@@ -88,6 +88,8 @@ export interface AdminConnectionView {
   baseUrl: string;
   phoneNumbers: string[];
   status: "active" | "inactive";
+  /** JAK-186 — per-location auto-enrichment toggle (opt-in) as the admin sees it. */
+  autoEnrichmentEnabled: boolean;
   /** Constant mask — proves a key is stored without ever revealing it. */
   apiKeyMasked: string;
   createdAt: Date;

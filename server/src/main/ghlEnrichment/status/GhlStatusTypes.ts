@@ -23,6 +23,8 @@ export interface ConnectionStatusView {
   phoneNumberCount: number;
   /** Provisioned (non-deleted) Jake custom fields — the write-back targets (JAK-105). */
   provisionedFieldCount: number;
+  /** JAK-186 — per-location contact-created auto-enrichment toggle (opt-in). */
+  autoEnrichmentEnabled: boolean;
   installedAt: Date;
   updatedAt: Date;
 }

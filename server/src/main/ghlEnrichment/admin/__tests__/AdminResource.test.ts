@@ -30,6 +30,7 @@ const view = (over: Partial<AdminConnectionView> = {}): AdminConnectionView => (
   baseUrl: "https://services.leadconnectorhq.com",
   phoneNumbers: ["+15551234567"],
   status: "active",
+  autoEnrichmentEnabled: false,
   apiKeyMasked: API_KEY_MASK,
   createdAt: new Date("2026-07-01T00:00:00Z"),
   updatedAt: new Date("2026-07-01T00:00:00Z"),
@@ -171,6 +172,33 @@ describe("AdminResource", () => {
         "loc_1",
         expect.objectContaining({ apiKey: undefined, baseUrl: "https://x.co" })
       );
+    });
+
+    it("persists the JAK-186 auto-enrichment toggle and returns the updated view", async () => {
+      connections.update.mockResolvedValue(view({ autoEnrichmentEnabled: true }));
+
+      const res = await asAdmin(
+        request(app)
+          .put("/api/admin/connections/loc_1")
+          .send({ autoEnrichmentEnabled: true })
+      );
+
+      expect(res.status).toBe(200);
+      expect(connections.update).toHaveBeenCalledWith(
+        "loc_1",
+        expect.objectContaining({ autoEnrichmentEnabled: true })
+      );
+      expect(res.body.connection.autoEnrichmentEnabled).toBe(true);
+    });
+
+    it("rejects a non-boolean auto-enrichment toggle (400)", async () => {
+      const res = await asAdmin(
+        request(app)
+          .put("/api/admin/connections/loc_1")
+          .send({ autoEnrichmentEnabled: "yes" })
+      );
+      expect(res.status).toBe(400);
+      expect(connections.update).not.toHaveBeenCalled();
     });
   });
 

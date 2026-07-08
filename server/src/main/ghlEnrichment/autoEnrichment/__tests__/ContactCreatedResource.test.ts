@@ -27,6 +27,9 @@ const connection = (over: Partial<GhlConnection> = {}): GhlConnection => ({
   baseUrl: "https://services.leadconnectorhq.com",
   phoneNumbers: [],
   status: "active",
+  // JAK-186: the default fixture is a fully enabled location so the enqueue-path
+  // tests exercise the happy case; individual tests override this to gate.
+  autoEnrichmentEnabled: true,
   createdAt: new Date("2026-07-01T00:00:00Z"),
   updatedAt: new Date("2026-07-01T00:00:00Z"),
   ...over,
@@ -179,7 +182,7 @@ describe("ContactCreatedResource", () => {
     });
   });
 
-  describe("unknown / inactive location → 200 ack, no enqueue", () => {
+  describe("not-enabled location → 200 ack, no enqueue", () => {
     it("acks without enqueuing when the location has no connection", async () => {
       connections.getByLocationId.mockResolvedValue(null);
       const res = await post(validBody);
@@ -189,13 +192,35 @@ describe("ContactCreatedResource", () => {
       expect(queue.enqueue).not.toHaveBeenCalled();
     });
 
-    it("acks without enqueuing when the connection is inactive (JAK-186 seam)", async () => {
+    it("acks without enqueuing when the connection is inactive", async () => {
       connections.getByLocationId.mockResolvedValue(connection({ status: "inactive" }));
       const res = await post(validBody);
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ status: "skipped", reason: "enrichment not enabled" });
       expect(queue.enqueue).not.toHaveBeenCalled();
+    });
+
+    it("acks without enqueuing when the JAK-186 toggle is OFF (active but not enabled)", async () => {
+      connections.getByLocationId.mockResolvedValue(
+        connection({ status: "active", autoEnrichmentEnabled: false })
+      );
+      const res = await post(validBody);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ status: "skipped", reason: "enrichment not enabled" });
+      expect(queue.enqueue).not.toHaveBeenCalled();
+    });
+
+    it("enqueues when the JAK-186 toggle is ON (active AND enabled)", async () => {
+      connections.getByLocationId.mockResolvedValue(
+        connection({ status: "active", autoEnrichmentEnabled: true })
+      );
+      const res = await post(validBody);
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ status: "queued", contactId: "contact_1" });
+      expect(queue.enqueue).toHaveBeenCalledTimes(1);
     });
   });
 

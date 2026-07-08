@@ -15,6 +15,8 @@ export interface GhlConnectionRow {
   phone_numbers: string[];
   status: GhlConnectionStatus;
   text_mode: GhlTextMode;
+  /** JAK-186 — per-location contact-created auto-enrichment toggle (opt-in). */
+  auto_enrichment_enabled: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -26,6 +28,7 @@ export interface InsertGhlConnectionRow {
   phone_numbers: string[];
   status: GhlConnectionStatus;
   text_mode: GhlTextMode;
+  auto_enrichment_enabled: boolean;
 }
 
 export interface UpdateGhlConnectionRow {
@@ -34,6 +37,7 @@ export interface UpdateGhlConnectionRow {
   phone_numbers?: string[];
   status?: GhlConnectionStatus;
   text_mode?: GhlTextMode;
+  auto_enrichment_enabled?: boolean;
 }
 
 /**
@@ -51,8 +55,8 @@ export class GhlConnectionStore {
   async insert(row: InsertGhlConnectionRow): Promise<GhlConnectionRow> {
     const result = await this.db.query<GhlConnectionRow>(
       `INSERT INTO ghl_connections
-         (location_id, api_key_encrypted, base_url, phone_numbers, status, text_mode)
-       VALUES ($1, $2, $3, $4, $5, $6)
+         (location_id, api_key_encrypted, base_url, phone_numbers, status, text_mode, auto_enrichment_enabled)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        RETURNING *`,
       [
         row.location_id,
@@ -61,6 +65,7 @@ export class GhlConnectionStore {
         row.phone_numbers,
         row.status,
         row.text_mode,
+        row.auto_enrichment_enabled,
       ]
     );
     return result.rows[0];
@@ -121,6 +126,10 @@ export class GhlConnectionStore {
     if (patch.text_mode !== undefined) {
       sets.push(`text_mode = $${i++}`);
       values.push(patch.text_mode);
+    }
+    if (patch.auto_enrichment_enabled !== undefined) {
+      sets.push(`auto_enrichment_enabled = $${i++}`);
+      values.push(patch.auto_enrichment_enabled);
     }
 
     // Nothing to change → return the current row unchanged.

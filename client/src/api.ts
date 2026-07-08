@@ -108,11 +108,24 @@ export const api = {
   },
   async updateConnection(
     locationId: string,
-    patch: { apiKey?: string; baseUrl?: string; phoneNumbers?: string[] }
+    patch: {
+      apiKey?: string;
+      baseUrl?: string;
+      phoneNumbers?: string[];
+      // JAK-186 — flip the per-location auto-enrichment toggle.
+      autoEnrichmentEnabled?: boolean;
+    }
   ): Promise<void> {
     await request(`/connections/${encodeURIComponent(locationId)}`, {
       method: "PUT",
       body: JSON.stringify(patch),
+    });
+  },
+  /** JAK-186 — set the per-location auto-enrichment toggle on/off. */
+  async setAutoEnrichment(locationId: string, enabled: boolean): Promise<void> {
+    await request(`/connections/${encodeURIComponent(locationId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ autoEnrichmentEnabled: enabled }),
     });
   },
   async deactivate(locationId: string): Promise<void> {
