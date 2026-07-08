@@ -172,6 +172,15 @@ export { EnrichmentFieldWriteBackService } from "./autoEnrichment/EnrichmentFiel
 export type { EnrichmentWriteBackResult } from "./autoEnrichment/EnrichmentFieldWriteBackService";
 export { GhlEnrichmentFieldResolver } from "./autoEnrichment/GhlEnrichmentFieldResolver";
 export type { FieldIdMap } from "./autoEnrichment/GhlEnrichmentFieldResolver";
+
+// JAK-182 — inbound "contact created" webhook receiver (epic JAK-180). Auth +
+// validate + normalize + enqueue onto the JAK-181 queue; the worker (JAK-183)
+// does the REAPI lookup + write-back.
+export { ContactCreatedResource } from "./autoEnrichment/ContactCreatedResource";
+export type {
+  RawContactCreatedBody,
+  ParsedContactCreated,
+} from "./autoEnrichment/ContactCreatedTypes";
 export {
   AUTO_ENRICHMENT_FIELDS,
   normalizeFieldName,
