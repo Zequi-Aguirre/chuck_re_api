@@ -57,6 +57,7 @@ import { RedisContainer } from "../../config/RedisContainer";
 import { AutoEnrichmentQueueService } from "../autoEnrichment/AutoEnrichmentQueueService";
 import { GhlEnrichmentFieldResolver } from "../autoEnrichment/GhlEnrichmentFieldResolver";
 import { EnrichmentFieldWriteBackService } from "../autoEnrichment/EnrichmentFieldWriteBackService";
+import { ContactCreatedResource } from "../autoEnrichment/ContactCreatedResource";
 
 /**
  * DI registration for the GHL enrichment module.
@@ -396,5 +397,14 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   }
   if (!c.isRegistered(EnrichmentFieldWriteBackService)) {
     c.registerSingleton(EnrichmentFieldWriteBackService);
+  }
+
+  // JAK-182 — inbound "contact created" webhook receiver (epic JAK-180). The GHL
+  // workflow POSTs here on a new contact; the resource authenticates
+  // (MASTER_API_KEY, like the SMS inbound route), resolves the location via the
+  // JAK-102 store, and enqueues onto the JAK-181 queue — never enriching inline.
+  // Mounted (Redis-gated) in JakeServer; the worker (JAK-183) drains the queue.
+  if (!c.isRegistered(ContactCreatedResource)) {
+    c.registerSingleton(ContactCreatedResource);
   }
 };

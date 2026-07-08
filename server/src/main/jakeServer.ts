@@ -21,6 +21,7 @@ import {
     AdminAuthResource,
     AdminResource,
     AdminAuthService,
+    ContactCreatedResource,
 } from "./ghlEnrichment/index.ts";
 // Services
 import { LeadEnrichmentQueueService } from "./services/LeadEnrichmentQueueService.ts";
@@ -80,6 +81,17 @@ export class JakeServer {
         // on a queue-less boot. Mounted BEFORE /api/ghl so its more specific
         // /api/ghl/status prefix is matched first.
         this.app.use("/api/ghl/status", container.resolve(GhlStatusResource).router);
+
+        // 🪝 JAK-182 — inbound auto-enrichment "contact created" webhook. A GHL
+        // workflow POSTs here on a new contact; the resource enqueues onto the
+        // JAK-181 BullMQ queue, so it's gated on Redis (like /webhooks/ghl). Uses
+        // the app-wide express.json() (no raw-body/HMAC needed — it's MASTER_API_KEY
+        // guarded, mirroring the SMS inbound route).
+        if (redisConfigured) {
+            this.app.use("/ghl", container.resolve(ContactCreatedResource).router);
+        } else {
+            console.log("ℹ️ Redis not configured — skipping /ghl/contact-created enrichment webhook.");
+        }
 
         // 🧠 API Routes
         this.app.use("/api/mailer", container.resolve(MailerResource).router);
