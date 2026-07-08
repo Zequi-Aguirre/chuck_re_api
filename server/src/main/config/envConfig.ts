@@ -34,6 +34,15 @@ export class EnvConfig {
     // that at once a month — so a frequent, cheap cadence is safe. Default hourly.
     public readonly monthlyRestoreQueueName: string;
     public readonly monthlyRestoreCron: string;
+    // GHL auto-enrichment queue (JAK-181, epic JAK-180). Its OWN BullMQ queue on
+    // the SAME Upstash Redis, sized so a bulk upload (e.g. a 500-lead file) drains
+    // without hammering REAPI/GHL. `concurrency` caps how many jobs the JAK-183
+    // worker runs at once (rate-limit budget); `maxAttempts` + `backoffMs` set the
+    // exponential-retry policy for transient 429/5xx. All Doppler-overridable.
+    public readonly autoEnrichQueueName: string;
+    public readonly autoEnrichConcurrency: number;
+    public readonly autoEnrichMaxAttempts: number;
+    public readonly autoEnrichBackoffMs: number;
 
     // 🏡 RealEstate API
     public readonly realEstateApiKey: string;
@@ -132,6 +141,14 @@ export class EnvConfig {
         // per-customer guard makes a frequent cadence a no-op for anyone not due.
         this.monthlyRestoreQueueName = process.env.MONTHLY_RESTORE_QUEUE_NAME ?? "monthly-credit-restore";
         this.monthlyRestoreCron = process.env.MONTHLY_RESTORE_CRON ?? "0 * * * *";
+        // GHL auto-enrichment queue (JAK-181). Sensible defaults: a modest
+        // concurrency cap that respects REAPI + GHL rate limits, bounded retries
+        // with a 2s exponential-backoff base. `positiveIntFromEnv` rejects a
+        // malformed override rather than silently zeroing the cap / disabling retries.
+        this.autoEnrichQueueName = process.env.AUTO_ENRICH_QUEUE_NAME ?? "ghl-auto-enrichment";
+        this.autoEnrichConcurrency = positiveIntFromEnv(process.env.AUTO_ENRICH_CONCURRENCY, 5);
+        this.autoEnrichMaxAttempts = positiveIntFromEnv(process.env.AUTO_ENRICH_MAX_ATTEMPTS, 3);
+        this.autoEnrichBackoffMs = positiveIntFromEnv(process.env.AUTO_ENRICH_BACKOFF_MS, 2000);
 
         // 🏡 RealEstate API
         this.realEstateApiKey = process.env.RE_API_KEY!;
