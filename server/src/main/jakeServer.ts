@@ -22,6 +22,7 @@ import {
     AdminResource,
     AdminAuthService,
     ContactCreatedResource,
+    AutoEnrichmentQueueService,
 } from "./ghlEnrichment/index.ts";
 // Services
 import { LeadEnrichmentQueueService } from "./services/LeadEnrichmentQueueService.ts";
@@ -132,6 +133,18 @@ export class JakeServer {
                 console.log("💳 Monthly Credit-Restore Worker started successfully.");
             } catch (err) {
                 console.error("❌ Failed to start Monthly Credit-Restore Worker:", err);
+            }
+
+            // 🏠 JAK-183 — auto-enrichment worker (epic JAK-180). Drains the JAK-181
+            // queue the /ghl/contact-created endpoint enqueues onto and runs the
+            // pipeline (REAPI → JAK-184 format → JAK-185 write-back). Gated on Redis
+            // (BullMQ), same lifecycle as the workers above.
+            try {
+                const autoEnrichQueue = container.resolve(AutoEnrichmentQueueService);
+                await autoEnrichQueue.startWorker();
+                console.log("🏠 Auto-Enrichment Worker started successfully.");
+            } catch (err) {
+                console.error("❌ Failed to start Auto-Enrichment Worker:", err);
             }
         } else {
             console.log(

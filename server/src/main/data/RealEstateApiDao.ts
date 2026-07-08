@@ -365,6 +365,36 @@ export class RealEstateApiDao {
   }
 
   /**
+   * PropertyDetail SUBJECT by a single address string, WITHOUT swallowing
+   * transient errors — for the JAK-183 auto-enrichment worker.
+   *
+   * The worker must tell a valid "no match" (→ `null`, a TERMINAL outcome it
+   * finishes cleanly) apart from a transient REAPI 429/5xx (which must PROPAGATE
+   * so BullMQ retries). The other PropertyDetail helpers here catch-and-return-null
+   * on ANY error, collapsing those two cases; this one deliberately lets the
+   * {@link paidPost} error bubble so the caller can classify it. Existing callers
+   * are unaffected — this is a new method, not a behavior change.
+   *
+   * Reuses the SAME {@link paidPost} chokepoint (JAK-110 dev-safety): off
+   * prod/staging it returns the deterministic no-match dev mock and never spends /
+   * hits real REAPI. Returns the raw subject (`data.data`) for the JAK-184
+   * formatter, or `null` when the address can't be parsed or REAPI has no match.
+   */
+  public async getPropertyDetailSubjectByAddress(
+    addressString: string
+  ): Promise<RealEstateApiPropertyDetail | null> {
+    const parts = this.parseAddress(addressString);
+    if (!parts) return null;
+
+    const data = await this.paidPost<RealEstateApiPropertyDetailResponse>(
+      "/v2/PropertyDetail",
+      parts,
+      RealEstateApiDao.DEV_MOCK_DETAIL
+    );
+    return data.data ?? null;
+  }
+
+  /**
    * Fallback: PropertyDetail by property ID.
    */
   public async getPropertyDetailById(id: number): Promise<RealEstateApiPropertyDetail | null> {

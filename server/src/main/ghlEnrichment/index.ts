@@ -181,6 +181,16 @@ export type {
   RawContactCreatedBody,
   ParsedContactCreated,
 } from "./autoEnrichment/ContactCreatedTypes";
+
+// JAK-183 — auto-enrichment worker/processor (epic JAK-180). Consumes the JAK-181
+// queue and runs the full pipeline (address → REAPI → JAK-184 format → JAK-185
+// write). AutoEnrichmentQueueService.startWorker() (JAK-181, extended here) owns
+// the BullMQ Worker lifecycle; JakeServer starts it Redis-gated.
+export { AutoEnrichmentWorker } from "./autoEnrichment/AutoEnrichmentWorker";
+export type {
+  AutoEnrichmentOutcome,
+  AutoEnrichmentOutcomeStatus,
+} from "./autoEnrichment/AutoEnrichmentWorkerTypes";
 export {
   AUTO_ENRICHMENT_FIELDS,
   normalizeFieldName,

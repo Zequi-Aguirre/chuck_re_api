@@ -58,6 +58,7 @@ import { AutoEnrichmentQueueService } from "../autoEnrichment/AutoEnrichmentQueu
 import { GhlEnrichmentFieldResolver } from "../autoEnrichment/GhlEnrichmentFieldResolver";
 import { EnrichmentFieldWriteBackService } from "../autoEnrichment/EnrichmentFieldWriteBackService";
 import { ContactCreatedResource } from "../autoEnrichment/ContactCreatedResource";
+import { AutoEnrichmentWorker } from "../autoEnrichment/AutoEnrichmentWorker";
 
 /**
  * DI registration for the GHL enrichment module.
@@ -406,5 +407,15 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   // Mounted (Redis-gated) in JakeServer; the worker (JAK-183) drains the queue.
   if (!c.isRegistered(ContactCreatedResource)) {
     c.registerSingleton(ContactCreatedResource);
+  }
+
+  // JAK-183 — auto-enrichment worker/processor (epic JAK-180). The integration
+  // piece: consumes the JAK-181 queue and runs job → address → REAPI PropertyDetail
+  // (the EXISTING RealEstateApiDao, auto-resolved) → JAK-184 formatter → JAK-185
+  // write-back. AutoEnrichmentQueueService.startWorker() owns the BullMQ Worker
+  // lifecycle and delegates each job here; JakeServer starts it (Redis-gated) like
+  // the JAK-072 monthly-restore worker. Singleton so its deps' caches are shared.
+  if (!c.isRegistered(AutoEnrichmentWorker)) {
+    c.registerSingleton(AutoEnrichmentWorker);
   }
 };
