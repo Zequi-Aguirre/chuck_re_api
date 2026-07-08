@@ -53,6 +53,8 @@ import { AdminConnectionService } from "../admin/AdminConnectionService";
 import { AdminTextCustomerService } from "../admin/AdminTextCustomerService";
 import { AdminAuthResource } from "../admin/AdminAuthResource";
 import { AdminResource } from "../admin/AdminResource";
+import { RedisContainer } from "../../config/RedisContainer";
+import { AutoEnrichmentQueueService } from "../autoEnrichment/AutoEnrichmentQueueService";
 
 /**
  * DI registration for the GHL enrichment module.
@@ -365,5 +367,18 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
 
   if (!c.isRegistered(AdminResource)) {
     c.registerSingleton(AdminResource);
+  }
+
+  // JAK-181 — GHL auto-enrichment queue (epic JAK-180). A BullMQ queue on the
+  // SAME Upstash Redis as the monthly-restore worker (shared RedisContainer, NO
+  // new provider) with the injectable enqueue() producer for bulk uploads. Lazy
+  // singletons: the queue connects to Redis only when first resolved (JAK-182's
+  // producer), so a queue-less boot stays clean. The worker processor (JAK-183)
+  // and the intake endpoint (JAK-182) are separate tickets.
+  if (!c.isRegistered(RedisContainer)) {
+    c.registerSingleton(RedisContainer);
+  }
+  if (!c.isRegistered(AutoEnrichmentQueueService)) {
+    c.registerSingleton(AutoEnrichmentQueueService);
   }
 };

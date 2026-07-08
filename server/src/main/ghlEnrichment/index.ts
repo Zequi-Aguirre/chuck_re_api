@@ -153,6 +153,16 @@ export {
   extractEnrichmentSubject,
 } from "./autoEnrichment/PropertyDetailEnrichmentFormatter";
 export type { FormatEnrichmentOptions } from "./autoEnrichment/PropertyDetailEnrichmentFormatter";
+// JAK-181 — GHL auto-enrichment job queue (epic JAK-180). The Redis/BullMQ
+// foundation for bulk enrichment: an injectable enqueue() producer on the SAME
+// Upstash Redis as the monthly-restore worker, with a concurrency cap,
+// exponential-backoff retries, and dedupe by contactId. Producer endpoint
+// (JAK-182) and worker processor (JAK-183) build on this.
+export { AutoEnrichmentQueueService } from "./autoEnrichment/AutoEnrichmentQueueService";
+export type {
+  AutoEnrichmentJobPayload,
+  AutoEnrichmentAddress,
+} from "./autoEnrichment/AutoEnrichmentQueueTypes";
 export type {
   AutoEnrichmentFields,
   MlsStatus,
