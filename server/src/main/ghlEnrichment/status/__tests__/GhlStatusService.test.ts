@@ -17,6 +17,7 @@ const connectionRow = (over: Partial<GhlConnectionRow> = {}): GhlConnectionRow =
   phone_numbers: ["+15551230001", "+15551230002"],
   status: "active",
   text_mode: "gateway",
+  auto_enrichment_enabled: false,
   created_at: new Date("2026-06-01T00:00:00Z"),
   updated_at: new Date("2026-06-15T00:00:00Z"),
   ...over,
@@ -70,7 +71,13 @@ describe("GhlStatusService", () => {
     it("folds grouped scans into a per-location summary (connection + balance + counts)", async () => {
       connections.listAll.mockResolvedValue([
         connectionRow({ location_id: "loc_1" }),
-        connectionRow({ location_id: "loc_2", status: "inactive", phone_numbers: [] }),
+        connectionRow({
+          location_id: "loc_2",
+          status: "inactive",
+          phone_numbers: [],
+          // JAK-186: the toggle maps independently of connection status.
+          auto_enrichment_enabled: true,
+        }),
       ]);
       customFields.countByLocationForAll.mockResolvedValue([
         { location_id: "loc_1", count: 7 },
@@ -95,6 +102,7 @@ describe("GhlStatusService", () => {
         baseUrl: "https://services.leadconnectorhq.com",
         phoneNumberCount: 2,
         provisionedFieldCount: 7,
+        autoEnrichmentEnabled: false,
         installedAt: new Date("2026-06-01T00:00:00Z"),
         updatedAt: new Date("2026-06-15T00:00:00Z"),
       });
@@ -111,6 +119,9 @@ describe("GhlStatusService", () => {
       // loc_2 has no fields, no events — everything zero-fills cleanly.
       expect(loc2.connection.provisionedFieldCount).toBe(0);
       expect(loc2.connection.phoneNumberCount).toBe(0);
+      // JAK-186: the service surfaces the per-location toggle it read from the row.
+      expect(loc1.connection.autoEnrichmentEnabled).toBe(false);
+      expect(loc2.connection.autoEnrichmentEnabled).toBe(true);
       expect(loc2.creditBalance).toBe(0);
       expect(loc2.outcomes.total).toBe(0);
     });

@@ -104,15 +104,19 @@ export class ContactCreatedResource {
   }
 
   /**
-   * Whether we should enrich contacts for this location.
+   * Whether we should enrich contacts for this location. Requires BOTH:
+   *   - an active (connected, installed) sub-account, AND
+   *   - the JAK-186 per-location auto-enrichment toggle turned ON (opt-in).
    *
-   * TODO(JAK-186): replace this with the per-location enable/disable TOGGLE. For
-   * now the gate is simply "an active connection exists" — a connected, installed
-   * sub-account. When JAK-186 lands, AND its `enrichmentEnabled` flag in here (the
-   * single seam the toggle check slots into).
+   * When off (unknown / inactive / toggle-disabled), the caller acks 200
+   * `{status:"skipped"}` without enqueuing — GHL's workflow is never errored.
    */
   private isEnrichmentEnabled(connection: GhlConnection | null): connection is GhlConnection {
-    return connection !== null && connection.status === "active";
+    return (
+      connection !== null &&
+      connection.status === "active" &&
+      connection.autoEnrichmentEnabled === true
+    );
   }
 
   /**

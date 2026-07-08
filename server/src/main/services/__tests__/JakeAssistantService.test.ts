@@ -150,6 +150,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     phoneNumbers: ["+15551110000"],
     status: "active",
     textMode: "own_number",
+    autoEnrichmentEnabled: false,
     createdAt: new Date("2026-07-01T00:00:00Z"),
     updatedAt: new Date("2026-07-01T00:00:00Z"),
     ...over,

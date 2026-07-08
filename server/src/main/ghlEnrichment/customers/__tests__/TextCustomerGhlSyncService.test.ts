@@ -291,6 +291,7 @@ describe("TextCustomerGhlSyncService", () => {
         phoneNumbers: [],
         status: "active",
         textMode: "own_number",
+        autoEnrichmentEnabled: false,
         createdAt: new Date(0),
         updatedAt: new Date(0),
       });

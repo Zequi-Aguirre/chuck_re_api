@@ -31,6 +31,12 @@ export interface GhlConnection {
    * always populates it from the row); treat absent as the 'gateway' default.
    */
   textMode?: GhlTextMode;
+  /**
+   * JAK-186 — per-location contact-created auto-enrichment toggle (epic JAK-180).
+   * OPT-IN: false until an admin turns it on. The JAK-182 endpoint enqueues an
+   * enrichment job only when the connection is active AND this is true.
+   */
+  autoEnrichmentEnabled: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -51,6 +57,8 @@ export interface CreateGhlConnectionInput {
   status?: GhlConnectionStatus;
   /** Text mode for this customer (JAK-115). Defaults to 'gateway' when omitted. */
   textMode?: GhlTextMode;
+  /** JAK-186 auto-enrichment toggle. Defaults to false (opt-in) when omitted. */
+  autoEnrichmentEnabled?: boolean;
 }
 
 /**
@@ -64,4 +72,6 @@ export interface UpdateGhlConnectionInput {
   status?: GhlConnectionStatus;
   /** Switch this customer between 'gateway' and 'own_number' text mode (JAK-115). */
   textMode?: GhlTextMode;
+  /** Flip the JAK-186 per-location auto-enrichment toggle on/off. */
+  autoEnrichmentEnabled?: boolean;
 }

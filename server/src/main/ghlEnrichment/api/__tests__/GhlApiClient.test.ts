@@ -55,6 +55,7 @@ const conn = (over: Partial<GhlConnection> = {}): GhlConnection => ({
   baseUrl: "https://services.leadconnectorhq.com",
   phoneNumbers: [],
   status: "active",
+  autoEnrichmentEnabled: false,
   createdAt: new Date("2026-07-01T00:00:00Z"),
   updatedAt: new Date("2026-07-01T00:00:00Z"),
   ...over,

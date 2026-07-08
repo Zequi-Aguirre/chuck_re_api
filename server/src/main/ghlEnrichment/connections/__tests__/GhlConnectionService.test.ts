@@ -17,6 +17,7 @@ describe("GhlConnectionService", () => {
     phone_numbers: ["+15551234567"],
     status: "active",
     text_mode: "gateway",
+    auto_enrichment_enabled: false,
     created_at: new Date("2026-07-01T00:00:00Z"),
     updated_at: new Date("2026-07-01T00:00:00Z"),
     ...over,
@@ -43,8 +44,27 @@ describe("GhlConnectionService", () => {
     const inserted = store.insert.mock.calls[0][0];
     expect(inserted.api_key_encrypted).not.toContain("plaintext-key");
     expect(inserted.status).toBe("active"); // defaulted
+    // JAK-186: auto-enrichment is opt-in — a new connection defaults to OFF.
+    expect(inserted.auto_enrichment_enabled).toBe(false);
     // Round-trips back to plaintext for the caller.
     expect(conn.apiKey).toBe("plaintext-key");
+  });
+
+  it("maps the auto-enrichment flag through on read (JAK-186)", async () => {
+    store.findByLocationId.mockResolvedValue(row({ auto_enrichment_enabled: true }));
+    const conn = await service.getByLocationId("loc_abc");
+    expect(conn?.autoEnrichmentEnabled).toBe(true);
+  });
+
+  it("flips the auto-enrichment toggle on update (JAK-186)", async () => {
+    store.update.mockImplementation(async (_loc, patch) =>
+      row({ auto_enrichment_enabled: patch.auto_enrichment_enabled ?? false })
+    );
+
+    const conn = await service.updateConnection("loc_abc", { autoEnrichmentEnabled: true });
+
+    expect(store.update.mock.calls[0][1].auto_enrichment_enabled).toBe(true);
+    expect(conn?.autoEnrichmentEnabled).toBe(true);
   });
 
   it("resolves by location id and decrypts the key", async () => {

@@ -18,6 +18,8 @@ import Card from "@mui/material/Card";
 import CardContent from "@mui/material/CardContent";
 import Chip from "@mui/material/Chip";
 import Link from "@mui/material/Link";
+import Switch from "@mui/material/Switch";
+import FormControlLabel from "@mui/material/FormControlLabel";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import { api } from "../api";
@@ -119,6 +121,45 @@ export function ConnectionDetailPage() {
           <Field label="Provisioned fields" value={String(connection.provisionedFieldCount)} />
           <Field label="Connected" value={new Date(connection.installedAt).toLocaleString()} />
         </Grid>
+
+        <Divider sx={{ my: 2 }} />
+
+        {/* JAK-186 — per-sub-account auto-enrichment toggle. Opt-in: OFF until an
+            operator turns it on, so connecting an account never silently starts
+            enriching (+ spending) on every new contact. flexWrap keeps the label
+            + switch on-screen on a phone. */}
+        <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1, mb: 2 }}>
+          <Box sx={{ flexGrow: 1, minWidth: 0, pr: 1 }}>
+            <Typography variant="subtitle2" fontWeight={700}>
+              Auto-enrich new contacts
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              When on, a new GHL contact in this sub-account is enriched automatically.
+            </Typography>
+          </Box>
+          <FormControlLabel
+            sx={{ flexShrink: 0, m: 0 }}
+            labelPlacement="start"
+            control={
+              <Switch
+                checked={connection.autoEnrichmentEnabled}
+                disabled={busy}
+                onChange={(e) =>
+                  runAction(async () => {
+                    await api.setAutoEnrichment(connection.locationId, e.target.checked);
+                    await load();
+                  })
+                }
+                inputProps={{ "aria-label": "Auto-enrich new contacts" }}
+              />
+            }
+            label={
+              <Typography variant="body2" sx={{ mr: 1 }}>
+                {connection.autoEnrichmentEnabled ? "On" : "Off"}
+              </Typography>
+            }
+          />
+        </Box>
 
         <Divider sx={{ my: 2 }} />
 

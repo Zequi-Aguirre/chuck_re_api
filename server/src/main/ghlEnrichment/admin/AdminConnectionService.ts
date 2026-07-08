@@ -21,6 +21,8 @@ export interface UpdateConnectionInput {
   apiKey?: string;
   baseUrl?: string;
   phoneNumbers?: string[];
+  /** JAK-186 — flip the per-location auto-enrichment toggle on/off. */
+  autoEnrichmentEnabled?: boolean;
 }
 
 /**
@@ -66,6 +68,7 @@ export class AdminConnectionService {
       apiKey: patch.apiKey,
       baseUrl: patch.baseUrl,
       phoneNumbers: patch.phoneNumbers,
+      autoEnrichmentEnabled: patch.autoEnrichmentEnabled,
     });
     return conn ? toView(conn) : null;
   }
@@ -120,6 +123,7 @@ function toView(conn: GhlConnection): AdminConnectionView {
     baseUrl: conn.baseUrl,
     phoneNumbers: conn.phoneNumbers,
     status: conn.status,
+    autoEnrichmentEnabled: conn.autoEnrichmentEnabled,
     apiKeyMasked: API_KEY_MASK,
     createdAt: conn.createdAt,
     updatedAt: conn.updatedAt,

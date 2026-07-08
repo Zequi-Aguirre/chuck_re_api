@@ -23,6 +23,8 @@ export interface ConnectionStatusView {
   baseUrl: string;
   phoneNumberCount: number;
   provisionedFieldCount: number;
+  /** JAK-186 — per-location contact-created auto-enrichment toggle (opt-in). */
+  autoEnrichmentEnabled: boolean;
   installedAt: string;
   updatedAt: string;
 }

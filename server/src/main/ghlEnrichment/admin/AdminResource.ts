@@ -367,11 +367,19 @@ export class AdminResource {
         return res.status(400).json({ error: "apiKey cannot be blank" });
       }
 
+      // JAK-186 — the per-location auto-enrichment toggle. Only a real boolean
+      // changes it; any other value (or absence) leaves the stored flag as-is.
+      const autoEnrichRaw = req.body?.autoEnrichmentEnabled;
+      if (autoEnrichRaw !== undefined && typeof autoEnrichRaw !== "boolean") {
+        return res.status(400).json({ error: "autoEnrichmentEnabled must be a boolean" });
+      }
+
       const view = await this.connections.update(locationId, {
         apiKey: apiKeyRaw !== undefined ? String(apiKeyRaw).trim() : undefined,
         baseUrl: req.body?.baseUrl !== undefined ? str(req.body.baseUrl) : undefined,
         phoneNumbers:
           req.body?.phoneNumbers !== undefined ? phoneList(req.body.phoneNumbers) : undefined,
+        autoEnrichmentEnabled: autoEnrichRaw as boolean | undefined,
       });
       if (!view) return res.status(404).json({ error: "unknown location" });
       return res.status(200).json({ connection: view });

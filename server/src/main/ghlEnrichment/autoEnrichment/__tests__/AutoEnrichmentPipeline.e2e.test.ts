@@ -47,6 +47,7 @@ const connection = (): GhlConnection => ({
   baseUrl: "https://services.leadconnectorhq.com",
   phoneNumbers: [],
   status: "active",
+  autoEnrichmentEnabled: true, // JAK-186: enabled so the pipeline runs end-to-end
   createdAt: new Date("2026-07-01T00:00:00Z"),
   updatedAt: new Date("2026-07-01T00:00:00Z"),
 });
