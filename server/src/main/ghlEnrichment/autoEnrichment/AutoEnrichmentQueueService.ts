@@ -32,11 +32,12 @@
  * registration — the queue is constructed only when this service is first
  * resolved (JAK-182), which happens only on a Redis-configured boot.
  */
-import { Queue, JobsOptions } from "bullmq";
+import { Queue, Worker, JobsOptions } from "bullmq";
 import { injectable, inject } from "tsyringe";
 import { EnvConfig } from "../../config/envConfig";
 import { RedisContainer } from "../../config/RedisContainer";
 import { AutoEnrichmentJobPayload } from "./AutoEnrichmentQueueTypes";
+import { AutoEnrichmentWorker } from "./AutoEnrichmentWorker";
 
 @injectable()
 export class AutoEnrichmentQueueService {
@@ -56,7 +57,8 @@ export class AutoEnrichmentQueueService {
 
   constructor(
     private readonly env: EnvConfig,
-    @inject(RedisContainer) private readonly redis: RedisContainer
+    @inject(RedisContainer) private readonly redis: RedisContainer,
+    @inject(AutoEnrichmentWorker) private readonly processor: AutoEnrichmentWorker
   ) {
     this.queueName = env.autoEnrichQueueName;
     this.concurrency = env.autoEnrichConcurrency;
@@ -100,6 +102,48 @@ export class AutoEnrichmentQueueService {
       // Last so a caller can never override the dedupe key.
       jobId: payload.contactId,
     });
+  }
+
+  /**
+   * Start the BullMQ Worker that drains this queue (JAK-183). Each job runs the
+   * full pipeline via {@link AutoEnrichmentWorker.process}; the pipeline THROWS on
+   * a transient REAPI/GHL error so BullMQ retries it with the queue's configured
+   * exponential backoff (`attempts`/`backoff` above). Respects the configured
+   * {@link concurrency} cap (the REAPI/GHL rate-limit budget).
+   *
+   * Wired the same way as the JAK-072 monthly-restore + lead-enrichment workers:
+   * started from JakeServer ONLY when Redis is configured, and a per-job failure
+   * only fails that job — the worker keeps consuming. Reuses the shared
+   * RedisContainer client; NO new Redis connection.
+   */
+  public async startWorker(): Promise<void> {
+    try {
+      const worker = new Worker<AutoEnrichmentJobPayload>(
+        this.queueName,
+        async (job) => {
+          console.log(`🧠 [auto-enrichment] processing job ${job.id}`);
+          return this.processor.process(job.data);
+        },
+        {
+          concurrency: this.concurrency,
+          connection: {
+            ...this.redis.redis.options,
+            maxRetriesPerRequest: null,
+            lazyConnect: true,
+          } as any,
+        }
+      );
+
+      worker.on("failed", (job, err) =>
+        console.error(`💥 [auto-enrichment] job ${job?.id} failed:`, err?.message)
+      );
+
+      console.log(
+        `🧠 Auto-Enrichment Worker started (concurrency ${this.concurrency}) on ${this.queueName}`
+      );
+    } catch (err) {
+      console.error("❌ Failed to start Auto-Enrichment Worker:", err);
+    }
   }
 
   /** Close the underlying BullMQ queue (releases its Redis resources). */

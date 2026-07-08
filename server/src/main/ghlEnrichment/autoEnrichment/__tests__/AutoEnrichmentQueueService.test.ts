@@ -24,12 +24,17 @@ jest.mock("bullmq", () => ({
 import { Queue, Worker, JobsOptions } from "bullmq";
 import { AutoEnrichmentQueueService } from "../AutoEnrichmentQueueService";
 import { AutoEnrichmentJobPayload } from "../AutoEnrichmentQueueTypes";
+import { AutoEnrichmentWorker } from "../AutoEnrichmentWorker";
 import { EnvConfig } from "../../../config/envConfig";
 import { RedisContainer } from "../../../config/RedisContainer";
 
 /** A fake ioredis client shape — only `.options` is read by the service/worker. */
 const fakeRedisContainer = (): RedisContainer =>
   ({ redis: { options: { host: "fake", port: 6379 } } } as unknown as RedisContainer);
+
+/** A stub processor — the JAK-183 pipeline is tested in its own suite. */
+const fakeProcessor = (): AutoEnrichmentWorker =>
+  ({ process: jest.fn() } as unknown as AutoEnrichmentWorker);
 
 /** A partial EnvConfig with just the auto-enrichment knobs the service reads. */
 const fakeEnv = (overrides: Partial<EnvConfig> = {}): EnvConfig =>
@@ -42,7 +47,7 @@ const fakeEnv = (overrides: Partial<EnvConfig> = {}): EnvConfig =>
   } as unknown as EnvConfig);
 
 const makeService = (env: EnvConfig = fakeEnv()) =>
-  new AutoEnrichmentQueueService(env, fakeRedisContainer());
+  new AutoEnrichmentQueueService(env, fakeRedisContainer(), fakeProcessor());
 
 const basePayload = (
   overrides: Partial<AutoEnrichmentJobPayload> = {}
@@ -71,7 +76,7 @@ describe("AutoEnrichmentQueueService construction", () => {
 
   it("reuses the shared RedisContainer ioredis client (no new connection)", () => {
     const redis = fakeRedisContainer();
-    new AutoEnrichmentQueueService(fakeEnv(), redis);
+    new AutoEnrichmentQueueService(fakeEnv(), redis, fakeProcessor());
     const opts = mockQueueCtor.mock.calls[0][1] as { connection: unknown };
     expect(opts.connection).toBe((redis as unknown as { redis: unknown }).redis);
   });
