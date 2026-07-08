@@ -163,6 +163,23 @@ export type {
   AutoEnrichmentJobPayload,
   AutoEnrichmentAddress,
 } from "./autoEnrichment/AutoEnrichmentQueueTypes";
+
+// JAK-185 — GHL custom-field write-back (epic JAK-180). Writes a JAK-184 formatter
+// result onto a contact's custom fields, overwriting each; auto-discovers field
+// ids BY NAME (Eric's prompt creates them) + caches the map per location. The
+// JAK-183 worker consumes writeEnrichmentFields().
+export { EnrichmentFieldWriteBackService } from "./autoEnrichment/EnrichmentFieldWriteBackService";
+export type { EnrichmentWriteBackResult } from "./autoEnrichment/EnrichmentFieldWriteBackService";
+export { GhlEnrichmentFieldResolver } from "./autoEnrichment/GhlEnrichmentFieldResolver";
+export type { FieldIdMap } from "./autoEnrichment/GhlEnrichmentFieldResolver";
+export {
+  AUTO_ENRICHMENT_FIELDS,
+  normalizeFieldName,
+} from "./autoEnrichment/AutoEnrichmentFieldCatalog";
+export type {
+  AutoEnrichmentFieldDef,
+  AutoEnrichmentFieldKey,
+} from "./autoEnrichment/AutoEnrichmentFieldCatalog";
 export type {
   AutoEnrichmentFields,
   MlsStatus,

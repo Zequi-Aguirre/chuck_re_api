@@ -55,6 +55,8 @@ import { AdminAuthResource } from "../admin/AdminAuthResource";
 import { AdminResource } from "../admin/AdminResource";
 import { RedisContainer } from "../../config/RedisContainer";
 import { AutoEnrichmentQueueService } from "../autoEnrichment/AutoEnrichmentQueueService";
+import { GhlEnrichmentFieldResolver } from "../autoEnrichment/GhlEnrichmentFieldResolver";
+import { EnrichmentFieldWriteBackService } from "../autoEnrichment/EnrichmentFieldWriteBackService";
 
 /**
  * DI registration for the GHL enrichment module.
@@ -380,5 +382,19 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   }
   if (!c.isRegistered(AutoEnrichmentQueueService)) {
     c.registerSingleton(AutoEnrichmentQueueService);
+  }
+
+  // JAK-185 — GHL custom-field write-back (epic JAK-180). Writes a JAK-184
+  // formatter result onto a contact's custom fields, overwriting each so the
+  // contact stays current. The resolver auto-discovers field ids BY NAME (Eric's
+  // prompt creates the fields, so we never hand-enter ids) and caches the map per
+  // location; the service reuses the JAK-104 client (per-location JAK-102 creds +
+  // the JAK-110 write gate). Singletons so the resolver's cache is shared. The
+  // JAK-183 worker calls the write-back; the JAK-182 endpoint is separate.
+  if (!c.isRegistered(GhlEnrichmentFieldResolver)) {
+    c.registerSingleton(GhlEnrichmentFieldResolver);
+  }
+  if (!c.isRegistered(EnrichmentFieldWriteBackService)) {
+    c.registerSingleton(EnrichmentFieldWriteBackService);
   }
 };
