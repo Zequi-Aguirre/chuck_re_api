@@ -30,3 +30,14 @@ export function applyChosenFooter(
   if (!reply.endsWith(defaultFooter)) return reply;
   return reply.slice(0, reply.length - defaultFooter.length) + chosenFooter;
 }
+
+/**
+ * Return `reply` with a trailing `defaultFooter` (and the blank-line separator in
+ * front of it) removed — for the `footer: false` send path used by CREDIT / system
+ * notices (out-of-credits, credit balance), which must go out with NO footer
+ * (JAK-188 refinement). A no-op when the reply doesn't end with the default footer.
+ */
+export function stripTrailingFooter(reply: string, defaultFooter: string): string {
+  if (!reply.endsWith(defaultFooter)) return reply;
+  return reply.slice(0, reply.length - defaultFooter.length).replace(/\s+$/, "");
+}

@@ -310,7 +310,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     // expect the two-line default footer) hold; the swap is then a no-op.
     footers.getRandomActiveFooter.mockResolvedValue(PropertyReportWriter.FOOTER);
     // Per-feature out-of-credits copy (JAK-161): echo the bucket so a test can
-    // assert the RIGHT message went out (the sender appends the JAK-158 footer).
+    // assert the RIGHT message went out. JAK-188: credit notices are footer-less.
     creditSettings.outOfCreditsMessage.mockImplementation(
       async (type) => `You're out of ${type} credits. To get more, contact an admin.`
     );
@@ -348,6 +348,49 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       onboardingPrompt,
       footers
     );
+  });
+
+  describe("JAK-188 refinement: footer on RESULT replies, NOT credit/system notices", () => {
+    const CUSTOM_FOOTER = "Text Jake now.\nGoTextJake.com";
+    const DEFAULT_FOOTER = "Every Lead Deserves Jake.\nGoTextJake.com/CRM";
+    const lastSent = () =>
+      (gateway.sendSms.mock.calls.at(-1)![0] as { message: string }).message;
+
+    it("a delivered property REPORT gets the random ACTIVE footer (swapped in)", async () => {
+      // A non-default footer is active this message; the writer emits the canonical
+      // default footer, which the sender swaps for the chosen one.
+      footers.getRandomActiveFooter.mockResolvedValue(CUSTOM_FOOTER);
+      reportWriter.write.mockResolvedValue(
+        `Jake Property Report\n123 Main St\n\n${DEFAULT_FOOTER}`
+      );
+      realEstate.searchPropertyByAddress.mockResolvedValue({
+        address: "123 Main St, Springfield, IL 62704",
+      } as never);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "123 Main St, Springfield, IL 62704",
+      });
+
+      expect(lastSent().endsWith(CUSTOM_FOOTER)).toBe(true);
+      expect(lastSent()).not.toContain("Every Lead Deserves Jake.");
+    });
+
+    it("the report out-of-credits notice has NO footer — not even the random active one", async () => {
+      footers.getRandomActiveFooter.mockResolvedValue(CUSTOM_FOOTER);
+      credits.hasCreditsForTextLookup.mockResolvedValue(false);
+
+      await service.handleInboundMessage({
+        contactId: "ct_1",
+        senderPhone: "+15559990000",
+        message: "123 Main St, Springfield, IL 62704",
+      });
+
+      expect(lastSent()).toContain("out of report credits");
+      expect(lastSent()).not.toContain("GoTextJake.com");
+      expect(lastSent()).not.toContain(CUSTOM_FOOTER);
+    });
   });
 
   describe("gateway mode (default, master key)", () => {
@@ -805,6 +848,11 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
       expect(credits.chargeForTextLookup).not.toHaveBeenCalled();
       expect(gateway.createContactNote).toHaveBeenCalledWith("ct_1", expect.stringContaining("out of report credits"));
+      // JAK-188 refinement: the REPORT out-of-credits notice carries NO footer.
+      const ooc = (gateway.sendSms.mock.calls.at(-1)![0] as { message: string }).message;
+      expect(ooc).toContain("out of report credits");
+      expect(ooc).not.toContain("Every Lead Deserves Jake.");
+      expect(ooc).not.toContain("GoTextJake.com");
     });
 
     it("no address: guidance reply, no lookup, no charge", async () => {
@@ -1260,7 +1308,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(credits.chargeForSkipTrace).not.toHaveBeenCalled();
       // JAK-161: the admin-editable SKIPTRACE out-of-credits message (bucket-specific).
       expect(sent()).toContain("out of skiptrace credits");
-      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
+      // JAK-188 refinement: credit/system notices go out with NO footer.
+      expect(sent()).not.toContain("Every Lead Deserves Jake.");
+      expect(sent()).not.toContain("GoTextJake.com/CRM");
     });
 
     it("a run that finds NO contact info → no charge, no snapshot", async () => {
@@ -1565,7 +1615,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(credits.chargeForComps).not.toHaveBeenCalled();
       // JAK-161: the admin-editable COMPS out-of-credits message (bucket-specific).
       expect(sent()).toContain("out of comps credits");
-      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
+      // JAK-188 refinement: credit/system notices go out with NO footer.
+      expect(sent()).not.toContain("Every Lead Deserves Jake.");
+      expect(sent()).not.toContain("GoTextJake.com/CRM");
     });
 
     it("a run that finds NO comparable sales → no charge, no snapshot", async () => {
@@ -2663,6 +2715,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(reply).toContain("10 comps credits");
       expect(reply).toContain("They reset on August 7.");
       expect(EMOJI_RE.test(reply)).toBe(false);
+      // JAK-188 refinement: the credit-balance notice carries NO footer.
+      expect(reply).not.toContain("Every Lead Deserves Jake.");
+      expect(reply).not.toContain("GoTextJake.com");
       // Status command — never orchestrated as a report/address.
       expect(orchestrator.plan).not.toHaveBeenCalled();
       // READ-ONLY: nothing charged or deducted from any bucket.

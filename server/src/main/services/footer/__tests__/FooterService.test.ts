@@ -3,7 +3,7 @@ import { FooterService } from "../FooterService";
 import { FooterStore } from "../FooterStore";
 import { PropertyReportWriter } from "../../PropertyReportWriter";
 import { FooterRow } from "../FooterTypes";
-import { applyChosenFooter } from "../footerText";
+import { applyChosenFooter, stripTrailingFooter } from "../footerText";
 
 const row = (over: Partial<FooterRow> = {}): FooterRow => ({
   id: "11111111-1111-1111-1111-111111111111",
@@ -144,6 +144,22 @@ describe("applyChosenFooter (sender swap)", () => {
     const reply = `${DEFAULT} (mentioned)\n\nBody\n\n${DEFAULT}`;
     expect(applyChosenFooter(reply, chosen, DEFAULT)).toBe(
       `${DEFAULT} (mentioned)\n\nBody\n\n${chosen}`
+    );
+  });
+});
+
+describe("stripTrailingFooter (footer:false send path)", () => {
+  const DEFAULT = PropertyReportWriter.FOOTER;
+
+  it("removes a trailing default footer AND its leading blank-line separator", () => {
+    expect(stripTrailingFooter(`Out of report credits.\n\n${DEFAULT}`, DEFAULT)).toBe(
+      "Out of report credits."
+    );
+  });
+
+  it("leaves a reply that has no footer untouched", () => {
+    expect(stripTrailingFooter("Out of comps credits.", DEFAULT)).toBe(
+      "Out of comps credits."
     );
   });
 });
