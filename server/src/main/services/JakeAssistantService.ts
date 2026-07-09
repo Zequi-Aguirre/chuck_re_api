@@ -48,6 +48,8 @@ import { CompsMemoryService } from "./comps/CompsMemoryService.ts";
 import { CompsSettingsService } from "./comps/CompsSettingsService.ts";
 import { CompsSelectionEngine } from "./comps/CompsSelectionEngine.ts";
 import { OnboardingPromptService } from "./onboarding/OnboardingPromptService.ts";
+import { FooterService } from "./footer/FooterService.ts";
+import { applyChosenFooter } from "./footer/footerText.ts";
 import { buildCreditBalanceMessage } from "./creditStatusMessage.ts";
 import {
     CapturedProfile,
@@ -145,7 +147,8 @@ export class JakeAssistantService {
         private readonly compsSettings: CompsSettingsService,
         private readonly disambiguation: DisambiguationMemoryService,
         private readonly compsEngine: CompsSelectionEngine,
-        private readonly onboardingPrompt: OnboardingPromptService
+        private readonly onboardingPrompt: OnboardingPromptService,
+        private readonly footers: FooterService
     ) {}
 
     /**
@@ -2099,12 +2102,23 @@ export class JakeAssistantService {
         phone: string,
         reply: string
     ): Promise<void> {
-        await route.send(contactId, reply);
+        // JAK-188: this is the single funnel EVERY real reply passes through, so it
+        // owns the footer. The reply arrives ending in the canonical default footer
+        // (JAK-157/158); swap it for a uniformly-random ACTIVE footer chosen PER
+        // OUTBOUND MESSAGE. With zero active footers the pick IS the default, so the
+        // swap is a no-op and behavior matches day-1. The short "on it" ack has no
+        // footer and is left untouched. Memory records exactly what was sent.
+        const outbound = applyChosenFooter(
+            reply,
+            await this.footers.getRandomActiveFooter(),
+            PropertyReportWriter.FOOTER
+        );
+        await route.send(contactId, outbound);
         try {
             await this.memory.appendOutbound({
                 customerId: customer.id,
                 phone,
-                body: reply,
+                body: outbound,
                 tenantLocationId: route.locationId ?? null,
                 textMode: route.mode,
             });

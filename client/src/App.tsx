@@ -14,6 +14,7 @@ import { CompsSettingsPage } from "./pages/CompsSettingsPage";
 import { CompsSelectionSettingsPage } from "./pages/CompsSelectionSettingsPage";
 import { CreditSettingsPage } from "./pages/CreditSettingsPage";
 import { OnboardingSettingsPage } from "./pages/OnboardingSettingsPage";
+import { FootersPage } from "./pages/FootersPage";
 import { AdminsPage } from "./pages/AdminsPage";
 import { ReactNode } from "react";
 
@@ -78,6 +79,8 @@ export function App() {
         <Route path="/credit-settings" element={<CreditSettingsPage />} />
         {/* Onboarding Ask (JAK-first-text-welcome) — editable after-3rd-report email ask. */}
         <Route path="/onboarding-settings" element={<OnboardingSettingsPage />} />
+        {/* Footers (JAK-188) — admin-managed pool of rotating reply footers. */}
+        <Route path="/footers" element={<FootersPage />} />
         <Route
           path="/admins"
           element={

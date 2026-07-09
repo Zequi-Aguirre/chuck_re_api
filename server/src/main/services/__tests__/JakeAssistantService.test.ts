@@ -30,6 +30,7 @@ import { CompsData, CompsPendingRow, CompsRow, DEFAULT_COMP_PARAMS } from "../co
 import { DisambiguationMemoryService } from "../disambiguation/DisambiguationMemoryService";
 import { DisambiguationPendingRow } from "../disambiguation/DisambiguationTypes";
 import { OnboardingPromptService } from "../onboarding/OnboardingPromptService";
+import { FooterService } from "../footer/FooterService";
 
 /**
  * JakeAssistantService is mode-aware (JAK-115). These tests pin the two text
@@ -61,6 +62,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
   let disambiguation: MockProxy<DisambiguationMemoryService>;
   let compsEngine: MockProxy<CompsSelectionEngine>;
   let onboardingPrompt: MockProxy<OnboardingPromptService>;
+  let footers: MockProxy<FooterService>;
   let service: JakeAssistantService;
 
   const reportSpecialist = () => [{ name: "report", needsConfirmation: false, estimatedCredits: 1 }];
@@ -193,6 +195,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     compsSettings = mock<CompsSettingsService>();
     disambiguation = mock<DisambiguationMemoryService>();
     onboardingPrompt = mock<OnboardingPromptService>();
+    footers = mock<FooterService>();
 
     // The router is exercised in its own suite (JakeOrchestrator.test.ts); here it
     // defaults to the deterministic classification the pre-router single path used
@@ -303,6 +306,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       ({ report: 50, skiptrace: 10, comps: 10 } as Record<string, number>)[type]
     );
     onboardingPrompt.getEffectivePrompt.mockResolvedValue(OnboardingPromptService.DEFAULT_PROMPT);
+    // JAK-188: default to the canonical footer so existing reply assertions (which
+    // expect the two-line default footer) hold; the swap is then a no-op.
+    footers.getRandomActiveFooter.mockResolvedValue(PropertyReportWriter.FOOTER);
     // Per-feature out-of-credits copy (JAK-161): echo the bucket so a test can
     // assert the RIGHT message went out (the sender appends the JAK-158 footer).
     creditSettings.outOfCreditsMessage.mockImplementation(
@@ -339,7 +345,8 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       compsSettings,
       disambiguation,
       compsEngine,
-      onboardingPrompt
+      onboardingPrompt,
+      footers
     );
   });
 

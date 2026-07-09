@@ -18,6 +18,7 @@ import { CompsSelectionPromptService } from "../../../services/comps/CompsSelect
 import { CompsSettingsService } from "../../../services/comps/CompsSettingsService";
 import { CreditSettingsService } from "../../metering/CreditSettingsService";
 import { LlmModelSettingsService } from "../../../services/llm/LlmModelSettingsService";
+import { FooterService } from "../../../services/footer/FooterService";
 
 // Obviously-fake, low-entropy placeholder used by the reset-password tests.
 // Held in a constant (not inlined next to a `password:` key) so a secret
@@ -52,6 +53,7 @@ describe("AdminResource", () => {
   let compsSettings: MockProxy<CompsSettingsService>;
   let creditSettings: MockProxy<CreditSettingsService>;
   let modelSettings: MockProxy<LlmModelSettingsService>;
+  let footers: MockProxy<FooterService>;
   let app: Express;
 
   beforeEach(() => {
@@ -69,6 +71,7 @@ describe("AdminResource", () => {
     compsSettings = mock<CompsSettingsService>();
     creditSettings = mock<CreditSettingsService>();
     modelSettings = mock<LlmModelSettingsService>();
+    footers = mock<FooterService>();
     // Default: authenticated AS A SUPERADMIN so the admin-management tests reach
     // their handlers. Individual tests override to a plain admin / no session.
     auth.verifyToken.mockReturnValue({ sub: "admin-id", email: "admin@example.com", role: "superadmin" });
@@ -91,7 +94,8 @@ describe("AdminResource", () => {
         compsSelectionPrompt,
         compsSettings,
         creditSettings,
-        modelSettings
+        modelSettings,
+        footers
       ).router
     );
   });
@@ -672,6 +676,109 @@ describe("AdminResource", () => {
   });
 
   // --- AI prompt (JAK-131) --------------------------------------------------
+
+  describe("Footers (JAK-188)", () => {
+    const footer = (over: Record<string, unknown> = {}) => ({
+      id: "f1",
+      text: "Every Lead Deserves Jake.\nGoTextJake.com/CRM",
+      active: true,
+      createdAt: new Date("2026-07-02T00:00:00Z"),
+      updatedAt: new Date("2026-07-02T00:00:00Z"),
+      ...over,
+    });
+
+    it("is behind the auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app).get("/api/admin/footers");
+      expect(res.status).toBe(401);
+      expect(footers.list).not.toHaveBeenCalled();
+    });
+
+    it("is available to a REGULAR admin — NOT superadmin-gated", async () => {
+      asPlainAdmin();
+      footers.list.mockResolvedValue([footer()] as never);
+      const res = await asAdmin(request(app).get("/api/admin/footers"));
+      expect(res.status).toBe(200);
+    });
+
+    it("GET lists the footers", async () => {
+      footers.list.mockResolvedValue([footer(), footer({ id: "f2", active: false })] as never);
+      const res = await asAdmin(request(app).get("/api/admin/footers"));
+      expect(res.status).toBe(200);
+      expect(res.body.footers).toHaveLength(2);
+      expect(res.body.footers[0].id).toBe("f1");
+    });
+
+    it("POST creates a footer (active by default) and returns 201", async () => {
+      footers.create.mockResolvedValue(footer({ id: "new", text: "Multi\nline" }) as never);
+      const res = await asAdmin(
+        request(app).post("/api/admin/footers").send({ text: "  Multi\nline  " })
+      );
+      expect(res.status).toBe(201);
+      expect(footers.create).toHaveBeenCalledWith({ text: "Multi\nline", active: true });
+      expect(res.body.footer.id).toBe("new");
+    });
+
+    it("POST honors an explicit inactive flag", async () => {
+      footers.create.mockResolvedValue(footer({ active: false }) as never);
+      await asAdmin(request(app).post("/api/admin/footers").send({ text: "Parked", active: false }));
+      expect(footers.create).toHaveBeenCalledWith({ text: "Parked", active: false });
+    });
+
+    it("POST rejects a blank text (400)", async () => {
+      const res = await asAdmin(request(app).post("/api/admin/footers").send({ text: "   " }));
+      expect(res.status).toBe(400);
+      expect(footers.create).not.toHaveBeenCalled();
+    });
+
+    it("PUT edits a footer's text", async () => {
+      footers.update.mockResolvedValue(footer({ text: "Edited" }) as never);
+      const res = await asAdmin(
+        request(app).put("/api/admin/footers/f1").send({ text: "Edited" })
+      );
+      expect(res.status).toBe(200);
+      expect(footers.update).toHaveBeenCalledWith("f1", { text: "Edited", active: undefined });
+    });
+
+    it("PUT TOGGLES active on/off (active-only patch, no text required)", async () => {
+      footers.update.mockResolvedValue(footer({ active: false }) as never);
+      const res = await asAdmin(
+        request(app).put("/api/admin/footers/f1").send({ active: false })
+      );
+      expect(res.status).toBe(200);
+      expect(footers.update).toHaveBeenCalledWith("f1", { text: undefined, active: false });
+      expect(res.body.footer.active).toBe(false);
+    });
+
+    it("PUT rejects a blank text and a non-boolean active (400)", async () => {
+      const blank = await asAdmin(request(app).put("/api/admin/footers/f1").send({ text: "  " }));
+      expect(blank.status).toBe(400);
+      const badActive = await asAdmin(
+        request(app).put("/api/admin/footers/f1").send({ active: "yes" })
+      );
+      expect(badActive.status).toBe(400);
+      expect(footers.update).not.toHaveBeenCalled();
+    });
+
+    it("PUT 404s an unknown footer", async () => {
+      footers.update.mockResolvedValue(null);
+      const res = await asAdmin(request(app).put("/api/admin/footers/missing").send({ active: true }));
+      expect(res.status).toBe(404);
+    });
+
+    it("DELETE removes a footer", async () => {
+      footers.remove.mockResolvedValue(true);
+      const res = await asAdmin(request(app).delete("/api/admin/footers/f1"));
+      expect(res.status).toBe(200);
+      expect(footers.remove).toHaveBeenCalledWith("f1");
+    });
+
+    it("DELETE 404s an unknown footer", async () => {
+      footers.remove.mockResolvedValue(false);
+      const res = await asAdmin(request(app).delete("/api/admin/footers/missing"));
+      expect(res.status).toBe(404);
+    });
+  });
 
   describe("AI prompt (report-prompt)", () => {
     const promptView = (over: Record<string, unknown> = {}) => ({

@@ -23,6 +23,7 @@ import HomeWorkIcon from "@mui/icons-material/HomeWork";
 import TravelExploreIcon from "@mui/icons-material/TravelExplore";
 import PaidIcon from "@mui/icons-material/Paid";
 import WavingHandIcon from "@mui/icons-material/WavingHand";
+import NotesIcon from "@mui/icons-material/Notes";
 import AdminPanelSettingsIcon from "@mui/icons-material/AdminPanelSettings";
 import LogoutIcon from "@mui/icons-material/Logout";
 import { useAuth } from "../auth";
@@ -58,6 +59,8 @@ export function Layout() {
     { label: "Credits", to: "/credit-settings", icon: <PaidIcon />, show: true },
     // Onboarding Ask (JAK-first-text-welcome) — editable after-3rd-report email ask.
     { label: "Onboarding Ask", to: "/onboarding-settings", icon: <WavingHandIcon />, show: true },
+    // Footers (JAK-188) — admin-managed pool of rotating reply footers.
+    { label: "Footers", to: "/footers", icon: <NotesIcon />, show: true },
     {
       label: "Admins",
       to: "/admins",

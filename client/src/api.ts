@@ -19,6 +19,7 @@ import {
   OnboardingPromptView,
   OrchestratorPromptView,
   ReportPromptView,
+  FooterView,
   SkipTraceCostView,
   SkipTracePromptView,
   FindContactResult,
@@ -136,6 +137,32 @@ export const api = {
   },
   async deleteConnection(locationId: string): Promise<void> {
     await request(`/connections/${encodeURIComponent(locationId)}`, { method: "DELETE" });
+  },
+
+  // --- footers (JAK-188) ---
+  async listFooters(): Promise<FooterView[]> {
+    const body = await request<{ footers: FooterView[] }>("/footers");
+    return body.footers;
+  },
+  async createFooter(input: { text: string; active?: boolean }): Promise<FooterView> {
+    const body = await request<{ footer: FooterView }>("/footers", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+    return body.footer;
+  },
+  async updateFooter(
+    id: string,
+    patch: { text?: string; active?: boolean }
+  ): Promise<FooterView> {
+    const body = await request<{ footer: FooterView }>(`/footers/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    });
+    return body.footer;
+  },
+  async deleteFooter(id: string): Promise<void> {
+    await request(`/footers/${encodeURIComponent(id)}`, { method: "DELETE" });
   },
   async grantCredits(
     locationId: string,

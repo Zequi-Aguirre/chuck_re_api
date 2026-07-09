@@ -359,3 +359,16 @@ export interface LlmModelSettingView {
   updatedAt: string | null;
   updatedBy: string | null;
 }
+
+/**
+ * A reply footer in the admin-managed rotating pool (JAK-188). GLOBAL (not per
+ * sub-account). `text` supports multiple lines; `active` gates whether it's in
+ * the random rotation the sender draws from per outbound message.
+ */
+export interface FooterView {
+  id: string;
+  text: string;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
