@@ -59,6 +59,8 @@ import { GhlEnrichmentFieldResolver } from "../autoEnrichment/GhlEnrichmentField
 import { EnrichmentFieldWriteBackService } from "../autoEnrichment/EnrichmentFieldWriteBackService";
 import { ContactCreatedResource } from "../autoEnrichment/ContactCreatedResource";
 import { AutoEnrichmentWorker } from "../autoEnrichment/AutoEnrichmentWorker";
+import { FooterStore } from "../../services/footer/FooterStore";
+import { FooterService } from "../../services/footer/FooterService";
 
 /**
  * DI registration for the GHL enrichment module.
@@ -417,5 +419,17 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   // the JAK-072 monthly-restore worker. Singleton so its deps' caches are shared.
   if (!c.isRegistered(AutoEnrichmentWorker)) {
     c.registerSingleton(AutoEnrichmentWorker);
+  }
+
+  // JAK-188 — admin-managed rotating reply footers. A global pool the sender draws
+  // a uniformly-random ACTIVE footer from per outbound message (falling back to the
+  // hardcoded default when none are active). The store + service back both the
+  // JakeAssistantService pick and the admin "Footers" CRUD. Singletons; share the
+  // one Postgres pool.
+  if (!c.isRegistered(FooterStore)) {
+    c.registerSingleton(FooterStore);
+  }
+  if (!c.isRegistered(FooterService)) {
+    c.registerSingleton(FooterService);
   }
 };

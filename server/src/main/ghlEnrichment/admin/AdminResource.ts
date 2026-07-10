@@ -16,6 +16,7 @@ import { CompsSelectionPromptService } from "../../services/comps/CompsSelection
 import { CompsSettingsService } from "../../services/comps/CompsSettingsService";
 import { CompParams } from "../../services/comps/CompsTypes";
 import { CreditSettingsService } from "../metering/CreditSettingsService";
+import { FooterService } from "../../services/footer/FooterService";
 import { CREDIT_TYPES, CreditType } from "../metering/CreditCosts";
 import {
   LlmModelSettingsService,
@@ -74,7 +75,8 @@ export class AdminResource {
     @inject(CompsSelectionPromptService) private readonly compsSelectionPrompt: CompsSelectionPromptService,
     @inject(CompsSettingsService) private readonly compsSettings: CompsSettingsService,
     @inject(CreditSettingsService) private readonly creditSettings: CreditSettingsService,
-    @inject(LlmModelSettingsService) private readonly modelSettings: LlmModelSettingsService
+    @inject(LlmModelSettingsService) private readonly modelSettings: LlmModelSettingsService,
+    @inject(FooterService) private readonly footers: FooterService
   ) {
     this.router = Router();
     this.configureRoutes();
@@ -207,6 +209,15 @@ export class AdminResource {
     // JAK-164: the comps SELECTION engine surface gets its own model picker too.
     this.modelRoutes("comps-selection-model", "comps_selection");
 
+    // Footers (JAK-188): the admin-managed pool of reply footers that rotate
+    // randomly per outbound message. GLOBAL (not per sub-account). Available to
+    // ANY logged-in admin (requireAuth only). Full CRUD + active/inactive toggle
+    // (the toggle is a field on PUT). No secret is involved.
+    this.router.get("/footers", this.listFooters.bind(this));
+    this.router.post("/footers", this.createFooter.bind(this));
+    this.router.put("/footers/:id", this.updateFooter.bind(this));
+    this.router.delete("/footers/:id", this.deleteFooter.bind(this));
+
     // Admin management (JAK-124, restricted in JAK-125): ONLY a superadmin may
     // manage other admins. requireSuperadmin runs after the router-level
     // requireAdminAuth above, so req.admin is already populated. A regular admin
@@ -217,6 +228,85 @@ export class AdminResource {
     this.router.post("/admins/:id/activate", superadmin, this.activateAdmin.bind(this));
     this.router.post("/admins/:id/deactivate", superadmin, this.deactivateAdmin.bind(this));
     this.router.post("/admins/:id/password", superadmin, this.resetAdminPassword.bind(this));
+  }
+
+  // --- Footers (JAK-188) ---------------------------------------------------
+
+  private async listFooters(_req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const footers = await this.footers.list();
+      return res.status(200).json({ footers });
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  private async createFooter(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+      if (!text) {
+        return res.status(400).json({ error: "text is required" });
+      }
+      if (text.length > MAX_FOOTER_LENGTH) {
+        return res
+          .status(400)
+          .json({ error: `text must be at most ${MAX_FOOTER_LENGTH} characters` });
+      }
+      // Optional active flag; defaults to true (a new footer joins the rotation).
+      const active = typeof req.body?.active === "boolean" ? req.body.active : true;
+      const footer = await this.footers.create({ text, active });
+      return res.status(201).json({ footer });
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  private async updateFooter(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const id = str(req.params.id);
+      if (!id) return res.status(400).json({ error: "missing footer id" });
+
+      // text is optional on update (a pure active-toggle sends only `active`); when
+      // present it must be non-blank and within length.
+      let text: string | undefined;
+      if (req.body?.text !== undefined) {
+        const trimmed = typeof req.body.text === "string" ? req.body.text.trim() : "";
+        if (!trimmed) return res.status(400).json({ error: "text cannot be blank" });
+        if (trimmed.length > MAX_FOOTER_LENGTH) {
+          return res
+            .status(400)
+            .json({ error: `text must be at most ${MAX_FOOTER_LENGTH} characters` });
+        }
+        text = trimmed;
+      }
+
+      // active is the enable/disable toggle; only a real boolean changes it.
+      const activeRaw = req.body?.active;
+      if (activeRaw !== undefined && typeof activeRaw !== "boolean") {
+        return res.status(400).json({ error: "active must be a boolean" });
+      }
+
+      const footer = await this.footers.update(id, {
+        text,
+        active: activeRaw as boolean | undefined,
+      });
+      if (!footer) return res.status(404).json({ error: "unknown footer" });
+      return res.status(200).json({ footer });
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  private async deleteFooter(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const id = str(req.params.id);
+      if (!id) return res.status(400).json({ error: "missing footer id" });
+      const removed = await this.footers.remove(id);
+      if (!removed) return res.status(404).json({ error: "unknown footer" });
+      return res.status(200).json({ ok: true });
+    } catch (err) {
+      return next(err);
+    }
   }
 
   // --- Admin management (JAK-124) ------------------------------------------
@@ -1224,6 +1314,9 @@ const MIN_PASSWORD_LENGTH = 8;
 
 /** Upper bound on the editable report STYLE prompt (JAK-131) — a sane guardrail. */
 const MAX_PROMPT_LENGTH = 8000;
+
+/** Upper bound on a single reply footer (JAK-188) — a sane SMS-scale guardrail. */
+const MAX_FOOTER_LENGTH = 1000;
 
 /** Pragmatic email shape check — a single `@` with non-empty, dot-bearing sides. */
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
