@@ -534,6 +534,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       // Friendly hold notice went back over the gateway.
       expect(result.charged).toBe(0);
       expect(result.reply).toContain("on hold");
+      // JAK-188 (results-only): the account-on-hold notice is not a deliverable → NO footer.
+      expect(result.reply).not.toContain("Every Lead Deserves Jake.");
+      expect(result.reply).not.toContain("GoTextJake.com");
       expect(gateway.sendSms).toHaveBeenCalledWith(
         expect.objectContaining({ contactId: "ct_1", message: expect.stringContaining("on hold") })
       );
@@ -1334,7 +1337,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(result.charged).toBe(0);
       expect(skipTrace.recordTrace).not.toHaveBeenCalled();
       expect(sent().toLowerCase()).toContain("couldn't find");
-      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
+      // JAK-188 (results-only): an EMPTY skip-trace result is not a deliverable → NO footer.
+      expect(sent()).not.toContain("Every Lead Deserves Jake.");
+      expect(sent()).not.toContain("GoTextJake.com");
     });
 
     it("repeat trace within the free window → FREE re-serve, NO paid API, NO charge, NO prompt", async () => {
@@ -1657,7 +1662,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(result.charged).toBe(0);
       expect(comps.recordComps).not.toHaveBeenCalled();
       expect(sent().toLowerCase()).toContain("couldn't find");
-      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
+      // JAK-188 (results-only): an EMPTY comps result is not a deliverable → NO footer.
+      expect(sent()).not.toContain("Every Lead Deserves Jake.");
+      expect(sent()).not.toContain("GoTextJake.com");
     });
 
     it("repeat request (same address + params) within the free window → FREE re-serve, NO paid API, NO charge, NO prompt", async () => {
@@ -1758,7 +1765,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(sent()).toContain(`1. ${A1}`);
       expect(sent()).toContain(`2. ${A2}`);
       expect(sent().toLowerCase()).toContain("which one");
-      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
+      // JAK-188 (results-only): a disambiguation prompt is not a deliverable → NO footer.
+      expect(sent()).not.toContain("Every Lead Deserves Jake.");
+      expect(sent()).not.toContain("GoTextJake.com");
       expect(sent()).not.toMatch(/\p{Extended_Pictographic}/u);
     });
 
@@ -1868,6 +1877,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(sent()).toContain("Homer Simpson");
       expect(sent()).toContain("Marge Simpson");
       expect(sent().toLowerCase()).toContain("who did you mean");
+      // JAK-188 (results-only): a person-disambiguation prompt is not a deliverable → NO footer.
+      expect(sent()).not.toContain("Every Lead Deserves Jake.");
+      expect(sent()).not.toContain("GoTextJake.com");
     });
 
     it("PERSON reference that resolves to one person re-serves that trace for FREE", async () => {

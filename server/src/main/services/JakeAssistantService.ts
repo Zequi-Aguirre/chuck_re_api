@@ -101,10 +101,9 @@ const ACK_REPLY = "Working on it, one moment.";
  * their texts, so Jake must reply something) and as the deactivated backstop.
  * Jake does NO work and NO charge on either path.
  */
-const ACCOUNT_ON_HOLD_REPLY = [
-    "Your account is on hold. Please contact the admin to get this resolved.",
-    PropertyReportWriter.FOOTER,
-].join("\n\n");
+// JAK-188 (results-only): a system notice, not a deliverable → NO footer.
+const ACCOUNT_ON_HOLD_REPLY =
+    "Your account is on hold. Please contact the admin to get this resolved.";
 
 @injectable()
 export class JakeAssistantService {
@@ -528,7 +527,10 @@ export class JakeAssistantService {
         }
 
         const reply = await this.buildReply(address, property);
-        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        // JAK-188 (results-only): the delivered property REPORT gets the footer.
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply, {
+            footer: true,
+        });
 
         // Charge only when a match was delivered — mirrors the enrichment worker's
         // "no match, no charge" policy (the lookup cost is ours). On a match, also
@@ -580,7 +582,10 @@ export class JakeAssistantService {
     }): Promise<JakeInboundResult> {
         const { input, route, customer, phone, address, cached } = ctx;
         const reply = this.withReserveNotice(cached.report_text);
-        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        // JAK-188 (results-only): the re-served property REPORT gets the footer.
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply, {
+            footer: true,
+        });
         await this.writeStatusNote(
             route,
             input.contactId,
@@ -644,10 +649,9 @@ export class JakeAssistantService {
         const target =
             resolution.kind === "resolved" ? resolution.target : await this.memory.lastResolvedAddress(phone);
         if (!target) {
-            const reply = [
-                "Text me a property address first, then I can skip-trace the owner and pull their contact info.",
-                PropertyReportWriter.FOOTER,
-            ].join("\n\n");
+            // JAK-188 (results-only): a prompt, not a deliverable → NO footer.
+            const reply =
+                "Text me a property address first, then I can skip-trace the owner and pull their contact info.";
             await this.sendAndRemember(route, input.contactId, customer, phone, reply);
             await this.writeStatusNote(
                 route,
@@ -892,7 +896,10 @@ export class JakeAssistantService {
     }): Promise<JakeInboundResult> {
         const { input, route, customer, phone, target, cached } = ctx;
         const reply = this.withSkipTraceReserveNotice(cached.report_text);
-        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        // JAK-188 (results-only): the re-served skip-trace RESULTS get the footer.
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply, {
+            footer: true,
+        });
         await this.writeStatusNote(
             route,
             input.contactId,
@@ -968,10 +975,8 @@ export class JakeAssistantService {
         }
 
         if (!record || !hasContactInfo(data)) {
-            const reply = [
-                `I couldn't find owner contact info for ${target}, so I haven't charged you.`,
-                PropertyReportWriter.FOOTER,
-            ].join("\n\n");
+            // JAK-188 (results-only): an EMPTY result is not a deliverable → NO footer.
+            const reply = `I couldn't find owner contact info for ${target}, so I haven't charged you.`;
             await this.sendAndRemember(route, input.contactId, customer, phone, reply);
             await this.writeStatusNote(
                 route,
@@ -982,7 +987,10 @@ export class JakeAssistantService {
         }
 
         const reply = await this.skipTraceWriter.write(data, record);
-        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        // JAK-188 (results-only): the skip-trace RESULTS (contacts found) get the footer.
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply, {
+            footer: true,
+        });
 
         const charge = await this.credits.chargeForSkipTrace({ accountId, credits });
         const charged = charge.ok ? credits : 0;
@@ -1286,10 +1294,9 @@ export class JakeAssistantService {
         const target =
             resolution.kind === "resolved" ? resolution.target : await this.memory.lastResolvedAddress(phone);
         if (!target) {
-            const reply = [
-                "Text me a property address first, then I can pull comparable sales for it.",
-                PropertyReportWriter.FOOTER,
-            ].join("\n\n");
+            // JAK-188 (results-only): a prompt, not a deliverable → NO footer.
+            const reply =
+                "Text me a property address first, then I can pull comparable sales for it.";
             await this.sendAndRemember(route, input.contactId, customer, phone, reply);
             await this.writeStatusNote(
                 route,
@@ -1366,7 +1373,10 @@ export class JakeAssistantService {
     }): Promise<JakeInboundResult> {
         const { input, route, customer, phone, target, cached } = ctx;
         const reply = this.withCompsReserveNotice(cached.report_text);
-        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        // JAK-188 (results-only): the re-served comps RESULTS get the footer.
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply, {
+            footer: true,
+        });
         await this.writeStatusNote(
             route,
             input.contactId,
@@ -1422,10 +1432,8 @@ export class JakeAssistantService {
 
         const data = result.data;
         if (!hasComps(data)) {
-            const reply = [
-                `I couldn't find comparable sales for ${target} using ${formatCompParams(params)}, so I haven't charged you.`,
-                PropertyReportWriter.FOOTER,
-            ].join("\n\n");
+            // JAK-188 (results-only): an EMPTY result is not a deliverable → NO footer.
+            const reply = `I couldn't find comparable sales for ${target} using ${formatCompParams(params)}, so I haven't charged you.`;
             await this.sendAndRemember(route, input.contactId, customer, phone, reply);
             await this.writeStatusNote(
                 route,
@@ -1436,7 +1444,10 @@ export class JakeAssistantService {
         }
 
         const reply = await this.compsWriter.write(data);
-        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        // JAK-188 (results-only): the comps RESULTS (comparables found) get the footer.
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply, {
+            footer: true,
+        });
 
         const charge = await this.credits.chargeForComps({ accountId, credits });
         const charged = charge.ok ? credits : 0;
@@ -1617,7 +1628,8 @@ export class JakeAssistantService {
                       addresses.length === 1 ? "it is" : "they are"
                   }:`
                 : "I've got a few addresses on file — which one did you mean?";
-        const reply = [`${lead}\n${numbered}`, "Reply with the number.", PropertyReportWriter.FOOTER].join("\n\n");
+        // JAK-188 (results-only): a disambiguation prompt is not a deliverable → NO footer.
+        const reply = [`${lead}\n${numbered}`, "Reply with the number."].join("\n\n");
         await this.sendAndRemember(route, input.contactId, customer, phone, reply);
         await this.writeStatusNote(
             route,
@@ -1765,10 +1777,10 @@ export class JakeAssistantService {
                       people.length === 1 ? "it is" : "they are"
                   }:`
                 : "That trace turned up more than one person — who did you mean?";
+        // JAK-188 (results-only): a disambiguation prompt is not a deliverable → NO footer.
         const reply = [
             `${lead}\n${numbered}`,
             "Reply with the name or the property address.",
-            PropertyReportWriter.FOOTER,
         ].join("\n\n");
         await this.sendAndRemember(route, input.contactId, customer, phone, reply);
         await this.writeStatusNote(
@@ -2115,16 +2127,20 @@ export class JakeAssistantService {
      * Send a reply and record it as an outbound message (best-effort memory).
      *
      * JAK-188: this is the single funnel EVERY real reply passes through, so it
-     * owns the footer. By default the reply arrives ending in the canonical default
-     * footer (JAK-157/158) and it's swapped for a uniformly-random ACTIVE footer
-     * chosen PER OUTBOUND MESSAGE (zero active footers → the pick IS the default, so
-     * the swap is a no-op = day-1 behavior).
+     * owns the footer. RESULTS-ONLY RULE (Zequi): the rotating footer appends to
+     * ONLY the three actual value deliverables — the delivered property report,
+     * skip-trace RESULTS (persons/contacts found), and comps RESULTS (comparables
+     * found). Those callers pass `{ footer: true }`, and the trailing canonical
+     * default footer their body carries is swapped for a uniformly-random ACTIVE
+     * footer chosen PER OUTBOUND MESSAGE (zero active footers → the pick IS the
+     * default = day-1 behavior).
      *
-     * `opts.footer: false` (JAK-188 refinement) sends the message with NO footer —
-     * used by the CREDIT / system notices (out-of-credits + credit balance), which
-     * Zequi requires footer-less; the footer belongs only on actual RESULT replies.
-     * The strip makes the flag authoritative regardless of what the body carries.
-     * Memory records exactly what was sent.
+     * EVERY other outbound message — credit/out-of-credits/credit-balance,
+     * intro/greeting/guidance, onboarding, profile ack, no-match / no-results,
+     * disambiguation prompts, account-on-hold, errors, brief acks — is footer-less.
+     * That's the DEFAULT here: `opts.footer` unset/false strips any trailing footer,
+     * so a new message path is footer-less unless it explicitly opts in. Memory
+     * records exactly what was sent.
      */
     private async sendAndRemember(
         route: TextRoute,
@@ -2135,13 +2151,13 @@ export class JakeAssistantService {
         opts: { footer?: boolean } = {}
     ): Promise<void> {
         const outbound =
-            opts.footer === false
-                ? stripTrailingFooter(reply, PropertyReportWriter.FOOTER)
-                : applyChosenFooter(
+            opts.footer === true
+                ? applyChosenFooter(
                       reply,
                       await this.footers.getRandomActiveFooter(),
                       PropertyReportWriter.FOOTER
-                  );
+                  )
+                : stripTrailingFooter(reply, PropertyReportWriter.FOOTER);
         await route.send(contactId, outbound);
         try {
             await this.memory.appendOutbound({
