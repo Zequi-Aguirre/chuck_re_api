@@ -1897,8 +1897,11 @@ export class JakeAssistantService {
         phone: string
     ): Promise<string | null> {
         try {
-            const reply = this.withFooter(buildIntroMessage());
-            await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+            // JAK-188: the intro/greeting is a conversational message → NO footer.
+            const reply = buildIntroMessage();
+            await this.sendAndRemember(route, input.contactId, customer, phone, reply, {
+                footer: false,
+            });
             await this.writeStatusNote(
                 route,
                 input.contactId,
@@ -2000,8 +2003,11 @@ export class JakeAssistantService {
             const claimed = await this.customers.markOnboardingAsked(customer.id);
             if (!claimed) return;
 
-            const ask = this.withFooter(await this.onboardingPrompt.getEffectivePrompt());
-            await this.sendAndRemember(route, input.contactId, customer, phone, ask);
+            // JAK-188: the onboarding email ask is a conversational message → NO footer.
+            const ask = await this.onboardingPrompt.getEffectivePrompt();
+            await this.sendAndRemember(route, input.contactId, customer, phone, ask, {
+                footer: false,
+            });
             await this.writeStatusNote(
                 route,
                 input.contactId,
@@ -2039,8 +2045,11 @@ export class JakeAssistantService {
         if (!captured) return null;
 
         await this.customers.captureProfile(customer.id, captured);
-        const reply = this.withFooter(buildProfileAck(captured));
-        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        // JAK-188: the profile-capture ack is a conversational message → NO footer.
+        const reply = buildProfileAck(captured);
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply, {
+            footer: false,
+        });
         await this.writeStatusNote(
             route,
             input.contactId,
@@ -2060,17 +2069,12 @@ export class JakeAssistantService {
         return Boolean(customer.firstName?.trim() && customer.email?.trim());
     }
 
-    /** Append the canonical GoTextJake.com footer to a message body. */
-    private withFooter(body: string): string {
-        return [body, PropertyReportWriter.FOOTER].join("\n\n");
-    }
-
     /**
      * The help / capability menu (JAK-138) — sent for a greeting, an unrecognized
      * message, or an explicit "help". It plainly lists what Jake can do. Per
      * JAK-silent-credits-intro it NO LONGER shows per-action credit costs: credits
      * are never surfaced to a customer anywhere except the out-of-credits message.
-     * Emoji-free, GoTextJake.com footer last. No lookup, no charge.
+     * Emoji-free. No lookup, no charge. JAK-188: guidance is conversational → NO footer.
      */
     private async sendGuidance(
         input: JakeInboundMessage,
@@ -2079,7 +2083,9 @@ export class JakeAssistantService {
         phone: string
     ): Promise<JakeInboundResult> {
         const reply = this.buildHelpReply();
-        await this.sendAndRemember(route, input.contactId, customer, phone, reply);
+        await this.sendAndRemember(route, input.contactId, customer, phone, reply, {
+            footer: false,
+        });
         await this.writeStatusNote(
             route,
             input.contactId,
@@ -2102,7 +2108,6 @@ export class JakeAssistantService {
                 "- Comparable sales / comps — recent nearby sales for a property.",
             ].join("\n"),
             'You can refer back to an address you already sent ("the 2nd one", "the last address").',
-            PropertyReportWriter.FOOTER,
         ].join("\n\n");
     }
 

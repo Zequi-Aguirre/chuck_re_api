@@ -1095,7 +1095,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(credits.chargeForTextLookup).not.toHaveBeenCalled();
     });
 
-    it("chitchat intent → guidance reply, emoji-free with the footer, no spend", async () => {
+    it("chitchat intent → guidance reply, emoji-free with NO footer, no spend", async () => {
       orchestrator.plan.mockResolvedValue({
         intent: "chitchat",
         targetEntity: null,
@@ -1113,7 +1113,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(result.charged).toBe(0);
       expect(realEstate.searchPropertyByAddress).not.toHaveBeenCalled();
       const sent = (gateway.sendSms.mock.calls[0]![0] as { message: string }).message;
-      expect(sent.endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
+      // JAK-188 (results-only): guidance is conversational → NO footer.
+      expect(sent).not.toContain("Every Lead Deserves Jake.");
+      expect(sent).not.toContain("GoTextJake.com");
       expect(sent).not.toMatch(/\p{Extended_Pictographic}/u);
     });
   });
@@ -1140,6 +1142,8 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
 
     it("JAK-145: traces the OWNER (name + address), charges on success, snapshots per-person", async () => {
       orchestrator.plan.mockResolvedValue(skipTracePlan());
+      // JAK-188 (results-only): a skip-trace RESULT gets the random ACTIVE footer.
+      footers.getRandomActiveFooter.mockResolvedValue("Text Jake now.\nGoTextJake.com");
       // JAK-145: the default flow pulls the owner from PropertySearch and passes the
       // owner NAME alongside the address — not just the address's top resident.
       realEstate.searchPropertyByAddress.mockResolvedValue({
@@ -1186,7 +1190,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(sent()).toContain("Homer Simpson");
       // No "reply OK" prompt anymore.
       expect(sent().toLowerCase()).not.toContain("reply ok");
-      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
+      // JAK-188 (results-only): the RESULT carries the random ACTIVE footer (swapped in).
+      expect(sent().endsWith("Text Jake now.\nGoTextJake.com")).toBe(true);
+      expect(sent()).not.toContain("Every Lead Deserves Jake.");
       expect(sent()).not.toMatch(/\p{Extended_Pictographic}/u);
     });
 
@@ -1536,6 +1542,8 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
 
     it("JAK-144: runs the paid comps IMMEDIATELY (no OK), charges on success, states the params", async () => {
       orchestrator.plan.mockResolvedValue(compsPlan());
+      // JAK-188 (results-only): a comps RESULT gets the random ACTIVE footer.
+      footers.getRandomActiveFooter.mockResolvedValue("Text Jake now.\nGoTextJake.com");
       realEstate.getCompsByAddress.mockResolvedValue(compsHit as never);
 
       const result = await service.handleInboundMessage({
@@ -1561,7 +1569,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(result.charged).toBe(3);
       expect(comps.recordComps).toHaveBeenCalled();
       expect(sent().toLowerCase()).not.toContain("reply ok");
-      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
+      // JAK-188 (results-only): the RESULT carries the random ACTIVE footer (swapped in).
+      expect(sent().endsWith("Text Jake now.\nGoTextJake.com")).toBe(true);
+      expect(sent()).not.toContain("Every Lead Deserves Jake.");
       expect(sent()).not.toMatch(/\p{Extended_Pictographic}/u);
     });
 
@@ -2399,7 +2409,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       // ...but NO credit costs are surfaced (credits never appear outside out-of-credits).
       expect(sent().toLowerCase()).not.toContain("credit");
       expect(sent()).not.toMatch(/\(\d+ credit/);
-      expect(sent().endsWith("Every Lead Deserves Jake.\nGoTextJake.com/CRM")).toBe(true);
+      // JAK-188 (results-only): the help/guidance menu carries NO footer.
+      expect(sent()).not.toContain("Every Lead Deserves Jake.");
+      expect(sent()).not.toContain("GoTextJake.com");
       expect(sent()).not.toMatch(/\p{Extended_Pictographic}/u);
     });
   });
@@ -2477,12 +2489,16 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       });
 
       const messages = sent();
-      // Exactly the intro (plus footer) — nothing else.
+      // Exactly the intro — nothing else.
       expect(result.reply).toContain("Hey, this is Jake. Text me any address and I'll tell you everything I know about it.");
       expect(messages.length).toBe(1);
       // No credits mentioned, no capability menu, no lookup.
       expect(result.reply.toLowerCase()).not.toContain("credit");
       expect(result.reply).not.toContain("Here's what I can do");
+      // JAK-188 (results-only): the intro/greeting carries NO footer.
+      expect(messages[0]).not.toContain("Every Lead Deserves Jake.");
+      expect(messages[0]).not.toContain("GoTextJake.com");
+      expect(result.reply).not.toContain("GoTextJake.com");
       // JAK-onboarding-address-routing: the intro decision now ATTEMPTS address
       // resolution via the orchestrator first (so preamble addresses aren't misread
       // as greetings), so plan() IS consulted — but a true greeting resolves NO
@@ -2596,6 +2612,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
       expect(ask).toBeDefined();
       expect(ask!.toLowerCase()).toContain("name and email");
       expect(EMOJI_RE.test(ask!)).toBe(false);
+      // JAK-188 (results-only): the onboarding email ask carries NO footer.
+      expect(ask!).not.toContain("Every Lead Deserves Jake.");
+      expect(ask!).not.toContain("GoTextJake.com");
     });
 
     it("uses the ADMIN-EDITED wording for the ask when set", async () => {
@@ -2659,6 +2678,9 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
         email: "sara@example.com",
       });
       expect(result.reply).toContain("Sara");
+      // JAK-188 (results-only): the profile-capture ack carries NO footer.
+      expect(result.reply).not.toContain("Every Lead Deserves Jake.");
+      expect(result.reply).not.toContain("GoTextJake.com");
       // A profile reply is not a lookup — no routing, no charge.
       expect(orchestrator.plan).not.toHaveBeenCalled();
       expect(result.charged).toBe(0);
