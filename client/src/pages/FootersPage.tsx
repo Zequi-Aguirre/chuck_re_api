@@ -208,7 +208,11 @@ export function FootersPage() {
         open={form !== undefined}
         footer={form ?? null}
         onClose={() => setForm(undefined)}
-        onSaved={() => setToast(form ? "Footer saved." : "Footer added.")}
+        onSaved={() => {
+          // Re-fetch so the new/edited footer appears immediately (no manual reload).
+          setToast(form ? "Footer saved." : "Footer added.");
+          void load();
+        }}
       />
       <ConfirmDialog
         open={confirmDelete !== null}
