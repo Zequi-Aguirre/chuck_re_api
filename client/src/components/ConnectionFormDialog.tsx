@@ -15,7 +15,7 @@ interface Props {
   open: boolean;
   /** Create a new connection, or edit/rotate an existing one. */
   mode: "create" | "edit";
-  initial?: { locationId: string; baseUrl: string; phoneNumbers: string[] };
+  initial?: { locationId: string; name?: string | null; baseUrl: string; phoneNumbers: string[] };
   onClose: () => void;
   onSaved: () => void;
 }
@@ -29,6 +29,7 @@ interface Props {
 export function ConnectionFormDialog({ open, mode, initial, onClose, onSaved }: Props) {
   const isEdit = mode === "edit";
   const [locationId, setLocationId] = useState(initial?.locationId ?? "");
+  const [name, setName] = useState(initial?.name ?? "");
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState(initial?.baseUrl ?? DEFAULT_BASE_URL);
   const [phones, setPhones] = useState((initial?.phoneNumbers ?? []).join(", "));
@@ -55,6 +56,8 @@ export function ConnectionFormDialog({ open, mode, initial, onClose, onSaved }: 
     try {
       if (isEdit) {
         await api.updateConnection(trimmedLocation, {
+          // JAK-190 — always send name (blank string clears it).
+          name: name.trim(),
           // Only send the key when the operator typed a new one (rotation).
           apiKey: trimmedKey ? trimmedKey : undefined,
           baseUrl: trimmedBase,
@@ -63,6 +66,7 @@ export function ConnectionFormDialog({ open, mode, initial, onClose, onSaved }: 
       } else {
         await api.createConnection({
           locationId: trimmedLocation,
+          name: name.trim(),
           apiKey: trimmedKey,
           baseUrl: trimmedBase,
           phoneNumbers,
@@ -89,6 +93,14 @@ export function ConnectionFormDialog({ open, mode, initial, onClose, onSaved }: 
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           {error && <Alert severity="error">{error}</Alert>}
+          <TextField
+            label="Name (friendly label)"
+            fullWidth
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. Acme Realty"
+            helperText="Shown as the heading. Leave blank to display the Location ID."
+          />
           <TextField
             label="GHL Location ID"
             fullWidth

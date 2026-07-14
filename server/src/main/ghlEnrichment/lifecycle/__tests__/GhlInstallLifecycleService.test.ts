@@ -13,6 +13,7 @@ import { JAKE_CUSTOM_FIELDS } from "../JakeCustomFields";
 const conn = (over: Partial<GhlConnection> = {}): GhlConnection => ({
   id: "11111111-1111-1111-1111-111111111111",
   locationId: "loc_1",
+  name: null,
   apiKey: "unit-test-plaintext-key",
   baseUrl: "https://services.leadconnectorhq.com",
   phoneNumbers: [],

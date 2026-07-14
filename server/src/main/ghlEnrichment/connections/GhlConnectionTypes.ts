@@ -15,6 +15,8 @@ export interface GhlConnection {
   id: string;
   /** GHL sub-account (location) id — unique per connection. */
   locationId: string;
+  /** JAK-190 — friendly admin label; null falls back to the location id in the UI. */
+  name: string | null;
   /** Decrypted GHL API key (beta auth). */
   apiKey: string;
   /** Per-location GHL API base URL. */
@@ -51,6 +53,8 @@ export const DEFAULT_TEXT_MODE: GhlTextMode = "gateway";
 /** Input for creating a connection. `apiKey` is plaintext; the service encrypts it. */
 export interface CreateGhlConnectionInput {
   locationId: string;
+  /** JAK-190 — optional friendly label; omitted → null (UI shows the location id). */
+  name?: string | null;
   apiKey: string;
   baseUrl: string;
   phoneNumbers?: string[];
@@ -66,6 +70,8 @@ export interface CreateGhlConnectionInput {
  * `apiKey` (plaintext) is re-encrypted; omit it to leave the stored key intact.
  */
 export interface UpdateGhlConnectionInput {
+  /** JAK-190 — edit the friendly label. Pass "" / null to clear it. */
+  name?: string | null;
   apiKey?: string;
   baseUrl?: string;
   phoneNumbers?: string[];

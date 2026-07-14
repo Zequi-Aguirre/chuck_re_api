@@ -293,6 +293,7 @@ export class GhlApiClient {
     return {
       id: `gateway:${gatewayLoc}`,
       locationId: gatewayLoc,
+      name: null,
       apiKey,
       baseUrl,
       phoneNumbers: [],

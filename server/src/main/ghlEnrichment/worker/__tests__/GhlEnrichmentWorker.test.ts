@@ -16,6 +16,7 @@ import { GhlEnrichmentWorker } from "../GhlEnrichmentWorker";
 const conn = (over: Partial<GhlConnection> = {}): GhlConnection => ({
   id: "conn-1",
   locationId: "loc_1",
+  name: null,
   apiKey: "unit-test-plaintext-key",
   baseUrl: "https://services.leadconnectorhq.com",
   phoneNumbers: [],

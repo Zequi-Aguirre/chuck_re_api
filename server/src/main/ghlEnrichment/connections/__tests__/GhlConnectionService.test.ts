@@ -12,6 +12,7 @@ describe("GhlConnectionService", () => {
   const row = (over: Partial<GhlConnectionRow> = {}): GhlConnectionRow => ({
     id: "11111111-1111-1111-1111-111111111111",
     location_id: "loc_abc",
+    name: null,
     api_key_encrypted: cipher.encrypt("plaintext-key"),
     base_url: "https://services.leadconnectorhq.com",
     phone_numbers: ["+15551234567"],
@@ -50,6 +51,55 @@ describe("GhlConnectionService", () => {
     expect(inserted.auto_enrichment_enabled).toBe(false);
     // Round-trips back to plaintext for the caller.
     expect(conn.apiKey).toBe("plaintext-key");
+  });
+
+  describe("friendly name (JAK-190)", () => {
+    it("persists a name on create and maps it back", async () => {
+      store.insert.mockImplementation(async (r) => row({ name: r.name }));
+      const conn = await service.createConnection({
+        locationId: "loc_abc",
+        name: "Acme Realty",
+        apiKey: "plaintext-key",
+        baseUrl: "https://x.co",
+      });
+      expect(store.insert.mock.calls[0][0].name).toBe("Acme Realty");
+      expect(conn.name).toBe("Acme Realty");
+    });
+
+    it("defaults name to null when omitted on create", async () => {
+      store.insert.mockImplementation(async (r) => row({ name: r.name }));
+      const conn = await service.createConnection({
+        locationId: "loc_abc",
+        apiKey: "plaintext-key",
+        baseUrl: "https://x.co",
+      });
+      expect(store.insert.mock.calls[0][0].name).toBeNull();
+      expect(conn.name).toBeNull();
+    });
+
+    it("updates the name (and clears it with null)", async () => {
+      store.update.mockImplementation(async (_loc, patch) => row({ name: patch.name ?? null }));
+
+      const renamed = await service.updateConnection("loc_abc", { name: "New Name" });
+      expect(store.update.mock.calls[0][1].name).toBe("New Name");
+      expect(renamed?.name).toBe("New Name");
+
+      const cleared = await service.updateConnection("loc_abc", { name: null });
+      expect(store.update.mock.calls[1][1].name).toBeNull();
+      expect(cleared?.name).toBeNull();
+    });
+
+    it("leaves the name untouched when the patch omits it", async () => {
+      store.update.mockImplementation(async () => row({ name: "Existing" }));
+      await service.updateConnection("loc_abc", { baseUrl: "https://y.co" });
+      expect(store.update.mock.calls[0][1].name).toBeUndefined();
+    });
+
+    it("surfaces the name on read", async () => {
+      store.findByLocationId.mockResolvedValue(row({ name: "Read Name" }));
+      const conn = await service.getByLocationId("loc_abc");
+      expect(conn?.name).toBe("Read Name");
+    });
   });
 
   describe("per-location webhook key (JAK-189)", () => {

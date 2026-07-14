@@ -133,6 +133,7 @@ export class GhlStatusService {
   private toConnectionView(row: GhlConnectionRow, provisionedFieldCount: number): ConnectionStatusView {
     return {
       locationId: row.location_id,
+      name: row.name ?? null,
       status: row.status,
       baseUrl: row.base_url,
       phoneNumberCount: row.phone_numbers?.length ?? 0,

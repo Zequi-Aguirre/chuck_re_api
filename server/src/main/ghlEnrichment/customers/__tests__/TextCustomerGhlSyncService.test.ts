@@ -286,6 +286,7 @@ describe("TextCustomerGhlSyncService", () => {
       connections.getByLocationId.mockResolvedValue({
         id: "c1",
         locationId: JAKE_LOC,
+        name: null,
         apiKey: ownKey,
         baseUrl: "https://own.example.com",
         phoneNumbers: [],

@@ -115,9 +115,22 @@ export function ConnectionDetailPage() {
       {/* Header + actions */}
       <Paper sx={{ p: 3, mt: 2 }}>
         <Box sx={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 2, mb: 2 }}>
-          <Typography variant="h5" fontWeight={800} sx={{ fontFamily: "monospace", flexGrow: 1 }}>
-            {connection.locationId}
-          </Typography>
+          {/* JAK-190: friendly name is the heading; the id is small/secondary.
+              No name → the id is the heading (monospace), as before. */}
+          <Box sx={{ flexGrow: 1, minWidth: 0 }}>
+            <Typography
+              variant="h5"
+              fontWeight={800}
+              sx={{ wordBreak: "break-word", fontFamily: connection.name ? undefined : "monospace" }}
+            >
+              {connection.name || connection.locationId}
+            </Typography>
+            {connection.name && (
+              <Typography variant="body2" color="text.secondary" sx={{ fontFamily: "monospace", wordBreak: "break-all" }}>
+                {connection.locationId}
+              </Typography>
+            )}
+          </Box>
           <StatusChip status={connection.status} />
         </Box>
 
@@ -315,6 +328,7 @@ export function ConnectionDetailPage() {
         mode="edit"
         initial={{
           locationId: connection.locationId,
+          name: connection.name,
           baseUrl: connection.baseUrl,
           phoneNumbers: [],
         }}

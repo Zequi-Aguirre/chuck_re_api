@@ -11,12 +11,16 @@ export const API_KEY_MASK = "••••••••";
 
 export interface CreateConnectionInput {
   locationId: string;
+  /** JAK-190 — optional friendly label. */
+  name?: string | null;
   apiKey: string;
   baseUrl: string;
   phoneNumbers?: string[];
 }
 
 export interface UpdateConnectionInput {
+  /** JAK-190 — edit the friendly label ("" / null clears it). */
+  name?: string | null;
   /** Optional rotation — a new plaintext key; omit to keep the stored one. */
   apiKey?: string;
   baseUrl?: string;
@@ -48,6 +52,7 @@ export class AdminConnectionService {
   async create(input: CreateConnectionInput): Promise<AdminConnectionView> {
     const conn = await this.connections.createConnection({
       locationId: input.locationId,
+      name: input.name ?? null,
       apiKey: input.apiKey,
       baseUrl: input.baseUrl,
       phoneNumbers: input.phoneNumbers ?? [],
@@ -65,6 +70,7 @@ export class AdminConnectionService {
     patch: UpdateConnectionInput
   ): Promise<AdminConnectionView | null> {
     const conn = await this.connections.updateConnection(locationId, {
+      name: patch.name,
       apiKey: patch.apiKey,
       baseUrl: patch.baseUrl,
       phoneNumbers: patch.phoneNumbers,
@@ -139,6 +145,7 @@ function toView(conn: GhlConnection): AdminConnectionView {
   return {
     id: conn.id,
     locationId: conn.locationId,
+    name: conn.name,
     baseUrl: conn.baseUrl,
     phoneNumbers: conn.phoneNumbers,
     status: conn.status,

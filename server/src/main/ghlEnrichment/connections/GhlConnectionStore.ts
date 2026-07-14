@@ -10,6 +10,8 @@ import { GhlConnectionStatus, GhlTextMode } from "./GhlConnectionTypes";
 export interface GhlConnectionRow {
   id: string;
   location_id: string;
+  /** JAK-190 — friendly admin label; null falls back to the location id in the UI. */
+  name: string | null;
   api_key_encrypted: string;
   base_url: string;
   phone_numbers: string[];
@@ -29,6 +31,7 @@ export interface GhlConnectionRow {
 
 export interface InsertGhlConnectionRow {
   location_id: string;
+  name: string | null;
   api_key_encrypted: string;
   base_url: string;
   phone_numbers: string[];
@@ -40,6 +43,7 @@ export interface InsertGhlConnectionRow {
 }
 
 export interface UpdateGhlConnectionRow {
+  name?: string | null;
   api_key_encrypted?: string;
   base_url?: string;
   phone_numbers?: string[];
@@ -65,11 +69,12 @@ export class GhlConnectionStore {
   async insert(row: InsertGhlConnectionRow): Promise<GhlConnectionRow> {
     const result = await this.db.query<GhlConnectionRow>(
       `INSERT INTO ghl_connections
-         (location_id, api_key_encrypted, base_url, phone_numbers, status, text_mode, auto_enrichment_enabled, webhook_key_hash, webhook_key_enc)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         (location_id, name, api_key_encrypted, base_url, phone_numbers, status, text_mode, auto_enrichment_enabled, webhook_key_hash, webhook_key_enc)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
       [
         row.location_id,
+        row.name,
         row.api_key_encrypted,
         row.base_url,
         row.phone_numbers,
@@ -139,6 +144,10 @@ export class GhlConnectionStore {
     const values: unknown[] = [];
     let i = 1;
 
+    if (patch.name !== undefined) {
+      sets.push(`name = $${i++}`);
+      values.push(patch.name);
+    }
     if (patch.api_key_encrypted !== undefined) {
       sets.push(`api_key_encrypted = $${i++}`);
       values.push(patch.api_key_encrypted);

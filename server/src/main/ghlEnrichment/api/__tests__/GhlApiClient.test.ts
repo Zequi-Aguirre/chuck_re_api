@@ -49,6 +49,7 @@ const axiosError = (
 const conn = (over: Partial<GhlConnection> = {}): GhlConnection => ({
   id: "11111111-1111-1111-1111-111111111111",
   locationId: "loc_1",
+  name: null,
   // Shape-matches a GHL Private Integration Token but is generated at runtime,
   // so nothing secret-looking is ever committed.
   apiKey: `pit-${randomUUID()}`,

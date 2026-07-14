@@ -19,6 +19,8 @@ export interface OutcomeCounts {
 
 export interface ConnectionStatusView {
   locationId: string;
+  /** JAK-190 — friendly admin label; null → the UI shows the location id. */
+  name: string | null;
   status: ConnectionStatus;
   baseUrl: string;
   phoneNumberCount: number;

@@ -102,6 +102,8 @@ export const api = {
   },
   async createConnection(input: {
     locationId: string;
+    // JAK-190 — optional friendly name.
+    name?: string;
     apiKey: string;
     baseUrl: string;
     phoneNumbers: string[];
@@ -111,6 +113,8 @@ export const api = {
   async updateConnection(
     locationId: string,
     patch: {
+      // JAK-190 — edit the friendly name ("" clears it).
+      name?: string;
       apiKey?: string;
       baseUrl?: string;
       phoneNumbers?: string[];
