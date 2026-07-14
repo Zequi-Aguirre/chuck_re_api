@@ -16,6 +16,8 @@ import { GhlConnectionStatus } from "../connections/GhlConnectionTypes";
 /** Per-location connection health — safe subset of `ghl_connections`. */
 export interface ConnectionStatusView {
   locationId: string;
+  /** JAK-190 — friendly admin label; null → the UI shows the location id. */
+  name: string | null;
   /** active | inactive. Inactive = uninstalled; the worker no longer processes it. */
   status: GhlConnectionStatus;
   baseUrl: string;

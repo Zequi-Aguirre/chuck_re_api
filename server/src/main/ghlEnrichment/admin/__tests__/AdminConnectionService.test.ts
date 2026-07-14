@@ -8,6 +8,7 @@ import { AdminConnectionService, API_KEY_MASK } from "../AdminConnectionService"
 const conn = (over: Partial<GhlConnection> = {}): GhlConnection => ({
   id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
   locationId: "loc_1",
+  name: null,
   apiKey: "unit-test-ghl-key",
   baseUrl: "https://services.leadconnectorhq.com",
   phoneNumbers: ["+15551234567"],

@@ -12,6 +12,7 @@ const FAKE_MASTER_KEY = "master_fake_unit_test_key_00000000";
 const summary = (): LocationStatusSummary => ({
   connection: {
     locationId: "loc_1",
+    name: null,
     status: "active",
     baseUrl: "https://services.leadconnectorhq.com",
     phoneNumberCount: 1,

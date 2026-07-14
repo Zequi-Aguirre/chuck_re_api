@@ -35,6 +35,7 @@ export class GhlConnectionService {
     const webhookKey = generateWebhookKey();
     const row = await this.store.insert({
       location_id: input.locationId,
+      name: input.name ?? null,
       api_key_encrypted: this.cipher.encrypt(input.apiKey),
       base_url: input.baseUrl,
       phone_numbers: input.phoneNumbers ?? [],
@@ -129,6 +130,7 @@ export class GhlConnectionService {
     patch: UpdateGhlConnectionInput
   ): Promise<GhlConnection | null> {
     const row = await this.store.update(locationId, {
+      name: patch.name,
       api_key_encrypted:
         patch.apiKey !== undefined ? this.cipher.encrypt(patch.apiKey) : undefined,
       base_url: patch.baseUrl,
@@ -150,6 +152,7 @@ export class GhlConnectionService {
     return {
       id: row.id,
       locationId: row.location_id,
+      name: row.name ?? null,
       apiKey: this.cipher.decrypt(row.api_key_encrypted),
       baseUrl: row.base_url,
       phoneNumbers: row.phone_numbers ?? [],

@@ -28,6 +28,7 @@ const TEST_RESET_PW = ["unit", "test", "new", "pw"].join("-");
 const view = (over: Partial<AdminConnectionView> = {}): AdminConnectionView => ({
   id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
   locationId: "loc_1",
+  name: null,
   baseUrl: "https://services.leadconnectorhq.com",
   phoneNumbers: ["+15551234567"],
   status: "active",
@@ -147,6 +148,36 @@ describe("AdminResource", () => {
       expect(connections.create).not.toHaveBeenCalled();
     });
 
+    it("persists a friendly name on create (JAK-190), and returns it", async () => {
+      connections.create.mockResolvedValue(view({ name: "Acme Realty" }));
+      const res = await asAdmin(
+        request(app).post("/api/admin/connections").send({
+          locationId: "loc_1",
+          name: "  Acme Realty  ",
+          apiKey: "k",
+          baseUrl: "https://x.co",
+        })
+      );
+      expect(res.status).toBe(201);
+      expect(connections.create).toHaveBeenCalledWith(
+        expect.objectContaining({ name: "Acme Realty" })
+      );
+      expect(res.body.connection.name).toBe("Acme Realty");
+    });
+
+    it("stores a blank name as null on create (JAK-190)", async () => {
+      connections.create.mockResolvedValue(view());
+      await asAdmin(
+        request(app).post("/api/admin/connections").send({
+          locationId: "loc_1",
+          name: "   ",
+          apiKey: "k",
+          baseUrl: "https://x.co",
+        })
+      );
+      expect(connections.create).toHaveBeenCalledWith(expect.objectContaining({ name: null }));
+    });
+
     it("409s when the location is already connected (unique violation)", async () => {
       connections.create.mockRejectedValue(Object.assign(new Error("dup"), { code: "23505" }));
       const res = await asAdmin(
@@ -176,6 +207,26 @@ describe("AdminResource", () => {
         "loc_1",
         expect.objectContaining({ apiKey: undefined, baseUrl: "https://x.co" })
       );
+    });
+
+    it("updates the friendly name (JAK-190); a blank name clears it to null", async () => {
+      connections.update.mockResolvedValue(view({ name: "Renamed" }));
+      const res = await asAdmin(
+        request(app).put("/api/admin/connections/loc_1").send({ name: "  Renamed  " })
+      );
+      expect(res.status).toBe(200);
+      expect(connections.update).toHaveBeenCalledWith("loc_1", expect.objectContaining({ name: "Renamed" }));
+      expect(res.body.connection.name).toBe("Renamed");
+
+      connections.update.mockResolvedValue(view({ name: null }));
+      await asAdmin(request(app).put("/api/admin/connections/loc_1").send({ name: "" }));
+      expect(connections.update).toHaveBeenLastCalledWith("loc_1", expect.objectContaining({ name: null }));
+    });
+
+    it("leaves the name untouched when the PUT omits it (JAK-190)", async () => {
+      connections.update.mockResolvedValue(view());
+      await asAdmin(request(app).put("/api/admin/connections/loc_1").send({ baseUrl: "https://x.co" }));
+      expect(connections.update).toHaveBeenCalledWith("loc_1", expect.objectContaining({ name: undefined }));
     });
 
     it("persists the JAK-186 auto-enrichment toggle and returns the updated view", async () => {

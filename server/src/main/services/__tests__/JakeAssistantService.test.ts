@@ -147,6 +147,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
   const connection = (over: Partial<GhlConnection> = {}): GhlConnection => ({
     id: "11111111-1111-1111-1111-111111111111",
     locationId: "loc_a",
+    name: null,
     apiKey: "unused-in-this-layer",
     baseUrl: "https://a.example.com",
     phoneNumbers: ["+15551110000"],
