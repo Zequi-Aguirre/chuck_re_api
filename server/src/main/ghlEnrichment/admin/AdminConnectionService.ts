@@ -27,6 +27,8 @@ export interface UpdateConnectionInput {
   phoneNumbers?: string[];
   /** JAK-186 — flip the per-location auto-enrichment toggle on/off. */
   autoEnrichmentEnabled?: boolean;
+  /** JAK-191 — flip the unlimited-credits flag on/off. */
+  unlimitedCredits?: boolean;
 }
 
 /**
@@ -75,6 +77,7 @@ export class AdminConnectionService {
       baseUrl: patch.baseUrl,
       phoneNumbers: patch.phoneNumbers,
       autoEnrichmentEnabled: patch.autoEnrichmentEnabled,
+      unlimitedCredits: patch.unlimitedCredits,
     });
     return conn ? toView(conn) : null;
   }
@@ -150,6 +153,7 @@ function toView(conn: GhlConnection): AdminConnectionView {
     phoneNumbers: conn.phoneNumbers,
     status: conn.status,
     autoEnrichmentEnabled: conn.autoEnrichmentEnabled,
+    unlimitedCredits: conn.unlimitedCredits,
     apiKeyMasked: API_KEY_MASK,
     createdAt: conn.createdAt,
     updatedAt: conn.updatedAt,

@@ -154,6 +154,7 @@ describe("JakeAssistantService (mode-aware text-Jake)", () => {
     status: "active",
     textMode: "own_number",
     autoEnrichmentEnabled: false,
+    unlimitedCredits: false,
     createdAt: new Date("2026-07-01T00:00:00Z"),
     updatedAt: new Date("2026-07-01T00:00:00Z"),
     ...over,

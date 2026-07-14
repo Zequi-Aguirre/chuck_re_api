@@ -19,6 +19,7 @@ describe("GhlConnectionService", () => {
     status: "active",
     text_mode: "gateway",
     auto_enrichment_enabled: false,
+    unlimited_credits: false,
     webhook_key_hash: null,
     webhook_key_enc: null,
     created_at: new Date("2026-07-01T00:00:00Z"),
@@ -99,6 +100,34 @@ describe("GhlConnectionService", () => {
       store.findByLocationId.mockResolvedValue(row({ name: "Read Name" }));
       const conn = await service.getByLocationId("loc_abc");
       expect(conn?.name).toBe("Read Name");
+    });
+  });
+
+  describe("unlimited credits (JAK-191)", () => {
+    it("defaults unlimited_credits to false on create", async () => {
+      store.insert.mockImplementation(async (r) => row({ unlimited_credits: r.unlimited_credits }));
+      const conn = await service.createConnection({
+        locationId: "loc_abc",
+        apiKey: "plaintext-key",
+        baseUrl: "https://x.co",
+      });
+      expect(store.insert.mock.calls[0][0].unlimited_credits).toBe(false);
+      expect(conn.unlimitedCredits).toBe(false);
+    });
+
+    it("toggles unlimited_credits on update and maps it back", async () => {
+      store.update.mockImplementation(async (_loc, patch) =>
+        row({ unlimited_credits: patch.unlimited_credits ?? false })
+      );
+      const conn = await service.updateConnection("loc_abc", { unlimitedCredits: true });
+      expect(store.update.mock.calls[0][1].unlimited_credits).toBe(true);
+      expect(conn?.unlimitedCredits).toBe(true);
+    });
+
+    it("surfaces unlimitedCredits on read", async () => {
+      store.findByLocationId.mockResolvedValue(row({ unlimited_credits: true }));
+      const conn = await service.getByLocationId("loc_abc");
+      expect(conn?.unlimitedCredits).toBe(true);
     });
   });
 

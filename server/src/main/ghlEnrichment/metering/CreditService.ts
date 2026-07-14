@@ -12,6 +12,7 @@ import {
 } from "./CreditCosts";
 import { ChargeResult, CreditLedgerRow, CreditLedgerStore } from "./CreditLedgerStore";
 import { CreditSettingsService } from "./CreditSettingsService";
+import { GhlConnectionStore } from "../connections/GhlConnectionStore";
 
 /** A location's credit standing: current balance + recent ledger activity. */
 export interface CreditAccountSummary {
@@ -42,8 +43,19 @@ export class CreditService {
   constructor(
     @inject(CreditLedgerStore) private readonly ledger: CreditLedgerStore,
     @inject(GhlEnrichmentConfig) private readonly config: GhlEnrichmentConfig,
-    @inject(CreditSettingsService) private readonly creditSettings: CreditSettingsService
+    @inject(CreditSettingsService) private readonly creditSettings: CreditSettingsService,
+    @inject(GhlConnectionStore) private readonly connections: GhlConnectionStore
   ) {}
+
+  /**
+   * JAK-191 — whether this GHL location is on "unlimited credits". Read from the
+   * connection row (a plain boolean, no decryption). Only the ENRICHMENT gate +
+   * charge consult it — text-Jake credit methods key on a customer account, not a
+   * connection, so they are unaffected.
+   */
+  private async isUnlimited(locationId: string): Promise<boolean> {
+    return (await this.connections.findByLocationId(locationId))?.unlimited_credits === true;
+  }
 
   /** Total credits an enrichment with this plan will cost. */
   costOf(plan: EnrichmentCostPlan): number {
@@ -176,6 +188,8 @@ export class CreditService {
 
   /** True if the location can currently afford an enrichment with this plan. */
   async hasSufficientCredits(locationId: string, plan: EnrichmentCostPlan): Promise<boolean> {
+    // JAK-191: an unlimited location is NEVER insufficient, even at 0 balance.
+    if (await this.isUnlimited(locationId)) return true;
     const cost = this.costOf(plan);
     if (cost <= 0) return true;
     const balance = await this.ledger.getBalance(locationId);
@@ -194,6 +208,16 @@ export class CreditService {
     contactId: string;
     plan: EnrichmentCostPlan;
   }): Promise<ChargeResult> {
+    // JAK-191: an unlimited location is NOT charged — the enrichment ran, but we
+    // skip the debit entirely (the ledger stays honest: no debit line, balance
+    // untouched). Returns ok so the worker records the delivered enrichment.
+    if (await this.isUnlimited(input.locationId)) {
+      return {
+        ok: true,
+        balanceAfter: await this.ledger.getBalance(input.locationId, "report"),
+        entries: [],
+      };
+    }
     const lines = enrichmentChargeLines(this.config.creditCosts, input.plan);
     if (lines.length === 0) {
       // Nothing priced (all costs configured to 0) — treat as a free success.

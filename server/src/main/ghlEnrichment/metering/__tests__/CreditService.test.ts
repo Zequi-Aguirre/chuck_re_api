@@ -3,6 +3,7 @@ import { GhlEnrichmentConfig } from "../../config/GhlEnrichmentConfig";
 import { CreditService } from "../CreditService";
 import { CreditSettingsService } from "../CreditSettingsService";
 import { CreditLedgerRow, CreditLedgerStore } from "../CreditLedgerStore";
+import { GhlConnectionRow, GhlConnectionStore } from "../../connections/GhlConnectionStore";
 
 const configWith = (enrichment: number, skipTrace: number, textLookup = 1): GhlEnrichmentConfig =>
   ({
@@ -30,14 +31,22 @@ const ledgerRow = (over: Partial<CreditLedgerRow> = {}): CreditLedgerRow => ({
 describe("CreditService", () => {
   let store: MockProxy<CreditLedgerStore>;
   let creditSettings: MockProxy<CreditSettingsService>;
+  let connections: MockProxy<GhlConnectionStore>;
   let service: CreditService;
 
   const newService = (config = configWith(1, 2)) =>
-    new CreditService(store, config, creditSettings);
+    new CreditService(store, config, creditSettings, connections);
+
+  /** JAK-191: mark the loc as unlimited (true) / normal (false) for the gate. */
+  const setUnlimited = (unlimited: boolean) =>
+    connections.findByLocationId.mockResolvedValue({ unlimited_credits: unlimited } as GhlConnectionRow);
 
   beforeEach(() => {
     store = mock<CreditLedgerStore>();
     creditSettings = mock<CreditSettingsService>();
+    connections = mock<GhlConnectionStore>();
+    // Default: NOT unlimited, so existing metering behavior is unchanged.
+    setUnlimited(false);
     creditSettings.defaultGrant.mockImplementation(
       async (type) => ({ report: 50, skiptrace: 10, comps: 10 }[type])
     );
@@ -66,6 +75,42 @@ describe("CreditService", () => {
       const free = newService(configWith(0, 0));
       expect(await free.hasSufficientCredits("loc_1", { skipTrace: true })).toBe(true);
       expect(store.getBalance).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("JAK-191 unlimited credits", () => {
+    it("hasSufficientCredits is true at ZERO balance when the location is unlimited", async () => {
+      setUnlimited(true);
+      store.getBalance.mockResolvedValue(0);
+      expect(await service.hasSufficientCredits("loc_1", { skipTrace: true })).toBe(true);
+      // Never even reads the balance — the flag short-circuits.
+      expect(store.getBalance).not.toHaveBeenCalled();
+    });
+
+    it("chargeForEnrichment does NOT decrement for an unlimited location", async () => {
+      setUnlimited(true);
+      store.getBalance.mockResolvedValue(0);
+
+      const result = await service.chargeForEnrichment({
+        locationId: "loc_1",
+        contactId: "ct_1",
+        plan: { skipTrace: false },
+      });
+
+      expect(result.ok).toBe(true); // enrichment is recorded as delivered
+      expect(store.charge).not.toHaveBeenCalled(); // but the ledger is NOT debited
+    });
+
+    it("unlimited OFF → normal metering is unchanged (gate reads balance, charge debits)", async () => {
+      setUnlimited(false);
+      store.getBalance.mockResolvedValue(3);
+      store.charge.mockResolvedValue({ ok: true, balanceAfter: 2, entries: [ledgerRow()] });
+
+      expect(await service.hasSufficientCredits("loc_1", { skipTrace: false })).toBe(true);
+      expect(store.getBalance).toHaveBeenCalled();
+
+      await service.chargeForEnrichment({ locationId: "loc_1", contactId: "ct_1", plan: { skipTrace: false } });
+      expect(store.charge).toHaveBeenCalled();
     });
   });
 

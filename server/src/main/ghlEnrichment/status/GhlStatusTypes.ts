@@ -27,6 +27,8 @@ export interface ConnectionStatusView {
   provisionedFieldCount: number;
   /** JAK-186 — per-location contact-created auto-enrichment toggle (opt-in). */
   autoEnrichmentEnabled: boolean;
+  /** JAK-191 — unlimited-credits flag; the UI shows "Unlimited" instead of a number. */
+  unlimitedCredits: boolean;
   installedAt: Date;
   updatedAt: Date;
 }

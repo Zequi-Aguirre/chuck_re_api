@@ -22,6 +22,8 @@ export interface ConnectionStatusView {
   /** JAK-190 — friendly admin label; null → the UI shows the location id. */
   name: string | null;
   status: ConnectionStatus;
+  /** JAK-191 — unlimited-credits flag; the UI shows "Unlimited" instead of a number. */
+  unlimitedCredits: boolean;
   baseUrl: string;
   phoneNumberCount: number;
   provisionedFieldCount: number;
