@@ -1,11 +1,13 @@
 /**
- * JAK-182 — ContactCreatedResource route tests.
+ * JAK-182 + JAK-189 — ContactCreatedResource route tests.
  *
- * The queue + connection store are mocked — NO real Redis / GHL / REAPI. Covers:
- *   - auth (MASTER_API_KEY) gate
- *   - a valid payload enqueues (and normalizes GHL's flexible field names)
- *   - a missing/invalid payload is rejected (400)
- *   - an unknown / inactive location acks (200) WITHOUT enqueuing
+ * The queue + connection service are mocked — NO real Redis / GHL / REAPI. Covers:
+ *   - per-location webhook-key auth (x-api-key): valid key → resolves the location;
+ *     unknown / absent key → 401
+ *   - body locationId mismatch vs the key's location → 401
+ *   - missing contactId → 400; locationId now OPTIONAL (the key identifies it)
+ *   - active + toggle-on → queued; inactive / toggle-off → skipped 200
+ *   - MASTER_API_KEY internal override still resolves a location from the body
  *   - responds fast, never enriching in-request
  */
 import express, { Express } from "express";
@@ -17,8 +19,9 @@ import { GhlConnection } from "../../connections/GhlConnectionTypes";
 import { AutoEnrichmentQueueService } from "../AutoEnrichmentQueueService";
 import { ContactCreatedResource } from "../ContactCreatedResource";
 
-// Obviously-fake app secret. NOT a real credential.
+// Obviously-fake, generated-looking values. NOT real credentials.
 const FAKE_MASTER_KEY = "test-master-api-key-0000000000";
+const FAKE_WEBHOOK_KEY = "jakewh_deadbeef00000000000000000000000000000000000000000000000000000000";
 
 const connection = (over: Partial<GhlConnection> = {}): GhlConnection => ({
   id: "11111111-1111-1111-1111-111111111111",
@@ -27,8 +30,6 @@ const connection = (over: Partial<GhlConnection> = {}): GhlConnection => ({
   baseUrl: "https://services.leadconnectorhq.com",
   phoneNumbers: [],
   status: "active",
-  // JAK-186: the default fixture is a fully enabled location so the enqueue-path
-  // tests exercise the happy case; individual tests override this to gate.
   autoEnrichmentEnabled: true,
   createdAt: new Date("2026-07-01T00:00:00Z"),
   updatedAt: new Date("2026-07-01T00:00:00Z"),
@@ -44,6 +45,8 @@ describe("ContactCreatedResource", () => {
     connections = mock<GhlConnectionService>();
     queue = mock<AutoEnrichmentQueueService>();
 
+    // The webhook key resolves loc_1 by default; the master path resolves by id.
+    connections.getByWebhookKey.mockResolvedValue(connection());
     connections.getByLocationId.mockResolvedValue(connection());
     queue.enqueue.mockResolvedValue({ id: "contact_1" } as never);
 
@@ -54,15 +57,15 @@ describe("ContactCreatedResource", () => {
     app.use("/ghl", resource.router);
   });
 
-  /** POST a JSON body to the receiver, with the auth header unless told otherwise. */
-  const post = (body: unknown, opts: { auth?: boolean; key?: string } = {}) => {
+  /** POST with the per-location webhook key in x-api-key (unless overridden). */
+  const post = (body: unknown, opts: { auth?: boolean; key?: string; header?: string } = {}) => {
     const req = request(app).post("/ghl/contact-created").set("Content-Type", "application/json");
-    if (opts.auth !== false) req.set("x-master-api-key", opts.key ?? FAKE_MASTER_KEY);
+    if (opts.auth !== false) req.set(opts.header ?? "x-api-key", opts.key ?? FAKE_WEBHOOK_KEY);
     return req.send(JSON.stringify(body));
   };
 
+  // The body no longer needs a locationId — the key identifies the location.
   const validBody = {
-    locationId: "loc_1",
     contactId: "contact_1",
     address1: "742 Evergreen Terrace",
     city: "Springfield",
@@ -70,32 +73,29 @@ describe("ContactCreatedResource", () => {
     postalCode: "62704",
   };
 
-  describe("auth", () => {
-    it("rejects a request with no MASTER_API_KEY header (401)", async () => {
+  describe("webhook-key auth", () => {
+    it("rejects a request with NO key header (401)", async () => {
       const res = await post(validBody, { auth: false });
       expect(res.status).toBe(401);
       expect(queue.enqueue).not.toHaveBeenCalled();
     });
 
-    it("rejects a request with the wrong key (401)", async () => {
-      const res = await post(validBody, { key: "wrong-key" });
+    it("rejects a key no location owns (401)", async () => {
+      connections.getByWebhookKey.mockResolvedValue(null);
+      const res = await post(validBody, { key: "jakewh_unknownkey" });
       expect(res.status).toBe(401);
       expect(queue.enqueue).not.toHaveBeenCalled();
     });
 
-    it("accepts the x-api-key header alias", async () => {
-      const res = await request(app)
-        .post("/ghl/contact-created")
-        .set("x-api-key", FAKE_MASTER_KEY)
-        .set("Content-Type", "application/json")
-        .send(JSON.stringify(validBody));
-      expect(res.status).toBe(200);
+    it("resolves the location BY the presented key (never by body locationId)", async () => {
+      await post(validBody);
+      expect(connections.getByWebhookKey).toHaveBeenCalledWith(FAKE_WEBHOOK_KEY);
       expect(queue.enqueue).toHaveBeenCalledTimes(1);
     });
   });
 
-  describe("valid payload → enqueue", () => {
-    it("enqueues a normalized job and responds 200 fast", async () => {
+  describe("valid key → enqueue", () => {
+    it("enqueues a normalized job with the KEY's location and responds 200 fast", async () => {
       const res = await post(validBody);
 
       expect(res.status).toBe(200);
@@ -104,25 +104,12 @@ describe("ContactCreatedResource", () => {
       expect(queue.enqueue).toHaveBeenCalledWith({
         locationId: "loc_1",
         contactId: "contact_1",
-        address: {
-          line1: "742 Evergreen Terrace",
-          city: "Springfield",
-          state: "IL",
-          postal: "62704",
-        },
+        address: { line1: "742 Evergreen Terrace", city: "Springfield", state: "IL", postal: "62704" },
       });
     });
 
-    it("tolerates snake_case + alias field names (location_id / id / zip / address)", async () => {
-      const res = await post({
-        location_id: "loc_1",
-        id: "contact_9",
-        address: "500 Main St",
-        city: "Dallas",
-        state: "TX",
-        zip: "75001",
-      });
-
+    it("tolerates snake_case + alias field names (id / zip / address)", async () => {
+      const res = await post({ id: "contact_9", address: "500 Main St", city: "Dallas", state: "TX", zip: "75001" });
       expect(res.status).toBe(200);
       expect(queue.enqueue).toHaveBeenCalledWith({
         locationId: "loc_1",
@@ -132,9 +119,8 @@ describe("ContactCreatedResource", () => {
     });
 
     it("falls back to rawContact when no address parts are present", async () => {
-      const body = { locationId: "loc_1", contactId: "contact_1", firstName: "Jane" };
+      const body = { contactId: "contact_1", firstName: "Jane" };
       const res = await post(body);
-
       expect(res.status).toBe(200);
       expect(queue.enqueue).toHaveBeenCalledWith({
         locationId: "loc_1",
@@ -145,82 +131,104 @@ describe("ContactCreatedResource", () => {
 
     it("does not pass a jobId — queue owns dedupe (jobId = contactId)", async () => {
       await post(validBody);
-      // enqueue called with a single arg (payload only), no opts overriding jobId.
       expect(queue.enqueue.mock.calls[0]).toHaveLength(1);
     });
   });
 
+  describe("body locationId cross-check", () => {
+    it("enqueues when a body locationId MATCHES the key's location", async () => {
+      const res = await post({ ...validBody, locationId: "loc_1" });
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("queued");
+    });
+
+    it("rejects (401) when a body locationId does NOT match the key's location", async () => {
+      const res = await post({ ...validBody, locationId: "loc_OTHER" });
+      expect(res.status).toBe(401);
+      expect(res.body).toEqual({ status: "unauthorized", error: "location mismatch" });
+      expect(queue.enqueue).not.toHaveBeenCalled();
+    });
+  });
+
   describe("invalid payload → 400", () => {
-    it("rejects a body missing contactId", async () => {
-      const res = await post({ locationId: "loc_1", city: "Springfield" });
+    it("rejects a body missing contactId (400)", async () => {
+      const res = await post({ city: "Springfield" });
       expect(res.status).toBe(400);
-      expect(res.body).toEqual({ status: "rejected", error: "missing locationId or contactId" });
+      expect(res.body).toEqual({ status: "rejected", error: "missing contactId" });
       expect(queue.enqueue).not.toHaveBeenCalled();
     });
 
-    it("rejects a body missing locationId", async () => {
-      const res = await post({ contactId: "contact_1" });
-      expect(res.status).toBe(400);
-      expect(queue.enqueue).not.toHaveBeenCalled();
-    });
-
-    it("rejects an empty body", async () => {
+    it("rejects an empty body (400)", async () => {
       const res = await post({});
       expect(res.status).toBe(400);
       expect(queue.enqueue).not.toHaveBeenCalled();
     });
 
-    it("rejects blank / whitespace-only ids", async () => {
-      const res = await post({ locationId: "   ", contactId: "  " });
+    it("rejects a blank / whitespace-only contactId (400)", async () => {
+      const res = await post({ contactId: "  " });
       expect(res.status).toBe(400);
       expect(queue.enqueue).not.toHaveBeenCalled();
     });
 
-    it("never resolves the connection for an invalid payload", async () => {
-      await post({ locationId: "loc_1" });
-      expect(connections.getByLocationId).not.toHaveBeenCalled();
+    it("authenticates BEFORE validating — no key + bad body is still 401", async () => {
+      const res = await post({}, { auth: false });
+      expect(res.status).toBe(401);
     });
   });
 
   describe("not-enabled location → 200 ack, no enqueue", () => {
-    it("acks without enqueuing when the location has no connection", async () => {
-      connections.getByLocationId.mockResolvedValue(null);
-      const res = await post(validBody);
-
-      expect(res.status).toBe(200);
-      expect(res.body).toEqual({ status: "skipped", reason: "unknown location" });
-      expect(queue.enqueue).not.toHaveBeenCalled();
-    });
-
     it("acks without enqueuing when the connection is inactive", async () => {
-      connections.getByLocationId.mockResolvedValue(connection({ status: "inactive" }));
+      connections.getByWebhookKey.mockResolvedValue(connection({ status: "inactive" }));
       const res = await post(validBody);
-
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ status: "skipped", reason: "enrichment not enabled" });
       expect(queue.enqueue).not.toHaveBeenCalled();
     });
 
-    it("acks without enqueuing when the JAK-186 toggle is OFF (active but not enabled)", async () => {
-      connections.getByLocationId.mockResolvedValue(
-        connection({ status: "active", autoEnrichmentEnabled: false })
-      );
+    it("acks without enqueuing when the JAK-186 toggle is OFF", async () => {
+      connections.getByWebhookKey.mockResolvedValue(connection({ autoEnrichmentEnabled: false }));
       const res = await post(validBody);
-
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ status: "skipped", reason: "enrichment not enabled" });
       expect(queue.enqueue).not.toHaveBeenCalled();
     });
 
-    it("enqueues when the JAK-186 toggle is ON (active AND enabled)", async () => {
-      connections.getByLocationId.mockResolvedValue(
-        connection({ status: "active", autoEnrichmentEnabled: true })
-      );
+    it("enqueues when active AND toggle ON", async () => {
+      connections.getByWebhookKey.mockResolvedValue(connection({ status: "active", autoEnrichmentEnabled: true }));
       const res = await post(validBody);
-
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ status: "queued", contactId: "contact_1" });
       expect(queue.enqueue).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("MASTER_API_KEY internal override", () => {
+    it("resolves the location from the body when the master key is presented", async () => {
+      const res = await post({ locationId: "loc_1", contactId: "contact_1" }, {
+        key: FAKE_MASTER_KEY,
+        header: "x-master-api-key",
+      });
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe("queued");
+      expect(connections.getByLocationId).toHaveBeenCalledWith("loc_1");
+      // The webhook-key lookup is NOT used on the master path.
+      expect(connections.getByWebhookKey).not.toHaveBeenCalled();
+    });
+
+    it("401s when the master key is presented WITHOUT a body locationId", async () => {
+      const res = await post({ contactId: "contact_1" }, { key: FAKE_MASTER_KEY, header: "x-master-api-key" });
+      expect(res.status).toBe(401);
+      expect(queue.enqueue).not.toHaveBeenCalled();
+    });
+
+    it("acks 200 skipped when the master key targets an unknown location", async () => {
+      connections.getByLocationId.mockResolvedValue(null);
+      const res = await post({ locationId: "loc_missing", contactId: "contact_1" }, {
+        key: FAKE_MASTER_KEY,
+        header: "x-master-api-key",
+      });
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ status: "skipped", reason: "unknown location" });
     });
   });
 

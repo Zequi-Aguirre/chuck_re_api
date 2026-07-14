@@ -96,6 +96,25 @@ export class AdminConnectionService {
   }
 
   /**
+   * The DECRYPTED per-location inbound webhook key (JAK-189) for admin display —
+   * the value the sub-account owner pastes into GHL's `x-api-key` header. Null if
+   * the location is unknown or (transiently, pre-backfill) has no key yet. This is
+   * the ONE admin surface that returns a real key; guard it with admin auth.
+   */
+  async getWebhookKey(locationId: string): Promise<string | null> {
+    return this.connections.getWebhookKey(locationId);
+  }
+
+  /**
+   * Rotate a location's webhook key (JAK-189). Returns the NEW plaintext key (shown
+   * once); the old key stops authenticating immediately. Null if the location is
+   * unknown.
+   */
+  async regenerateWebhookKey(locationId: string): Promise<string | null> {
+    return this.connections.regenerateWebhookKey(locationId);
+  }
+
+  /**
    * Manually grant (or, with a negative amount, adjust) a location's credit
    * balance — the beta top-up path (Stripe billing is deferred). Returns the new
    * balance, or null if the location is unknown.

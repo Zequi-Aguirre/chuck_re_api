@@ -17,6 +17,12 @@ export interface GhlConnectionRow {
   text_mode: GhlTextMode;
   /** JAK-186 — per-location contact-created auto-enrichment toggle (opt-in). */
   auto_enrichment_enabled: boolean;
+  /** JAK-189 — SHA-256 (hex) of the per-location inbound webhook key; null until
+   * backfilled. Unique + indexed for O(1) inbound lookup. */
+  webhook_key_hash: string | null;
+  /** JAK-189 — the webhook key encrypted at rest (same cipher as api_key), for the
+   * admin UI to display/copy. Null until backfilled. */
+  webhook_key_enc: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -29,6 +35,8 @@ export interface InsertGhlConnectionRow {
   status: GhlConnectionStatus;
   text_mode: GhlTextMode;
   auto_enrichment_enabled: boolean;
+  webhook_key_hash: string;
+  webhook_key_enc: string;
 }
 
 export interface UpdateGhlConnectionRow {
@@ -37,6 +45,8 @@ export interface UpdateGhlConnectionRow {
   phone_numbers?: string[];
   status?: GhlConnectionStatus;
   text_mode?: GhlTextMode;
+  webhook_key_hash?: string;
+  webhook_key_enc?: string;
   auto_enrichment_enabled?: boolean;
 }
 
@@ -55,8 +65,8 @@ export class GhlConnectionStore {
   async insert(row: InsertGhlConnectionRow): Promise<GhlConnectionRow> {
     const result = await this.db.query<GhlConnectionRow>(
       `INSERT INTO ghl_connections
-         (location_id, api_key_encrypted, base_url, phone_numbers, status, text_mode, auto_enrichment_enabled)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+         (location_id, api_key_encrypted, base_url, phone_numbers, status, text_mode, auto_enrichment_enabled, webhook_key_hash, webhook_key_enc)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [
         row.location_id,
@@ -66,6 +76,8 @@ export class GhlConnectionStore {
         row.status,
         row.text_mode,
         row.auto_enrichment_enabled,
+        row.webhook_key_hash,
+        row.webhook_key_enc,
       ]
     );
     return result.rows[0];
@@ -77,6 +89,26 @@ export class GhlConnectionStore {
       [locationId]
     );
     return result.rows[0] ?? null;
+  }
+
+  /**
+   * Resolve the connection whose webhook key hashes to `hash` (JAK-189) — the
+   * inbound auth lookup for POST /ghl/contact-created. Unique index → at most one.
+   */
+  async findByWebhookKeyHash(hash: string): Promise<GhlConnectionRow | null> {
+    const result = await this.db.query<GhlConnectionRow>(
+      `SELECT * FROM ghl_connections WHERE webhook_key_hash = $1`,
+      [hash]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  /** Rows still missing a webhook key (JAK-189 backfill target). */
+  async listMissingWebhookKey(): Promise<GhlConnectionRow[]> {
+    const result = await this.db.query<GhlConnectionRow>(
+      `SELECT * FROM ghl_connections WHERE webhook_key_hash IS NULL`
+    );
+    return result.rows;
   }
 
   /** Resolve the connection whose associated phone numbers include `phoneNumber`. */
@@ -130,6 +162,14 @@ export class GhlConnectionStore {
     if (patch.auto_enrichment_enabled !== undefined) {
       sets.push(`auto_enrichment_enabled = $${i++}`);
       values.push(patch.auto_enrichment_enabled);
+    }
+    if (patch.webhook_key_hash !== undefined) {
+      sets.push(`webhook_key_hash = $${i++}`);
+      values.push(patch.webhook_key_hash);
+    }
+    if (patch.webhook_key_enc !== undefined) {
+      sets.push(`webhook_key_enc = $${i++}`);
+      values.push(patch.webhook_key_enc);
     }
 
     // Nothing to change → return the current row unchanged.

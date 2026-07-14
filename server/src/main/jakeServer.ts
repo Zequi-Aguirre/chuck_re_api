@@ -23,6 +23,7 @@ import {
     AdminAuthService,
     ContactCreatedResource,
     AutoEnrichmentQueueService,
+    GhlConnectionService,
 } from "./ghlEnrichment/index.ts";
 // Services
 import { LeadEnrichmentQueueService } from "./services/LeadEnrichmentQueueService.ts";
@@ -111,6 +112,11 @@ export class JakeServer {
         // 🌱 Bootstrap the first admin from Doppler env (never a hardcoded
         // credential). No-ops unless ADMIN_SEED_* are set and the admin is absent.
         await this.seedAdmin();
+
+        // 🔑 JAK-189 — backfill a per-location inbound webhook key onto any connection
+        // missing one (the app step the schema migration defers to; SQL can't run the
+        // app cipher). Idempotent — a no-op once every row has a key.
+        await this.backfillWebhookKeys();
 
         // 🚀 Start Lead Enrichment Worker (but NOT the HTTP server)
         if (redisConfigured) {
@@ -209,6 +215,21 @@ export class JakeServer {
                 console.log("🔐 Superadmin already present — no seed needed.");
         } catch (err) {
             console.error("❌ Admin bootstrap failed:", err);
+        }
+    }
+
+    /** Generate a webhook key for any keyless connection (JAK-189); DB-less-boot safe. */
+    private async backfillWebhookKeys(): Promise<void> {
+        if (!this.config.dbHost?.trim()) {
+            console.log("ℹ️ Postgres (DB_HOST) not set — skipping webhook-key backfill.");
+            return;
+        }
+        try {
+            const filled = await container.resolve(GhlConnectionService).ensureWebhookKeys();
+            if (filled > 0)
+                console.log(`🔑 Backfilled inbound webhook keys for ${filled} connection(s).`);
+        } catch (err) {
+            console.error("❌ Webhook-key backfill failed:", err);
         }
     }
 

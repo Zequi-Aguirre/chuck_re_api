@@ -9,9 +9,13 @@
  * The REAPI lookup + write-back happen in the worker (JAK-183), never in-request.
  *
  * ── The payload contract Zequi configures GHL to send ────────────────────────
- * A JSON body. REQUIRED routing fields (the request is rejected 400 without them):
- *   - locationId   — the GHL sub-account id       (accepted: locationId | location_id)
- *   - contactId    — the created contact's id     (accepted: contactId | contact_id | id)
+ * Auth (JAK-189): the sub-account's OWN webhook key in the `x-api-key` header
+ * (per-location, from the admin UI — NOT the shared MASTER_API_KEY). The key
+ * identifies the location, so:
+ *   - contactId    — the created contact's id     (REQUIRED; accepted: contactId | contact_id | id)
+ *   - locationId   — OPTIONAL (accepted: locationId | location_id). The key already
+ *                    identifies the location; if the body carries one it must MATCH
+ *                    the key's location or the request is rejected 401.
  * STRONGLY RECOMMENDED (the property to enrich; omitted → enqueued for best-effort
  * resolution in the worker, never rejected):
  *   - address line1 (accepted: address1 | address | line1 | street)
@@ -56,12 +60,14 @@ export interface RawContactCreatedBody {
 }
 
 /**
- * A validated, routing-ready view of a contact-created webhook. Built only when
- * both ids are present; the address is normalized best-effort (undefined when the
- * payload carried none).
+ * A validated, routing-ready view of a contact-created webhook. Built when the
+ * contact id is present; `locationId` is OPTIONAL (JAK-189 — the webhook key
+ * identifies the location; a body locationId is only cross-checked against it).
+ * The address is normalized best-effort (undefined when the payload carried none).
  */
 export interface ParsedContactCreated {
-  locationId: string;
+  /** Body-supplied location id, if any — cross-checked against the key's location. */
+  locationId?: string;
   contactId: string;
   /** Normalized address parts present on the payload (each omitted when blank). */
   address?: {

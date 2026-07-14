@@ -7,6 +7,7 @@ import {
   GhlConnection,
   UpdateGhlConnectionInput,
 } from "./GhlConnectionTypes";
+import { generateWebhookKey, hashWebhookKey } from "./WebhookKey";
 
 /**
  * The SINGLE source of GHL credentials for the whole app (JAK-102).
@@ -29,6 +30,9 @@ export class GhlConnectionService {
 
   /** Create a connection, encrypting the API key before it touches the DB. */
   async createConnection(input: CreateGhlConnectionInput): Promise<GhlConnection> {
+    // JAK-189: mint a per-location inbound webhook key up front so a new connection
+    // is never keyless. Store its hash (lookup) + encrypted form (admin display).
+    const webhookKey = generateWebhookKey();
     const row = await this.store.insert({
       location_id: input.locationId,
       api_key_encrypted: this.cipher.encrypt(input.apiKey),
@@ -38,6 +42,8 @@ export class GhlConnectionService {
       text_mode: input.textMode ?? DEFAULT_TEXT_MODE,
       // JAK-186: opt-in — a new connection is NOT auto-enriched until turned on.
       auto_enrichment_enabled: input.autoEnrichmentEnabled ?? false,
+      webhook_key_hash: hashWebhookKey(webhookKey),
+      webhook_key_enc: this.cipher.encrypt(webhookKey),
     });
     return this.toConnection(row);
   }
@@ -46,6 +52,60 @@ export class GhlConnectionService {
   async getByLocationId(locationId: string): Promise<GhlConnection | null> {
     const row = await this.store.findByLocationId(locationId);
     return row ? this.toConnection(row) : null;
+  }
+
+  /**
+   * Resolve a connection by a PRESENTED inbound webhook key (JAK-189) — the auth
+   * lookup for POST /ghl/contact-created. Hashes the key and finds the location
+   * whose stored hash matches; null when no location owns that key.
+   */
+  async getByWebhookKey(presentedKey: string): Promise<GhlConnection | null> {
+    const row = await this.store.findByWebhookKeyHash(hashWebhookKey(presentedKey));
+    return row ? this.toConnection(row) : null;
+  }
+
+  /**
+   * The DECRYPTED webhook key for a location, for the admin UI to display/copy
+   * (JAK-189). Null when the location is unknown or (transiently) has no key yet.
+   */
+  async getWebhookKey(locationId: string): Promise<string | null> {
+    const row = await this.store.findByLocationId(locationId);
+    if (!row || !row.webhook_key_enc) return null;
+    return this.cipher.decrypt(row.webhook_key_enc);
+  }
+
+  /**
+   * Rotate a location's webhook key (JAK-189): mint a fresh key, replace BOTH the
+   * hash and the encrypted copy, and return the new plaintext key (shown once to
+   * the admin). The old key stops authenticating immediately. Null if unknown.
+   */
+  async regenerateWebhookKey(locationId: string): Promise<string | null> {
+    const newKey = generateWebhookKey();
+    const row = await this.store.update(locationId, {
+      webhook_key_hash: hashWebhookKey(newKey),
+      webhook_key_enc: this.cipher.encrypt(newKey),
+    });
+    return row ? newKey : null;
+  }
+
+  /**
+   * Backfill a webhook key onto every connection missing one (JAK-189) — the
+   * one-time, idempotent boot step the migration defers to (SQL can't run the
+   * app-level cipher). Covers active AND inactive connections. Returns how many
+   * were filled; a no-op (returns 0) once every row has a key.
+   */
+  async ensureWebhookKeys(): Promise<number> {
+    const missing = await this.store.listMissingWebhookKey();
+    let filled = 0;
+    for (const row of missing) {
+      const key = generateWebhookKey();
+      await this.store.update(row.location_id, {
+        webhook_key_hash: hashWebhookKey(key),
+        webhook_key_enc: this.cipher.encrypt(key),
+      });
+      filled++;
+    }
+    return filled;
   }
 
   /** Resolve a connection by an associated phone number (text-Jake routing). */

@@ -20,6 +20,7 @@ import {
   OrchestratorPromptView,
   ReportPromptView,
   FooterView,
+  WebhookKeyView,
   SkipTraceCostView,
   SkipTracePromptView,
   FindContactResult,
@@ -137,6 +138,17 @@ export const api = {
   },
   async deleteConnection(locationId: string): Promise<void> {
     await request(`/connections/${encodeURIComponent(locationId)}`, { method: "DELETE" });
+  },
+
+  // --- per-location inbound webhook key (JAK-189) ---
+  async getWebhookKey(locationId: string): Promise<WebhookKeyView> {
+    return request<WebhookKeyView>(`/connections/${encodeURIComponent(locationId)}/webhook-key`);
+  },
+  async regenerateWebhookKey(locationId: string): Promise<WebhookKeyView> {
+    return request<WebhookKeyView>(
+      `/connections/${encodeURIComponent(locationId)}/webhook-key/regenerate`,
+      { method: "POST" }
+    );
   },
 
   // --- footers (JAK-188) ---
