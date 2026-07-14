@@ -23,8 +23,12 @@ interface Props {
 /**
  * The connect / edit form (JAK-113). To connect a sub-account, Zequi pastes its
  * GHL API key + location id + base url; on save the key is sent once and stored
- * encrypted at rest — it is never returned or shown again. In edit mode the key
- * field is optional and only rotates the stored key when filled.
+ * encrypted at rest — it is never returned or shown again.
+ *
+ * JAK-192: EDIT mode is name/details ONLY — the API-key field is create-only.
+ * Rotating the stored GHL key is a separate, explicit action ({@link
+ * import("./RotateApiKeyDialog").RotateApiKeyDialog}), so this dialog never
+ * touches the key in edit mode.
  */
 export function ConnectionFormDialog({ open, mode, initial, onClose, onSaved }: Props) {
   const isEdit = mode === "edit";
@@ -55,11 +59,10 @@ export function ConnectionFormDialog({ open, mode, initial, onClose, onSaved }: 
     setBusy(true);
     try {
       if (isEdit) {
+        // JAK-192: edit is name/details only — the key is rotated separately.
         await api.updateConnection(trimmedLocation, {
           // JAK-190 — always send name (blank string clears it).
           name: name.trim(),
-          // Only send the key when the operator typed a new one (rotation).
-          apiKey: trimmedKey ? trimmedKey : undefined,
           baseUrl: trimmedBase,
           phoneNumbers,
         });
@@ -109,15 +112,20 @@ export function ConnectionFormDialog({ open, mode, initial, onClose, onSaved }: 
             disabled={isEdit}
             helperText={isEdit ? "The location can't be changed." : undefined}
           />
-          <TextField
-            label={isEdit ? "New API key (leave blank to keep current)" : "GHL API key"}
-            fullWidth
-            type="password"
-            autoComplete="off"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            helperText="Stored encrypted. It's never shown again after saving."
-          />
+          {/* JAK-192: the GHL API key is collected only when CONNECTING a new
+              sub-account. Editing an existing one never touches the key —
+              rotating it is a separate, explicit "Rotate API key" action. */}
+          {!isEdit && (
+            <TextField
+              label="GHL API key"
+              fullWidth
+              type="password"
+              autoComplete="off"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              helperText="Stored encrypted. It's never shown again after saving."
+            />
+          )}
           <TextField
             label="Base URL"
             fullWidth
