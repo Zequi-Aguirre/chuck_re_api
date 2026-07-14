@@ -372,3 +372,13 @@ export interface FooterView {
   createdAt: string;
   updatedAt: string;
 }
+
+/**
+ * The per-sub-account inbound webhook key (JAK-189) for the admin UI. `webhookKey`
+ * is the decrypted key the owner pastes into GHL's `x-api-key` header; `endpointUrl`
+ * is the public POST target shown next to it. Never persisted client-side.
+ */
+export interface WebhookKeyView {
+  webhookKey: string;
+  endpointUrl: string;
+}

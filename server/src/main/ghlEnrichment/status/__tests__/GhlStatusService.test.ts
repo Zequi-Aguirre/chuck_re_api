@@ -18,6 +18,8 @@ const connectionRow = (over: Partial<GhlConnectionRow> = {}): GhlConnectionRow =
   status: "active",
   text_mode: "gateway",
   auto_enrichment_enabled: false,
+  webhook_key_hash: null,
+  webhook_key_enc: null,
   created_at: new Date("2026-06-01T00:00:00Z"),
   updated_at: new Date("2026-06-15T00:00:00Z"),
   ...over,

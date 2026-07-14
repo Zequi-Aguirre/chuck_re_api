@@ -18,6 +18,8 @@ describe("GhlConnectionService", () => {
     status: "active",
     text_mode: "gateway",
     auto_enrichment_enabled: false,
+    webhook_key_hash: null,
+    webhook_key_enc: null,
     created_at: new Date("2026-07-01T00:00:00Z"),
     updated_at: new Date("2026-07-01T00:00:00Z"),
     ...over,
@@ -48,6 +50,94 @@ describe("GhlConnectionService", () => {
     expect(inserted.auto_enrichment_enabled).toBe(false);
     // Round-trips back to plaintext for the caller.
     expect(conn.apiKey).toBe("plaintext-key");
+  });
+
+  describe("per-location webhook key (JAK-189)", () => {
+    it("mints a webhook key on create — hash + encrypted, and they round-trip", async () => {
+      store.insert.mockImplementation(async (r) => row(r));
+
+      await service.createConnection({
+        locationId: "loc_abc",
+        apiKey: "plaintext-key",
+        baseUrl: "https://x.co",
+      });
+
+      const inserted = store.insert.mock.calls[0][0];
+      expect(inserted.webhook_key_hash).toMatch(/^[0-9a-f]{64}$/); // SHA-256 hex
+      expect(inserted.webhook_key_enc).toMatch(/^v1:/); // encrypted, not plaintext
+      // The encrypted copy decrypts to a prefixed key whose SHA-256 is the stored hash.
+      const decrypted = cipher.decrypt(inserted.webhook_key_enc);
+      expect(decrypted.startsWith("jakewh_")).toBe(true);
+      const { hashWebhookKey } = await import("../WebhookKey");
+      expect(hashWebhookKey(decrypted)).toBe(inserted.webhook_key_hash);
+    });
+
+    it("resolves a location BY the presented key (hash lookup)", async () => {
+      const stored = row();
+      store.findByWebhookKeyHash.mockResolvedValue(stored);
+
+      const conn = await service.getByWebhookKey("jakewh_presented");
+
+      const { hashWebhookKey } = await import("../WebhookKey");
+      expect(store.findByWebhookKeyHash).toHaveBeenCalledWith(hashWebhookKey("jakewh_presented"));
+      expect(conn?.locationId).toBe("loc_abc");
+    });
+
+    it("returns null when no location owns the presented key", async () => {
+      store.findByWebhookKeyHash.mockResolvedValue(null);
+      expect(await service.getByWebhookKey("jakewh_nobody")).toBeNull();
+    });
+
+    it("getWebhookKey decrypts the stored key for admin display", async () => {
+      const key = "jakewh_abc123";
+      store.findByLocationId.mockResolvedValue(row({ webhook_key_enc: cipher.encrypt(key) }));
+      expect(await service.getWebhookKey("loc_abc")).toBe(key);
+    });
+
+    it("getWebhookKey returns null for an unknown location", async () => {
+      store.findByLocationId.mockResolvedValue(null);
+      expect(await service.getWebhookKey("nope")).toBeNull();
+    });
+
+    it("regenerate changes BOTH hash + enc and returns the new plaintext key", async () => {
+      store.update.mockImplementation(async (_loc, patch) => row(patch));
+      const newKey = await service.regenerateWebhookKey("loc_abc");
+
+      expect(newKey).not.toBeNull();
+      expect(newKey!.startsWith("jakewh_")).toBe(true);
+      const patch = store.update.mock.calls[0][1];
+      const { hashWebhookKey } = await import("../WebhookKey");
+      expect(patch.webhook_key_hash).toBe(hashWebhookKey(newKey!));
+      expect(cipher.decrypt(patch.webhook_key_enc!)).toBe(newKey);
+    });
+
+    it("regenerate returns null for an unknown location", async () => {
+      store.update.mockResolvedValue(null);
+      expect(await service.regenerateWebhookKey("nope")).toBeNull();
+    });
+
+    it("ensureWebhookKeys backfills only the rows missing a key", async () => {
+      store.listMissingWebhookKey.mockResolvedValue([
+        row({ location_id: "loc_a" }),
+        row({ location_id: "loc_b" }),
+      ]);
+      store.update.mockImplementation(async (_loc, patch) => row(patch));
+
+      const filled = await service.ensureWebhookKeys();
+
+      expect(filled).toBe(2);
+      expect(store.update).toHaveBeenCalledTimes(2);
+      for (const call of store.update.mock.calls) {
+        expect(call[1].webhook_key_hash).toMatch(/^[0-9a-f]{64}$/);
+        expect(call[1].webhook_key_enc).toMatch(/^v1:/);
+      }
+    });
+
+    it("ensureWebhookKeys is a no-op (returns 0) when every row has a key", async () => {
+      store.listMissingWebhookKey.mockResolvedValue([]);
+      expect(await service.ensureWebhookKeys()).toBe(0);
+      expect(store.update).not.toHaveBeenCalled();
+    });
   });
 
   it("maps the auto-enrichment flag through on read (JAK-186)", async () => {

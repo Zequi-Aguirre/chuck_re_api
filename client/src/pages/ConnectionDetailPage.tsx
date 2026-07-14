@@ -20,8 +20,14 @@ import Chip from "@mui/material/Chip";
 import Link from "@mui/material/Link";
 import Switch from "@mui/material/Switch";
 import FormControlLabel from "@mui/material/FormControlLabel";
+import TextField from "@mui/material/TextField";
+import IconButton from "@mui/material/IconButton";
+import Tooltip from "@mui/material/Tooltip";
+import Snackbar from "@mui/material/Snackbar";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
+import RefreshIcon from "@mui/icons-material/Refresh";
 import { api } from "../api";
 import { LocationStatusDetail } from "../types";
 import { StatusChip } from "../components/StatusChip";
@@ -198,6 +204,9 @@ export function ConnectionDetailPage() {
         </Stack>
       </Paper>
 
+      {/* JAK-189 — per-sub-account inbound webhook key */}
+      <WebhookKeySection locationId={connection.locationId} />
+
       {/* Credits + outcomes */}
       <Grid container spacing={3} sx={{ mt: 0 }}>
         <Grid item xs={12} md={4}>
@@ -355,6 +364,151 @@ function BackLink() {
     <Link component={RouterLink} to="/" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
       <ArrowBackIcon fontSize="small" /> All sub-accounts
     </Link>
+  );
+}
+
+/**
+ * JAK-189 — per-sub-account inbound webhook key. Shows the endpoint URL + the
+ * sub-account's own key (each with a Copy button) so Zequi can paste both into
+ * GHL, plus a Regenerate action that rotates the key (invalidating the old one).
+ *
+ * MOBILE-FIRST: read-only fields wrap and the Copy/Regenerate buttons stay
+ * on-screen at phone width (no horizontal scroll). The key is a real credential,
+ * so it's fetched on demand and never persisted.
+ */
+function WebhookKeySection({ locationId }: { locationId: string }) {
+  const [webhookKey, setWebhookKey] = useState<string | null>(null);
+  const [endpointUrl, setEndpointUrl] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [confirmRegen, setConfirmRegen] = useState(false);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      const view = await api.getWebhookKey(locationId);
+      setWebhookKey(view.webhookKey);
+      setEndpointUrl(view.endpointUrl);
+    } catch {
+      setError("Couldn't load the webhook key.");
+    }
+  }, [locationId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function copy(value: string, label: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setToast(`${label} copied.`);
+    } catch {
+      setToast("Copy failed — select and copy manually.");
+    }
+  }
+
+  async function regenerate() {
+    setBusy(true);
+    setError(null);
+    try {
+      const view = await api.regenerateWebhookKey(locationId);
+      setWebhookKey(view.webhookKey);
+      setEndpointUrl(view.endpointUrl);
+      setToast("New webhook key generated — the old one no longer works.");
+    } catch {
+      setError("Couldn't regenerate the key.");
+    } finally {
+      setBusy(false);
+      setConfirmRegen(false);
+    }
+  }
+
+  return (
+    <SectionPaper title="Inbound webhook (GHL)">
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+        Point GHL's contact-created webhook at this URL and send this key in the{" "}
+        <code>x-api-key</code> header. This key is unique to this sub-account.
+      </Typography>
+
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      )}
+
+      <Stack spacing={2}>
+        <CopyableField
+          label="Endpoint URL"
+          value={endpointUrl}
+          onCopy={() => copy(endpointUrl, "Endpoint URL")}
+        />
+        <CopyableField
+          label="Webhook key (x-api-key)"
+          value={webhookKey ?? "Loading…"}
+          onCopy={() => webhookKey && copy(webhookKey, "Webhook key")}
+        />
+      </Stack>
+
+      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, mt: 2 }}>
+        <Button
+          variant="outlined"
+          color="warning"
+          startIcon={<RefreshIcon />}
+          disabled={busy || !webhookKey}
+          onClick={() => setConfirmRegen(true)}
+        >
+          Regenerate key
+        </Button>
+      </Box>
+
+      <ConfirmDialog
+        open={confirmRegen}
+        title="Regenerate webhook key?"
+        body="The current key stops working immediately. You'll need to paste the new key into GHL for this sub-account."
+        confirmLabel="Regenerate"
+        onCancel={() => setConfirmRegen(false)}
+        onConfirm={regenerate}
+      />
+      <Snackbar
+        open={toast !== null}
+        autoHideDuration={3000}
+        onClose={() => setToast(null)}
+        message={toast ?? ""}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      />
+    </SectionPaper>
+  );
+}
+
+/** A read-only value with a copy button; wraps long values so it fits a phone. */
+function CopyableField({
+  label,
+  value,
+  onCopy,
+}: {
+  label: string;
+  value: string;
+  onCopy: () => void;
+}) {
+  return (
+    <Box sx={{ display: "flex", alignItems: "flex-end", gap: 1 }}>
+      <TextField
+        label={label}
+        value={value}
+        fullWidth
+        size="small"
+        InputProps={{ readOnly: true, sx: { fontFamily: "monospace", wordBreak: "break-all" } }}
+        multiline
+      />
+      <Tooltip title="Copy">
+        <span>
+          <IconButton onClick={onCopy} aria-label={`Copy ${label}`} sx={{ flexShrink: 0 }}>
+            <ContentCopyIcon fontSize="small" />
+          </IconButton>
+        </span>
+      </Tooltip>
+    </Box>
   );
 }
 

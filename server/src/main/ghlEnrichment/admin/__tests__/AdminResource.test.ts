@@ -252,6 +252,56 @@ describe("AdminResource", () => {
     });
   });
 
+  describe("webhook key (JAK-189)", () => {
+    it("GET is behind the admin auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app).get("/api/admin/connections/loc_1/webhook-key");
+      expect(res.status).toBe(401);
+      expect(connections.getWebhookKey).not.toHaveBeenCalled();
+    });
+
+    it("GET returns the decrypted key + endpoint URL", async () => {
+      connections.getWebhookKey.mockResolvedValue("jakewh_abc123");
+      const res = await asAdmin(request(app).get("/api/admin/connections/loc_1/webhook-key"));
+      expect(res.status).toBe(200);
+      expect(res.body.webhookKey).toBe("jakewh_abc123");
+      expect(res.body.endpointUrl).toContain("/ghl/contact-created");
+      expect(connections.getWebhookKey).toHaveBeenCalledWith("loc_1");
+    });
+
+    it("GET 404s an unknown location", async () => {
+      connections.getWebhookKey.mockResolvedValue(null);
+      const res = await asAdmin(request(app).get("/api/admin/connections/nope/webhook-key"));
+      expect(res.status).toBe(404);
+    });
+
+    it("POST regenerate returns a NEW key (behind admin auth)", async () => {
+      connections.regenerateWebhookKey.mockResolvedValue("jakewh_newkey");
+      const res = await asAdmin(
+        request(app).post("/api/admin/connections/loc_1/webhook-key/regenerate")
+      );
+      expect(res.status).toBe(200);
+      expect(res.body.webhookKey).toBe("jakewh_newkey");
+      expect(res.body.endpointUrl).toContain("/ghl/contact-created");
+      expect(connections.regenerateWebhookKey).toHaveBeenCalledWith("loc_1");
+    });
+
+    it("POST regenerate is behind the admin auth gate", async () => {
+      auth.verifyToken.mockReturnValue(null);
+      const res = await request(app).post("/api/admin/connections/loc_1/webhook-key/regenerate");
+      expect(res.status).toBe(401);
+      expect(connections.regenerateWebhookKey).not.toHaveBeenCalled();
+    });
+
+    it("POST regenerate 404s an unknown location", async () => {
+      connections.regenerateWebhookKey.mockResolvedValue(null);
+      const res = await asAdmin(
+        request(app).post("/api/admin/connections/unknown/webhook-key/regenerate")
+      );
+      expect(res.status).toBe(404);
+    });
+  });
+
   // --- Text-Jake customers (JAK-129) ----------------------------------------
 
   const textCustomerView = (over: Partial<AdminTextCustomerView> = {}): AdminTextCustomerView => ({

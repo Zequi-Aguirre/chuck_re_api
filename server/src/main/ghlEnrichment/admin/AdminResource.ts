@@ -95,6 +95,15 @@ export class AdminResource {
     this.router.delete("/connections/:locationId", this.remove.bind(this));
     this.router.post("/connections/:locationId/credits", this.grantCredits.bind(this));
 
+    // JAK-189 — per-location inbound webhook key: fetch the (decrypted) key + the
+    // endpoint URL for the owner to paste into GHL, and rotate it. Behind the same
+    // admin session guard as everything else here (NOT the master key).
+    this.router.get("/connections/:locationId/webhook-key", this.getWebhookKey.bind(this));
+    this.router.post(
+      "/connections/:locationId/webhook-key/regenerate",
+      this.regenerateWebhookKey.bind(this)
+    );
+
     // Tier-1 text-Jake customers (JAK-129): list texters + their credit balances,
     // and grant credits to one BY PHONE — a different account key than a
     // connection's locationId, so a gateway texter can finally be topped up.
@@ -522,6 +531,32 @@ export class AdminResource {
       const entry = await this.connections.grantCredits(locationId, amount, reason);
       if (!entry) return res.status(404).json({ error: "unknown location" });
       return res.status(200).json({ balance: entry.balance_after, entry });
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  // --- Per-location inbound webhook key (JAK-189) --------------------------
+
+  private async getWebhookKey(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const locationId = str(req.params.locationId);
+      if (!locationId) return res.status(400).json({ error: "missing location id" });
+      const webhookKey = await this.connections.getWebhookKey(locationId);
+      if (webhookKey === null) return res.status(404).json({ error: "unknown location" });
+      return res.status(200).json({ webhookKey, endpointUrl: WEBHOOK_ENDPOINT_URL });
+    } catch (err) {
+      return next(err);
+    }
+  }
+
+  private async regenerateWebhookKey(req: Request, res: Response, next: NextFunction): Promise<Response | void> {
+    try {
+      const locationId = str(req.params.locationId);
+      if (!locationId) return res.status(400).json({ error: "missing location id" });
+      const webhookKey = await this.connections.regenerateWebhookKey(locationId);
+      if (webhookKey === null) return res.status(404).json({ error: "unknown location" });
+      return res.status(200).json({ webhookKey, endpointUrl: WEBHOOK_ENDPOINT_URL });
     } catch (err) {
       return next(err);
     }
@@ -1320,6 +1355,10 @@ const MAX_FOOTER_LENGTH = 1000;
 
 /** Pragmatic email shape check — a single `@` with non-empty, dot-bearing sides. */
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** The public contact-created webhook endpoint (JAK-189) — shown next to the key
+ * so an operator can paste both into GHL. Public URL, not a secret. */
+const WEBHOOK_ENDPOINT_URL = "https://chuck-re-api.onrender.com/ghl/contact-created";
 
 /** Coerce an unknown to a trimmed string ("" for non-strings). */
 function str(value: unknown): string {
