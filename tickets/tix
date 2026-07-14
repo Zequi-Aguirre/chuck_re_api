@@ -1,0 +1,295 @@
+#!/usr/bin/env node
+// tix — Jake's project-local ticket store.
+//
+// tickets/tickets.db is the canonical SOURCE OF TRUTH; tickets/TICKETS.md is a
+// GENERATED, human-readable export regenerated on every mutation so git diffs
+// and ad-hoc grep over tickets keep working. Mirrors the AskZack
+// inbox.db/inbox.md pattern: DB is truth, the .md is generated — DO NOT
+// hand-edit TICKETS.md; mutate via `tix add|done`, which regenerates it.
+//
+// Zero-dependency on purpose: it shells out to the `sqlite3` CLI binary so the
+// store travels with the repo and needs no `npm install` / native build.
+//
+// Commands:
+//   tix add --id JAKE-NNN --title "..." [--priority P0] [--status open]
+//           [--epic ghl-enrichment] [--depends JAKE-001,JAKE-002] [--body "..."]
+//   tix list [--all] [--status X] [--priority X]   (default: everything but done)
+//   tix done <id> [--status done]
+//   tix show <id>
+//   tix export                                     (regenerate TICKETS.md)
+
+'use strict';
+
+const { execFileSync } = require('node:child_process');
+const { join } = require('node:path');
+const { writeFileSync } = require('node:fs');
+
+const SQLITE = process.env.SQLITE_BIN || 'sqlite3';
+const HERE = __dirname;
+const DB_PATH = process.env.TICKETS_DB_PATH || join(HERE, 'tickets.db');
+const EXPORT_PATH = process.env.TICKETS_MD_PATH || join(HERE, 'TICKETS.md');
+
+const SCHEMA = `
+CREATE TABLE IF NOT EXISTS tickets (
+  id          TEXT PRIMARY KEY,
+  epic        TEXT,
+  title       TEXT NOT NULL,
+  priority    TEXT,
+  status      TEXT NOT NULL DEFAULT 'open',
+  depends_on  TEXT,
+  body        TEXT,
+  created_at  TEXT NOT NULL,
+  updated_at  TEXT NOT NULL
+);
+`;
+
+// ---- sqlite plumbing --------------------------------------------------------
+
+function sql(text, { json = false } = {}) {
+  const args = json ? ['-json', DB_PATH] : [DB_PATH];
+  const out = execFileSync(SQLITE, args, { input: text, encoding: 'utf8' });
+  if (!json) return out;
+  const trimmed = out.trim();
+  return trimmed ? JSON.parse(trimmed) : [];
+}
+
+function q(v) {
+  if (v === null || v === undefined) return 'NULL';
+  return `'${String(v).replace(/'/g, "''")}'`;
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function ensureSchema() {
+  sql(SCHEMA);
+}
+
+// ---- data access ------------------------------------------------------------
+
+function getTicket(id) {
+  const rows = sql(`SELECT * FROM tickets WHERE id = ${q(id)} LIMIT 1;`, { json: true });
+  return rows[0];
+}
+
+function allTickets() {
+  return sql(`SELECT * FROM tickets ORDER BY id;`, { json: true });
+}
+
+function upsert(t) {
+  const ts = nowIso();
+  const existing = getTicket(t.id);
+  const created = existing ? existing.created_at : ts;
+  sql(`
+    INSERT INTO tickets (id, epic, title, priority, status, depends_on, body, created_at, updated_at)
+    VALUES (${q(t.id)}, ${q(t.epic)}, ${q(t.title)}, ${q(t.priority)},
+            ${q(t.status || 'open')}, ${q(t.depends_on)}, ${q(t.body)}, ${q(created)}, ${q(ts)})
+    ON CONFLICT(id) DO UPDATE SET
+      epic=excluded.epic, title=excluded.title, priority=excluded.priority,
+      status=excluded.status, depends_on=excluded.depends_on, body=excluded.body,
+      updated_at=excluded.updated_at;
+  `);
+  return getTicket(t.id);
+}
+
+function setStatus(id, status) {
+  const before = getTicket(id);
+  if (!before) return { changes: 0 };
+  if (before.status === status) return { changes: 0 };
+  sql(`UPDATE tickets SET status=${q(status)}, updated_at=${q(nowIso())} WHERE id=${q(id)};`);
+  return { changes: 1 };
+}
+
+// ---- markdown export --------------------------------------------------------
+
+const PREAMBLE = `# Jake — GHL Enrichment Tickets
+
+**Generated from \`tickets/tickets.db\` by \`tickets/tix\`. Don't hand-edit —**
+**mutate via \`tix add | done\`, which regenerates this file. DB is the truth.**
+
+---
+`;
+
+// Active work first, deferred next, done last.
+const STATUS_ORDER = ['in_progress', 'open', 'blocked', 'done'];
+const STATUS_HEADING = {
+  in_progress: 'In progress',
+  open: 'Open',
+  blocked: 'Deferred / blocked',
+  done: 'Done',
+};
+
+function depsOf(row) {
+  if (!row.depends_on) return [];
+  try {
+    const arr = JSON.parse(row.depends_on);
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return String(row.depends_on).split(',').map((s) => s.trim()).filter(Boolean);
+  }
+}
+
+function line(row) {
+  const box = row.status === 'done' ? '[x]' : '[ ]';
+  const pri = row.priority ? ` (${row.priority})` : '';
+  const deps = depsOf(row);
+  const dep = deps.length ? ` — depends: ${deps.join(', ')}` : '';
+  return `- ${box} **${row.id}**${pri} ${row.title}${dep}`;
+}
+
+function renderMarkdown(rows) {
+  const byStatus = new Map();
+  for (const r of rows) {
+    if (!byStatus.has(r.status)) byStatus.set(r.status, []);
+    byStatus.get(r.status).push(r);
+  }
+  const statuses = [...STATUS_ORDER, ...[...byStatus.keys()].filter((s) => !STATUS_ORDER.includes(s))];
+  const sections = [];
+  for (const s of statuses) {
+    const group = byStatus.get(s);
+    if (!group || group.length === 0) continue;
+    group.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+    const heading = STATUS_HEADING[s] || s;
+    sections.push(`## ${heading} (${group.length})\n${group.map(line).join('\n')}`);
+  }
+  const epic = rows.find((r) => r.epic)?.epic;
+  const epicLine = epic ? `\nEpic: \`${epic}\`\n` : '';
+  return `${PREAMBLE}${epicLine}\n${sections.join('\n\n')}\n`;
+}
+
+function regenerateExport() {
+  writeFileSync(EXPORT_PATH, renderMarkdown(allTickets()));
+  return EXPORT_PATH;
+}
+
+// ---- arg parsing ------------------------------------------------------------
+
+function parseArgs(argv) {
+  const flags = {};
+  const positional = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a.startsWith('--')) {
+      const key = a.slice(2);
+      const next = argv[i + 1];
+      if (next === undefined || next.startsWith('--')) {
+        flags[key] = true;
+      } else {
+        flags[key] = next;
+        i++;
+      }
+    } else {
+      positional.push(a);
+    }
+  }
+  return { flags, positional };
+}
+
+function normalizeDeps(raw) {
+  if (!raw || raw === true) return null;
+  const arr = String(raw).split(',').map((s) => s.trim()).filter(Boolean);
+  return arr.length ? JSON.stringify(arr) : null;
+}
+
+// ---- commands ---------------------------------------------------------------
+
+function cmdAdd(flags) {
+  if (!flags.id || !flags.title) {
+    console.error('usage: tix add --id JAKE-NNN --title "..." [--priority P0] [--status open] [--epic E] [--depends JAKE-001,JAKE-002] [--body "..."]');
+    process.exit(2);
+  }
+  const row = upsert({
+    id: String(flags.id),
+    epic: flags.epic && flags.epic !== true ? String(flags.epic) : null,
+    title: String(flags.title),
+    priority: flags.priority && flags.priority !== true ? String(flags.priority) : null,
+    status: flags.status && flags.status !== true ? String(flags.status) : 'open',
+    depends_on: normalizeDeps(flags.depends),
+    body: flags.body && flags.body !== true ? String(flags.body) : null,
+  });
+  regenerateExport();
+  console.log(`saved ${row.id} (${row.status}): ${row.title}`);
+}
+
+function cmdDone(flags, positional) {
+  const id = flags.id && flags.id !== true ? String(flags.id) : positional[0];
+  if (!id) {
+    console.error('usage: tix done <id> [--status done]');
+    process.exit(2);
+  }
+  const status = flags.status && flags.status !== true ? String(flags.status) : 'done';
+  const { changes } = setStatus(id, status);
+  if (changes > 0) {
+    regenerateExport();
+    console.log(`marked ${id} ${status}`);
+  } else {
+    console.log(`no change for ${id} (already ${status} or unknown)`);
+  }
+}
+
+function cmdList(flags) {
+  let rows = allTickets();
+  if (flags.status && flags.status !== true) {
+    rows = rows.filter((r) => r.status === flags.status);
+  } else if (!flags.all) {
+    rows = rows.filter((r) => r.status !== 'done');
+  }
+  if (flags.priority && flags.priority !== true) {
+    rows = rows.filter((r) => r.priority === flags.priority);
+  }
+  if (rows.length === 0) {
+    console.log('(no matching tickets)');
+    return;
+  }
+  const scope = flags.all ? 'all' : flags.status && flags.status !== true ? flags.status : 'active';
+  console.log(`# tickets — ${rows.length} ${scope}`);
+  rows.sort((a, b) => (a.id < b.id ? -1 : 1));
+  for (const r of rows) console.log(line(r));
+}
+
+function cmdShow(flags, positional) {
+  const id = flags.id && flags.id !== true ? String(flags.id) : positional[0];
+  if (!id) {
+    console.error('usage: tix show <id>');
+    process.exit(2);
+  }
+  const row = getTicket(id);
+  if (!row) {
+    console.error(`unknown ticket ${id}`);
+    process.exit(1);
+  }
+  const deps = depsOf(row);
+  console.log(`${row.id} — ${row.title}`);
+  console.log(`  epic:     ${row.epic || '-'}`);
+  console.log(`  priority: ${row.priority || '-'}`);
+  console.log(`  status:   ${row.status}`);
+  console.log(`  depends:  ${deps.length ? deps.join(', ') : '-'}`);
+  console.log(`  created:  ${row.created_at}`);
+  console.log(`  updated:  ${row.updated_at}`);
+  if (row.body) console.log(`\n${row.body}`);
+}
+
+function main() {
+  ensureSchema();
+  const [, , sub, ...rest] = process.argv;
+  const { flags, positional } = parseArgs(rest);
+  switch (sub) {
+    case 'add': return cmdAdd(flags);
+    case 'done': return cmdDone(flags, positional);
+    case 'show': return cmdShow(flags, positional);
+    case 'export': {
+      regenerateExport();
+      console.log(`wrote ${EXPORT_PATH}`);
+      return;
+    }
+    case 'list':
+    case undefined:
+      return cmdList(flags);
+    default:
+      console.error(`unknown command '${sub}'. Use: add | list | done | show | export`);
+      process.exit(2);
+  }
+}
+
+main();

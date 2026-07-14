@@ -10,8 +10,6 @@ This document explains how to configure and tune the **Lead Enrichment Service**
 | `REDIS_URL` | Redis connection string | `redis://localhost:6379` |
 | `RE_API_KEY` | API key for RealEstateAPI | `sk_123456789` |
 | `RE_BASE_URL` | Base URL for RealEstateAPI | `https://api.realestateapi.com` |
-| `GHL_API_KEY` | API key for GoHighLevel | `ghl_xxxxxxxxx` |
-| `GHL_BASE_URL` | Base URL for GoHighLevel API | `https://services.leadconnectorhq.com` |
 | `ENRICH_QUEUE_NAME` | BullMQ queue name | `lead-enrichment` |
 | `ENRICH_RPS` | Max API calls per second | `5` |
 

@@ -1,0 +1,346 @@
+import { UnrecoverableError } from "bullmq";
+import { inject, injectable } from "tsyringe";
+import { GhlApiClient } from "../api/GhlApiClient";
+import { GhlContact } from "../api/GhlApiTypes";
+import { GhlConnectionService } from "../connections/GhlConnectionService";
+import {
+  buildLocationFieldIdMap,
+  mapEnrichmentToCustomFields,
+} from "../fieldMapping/EnrichmentFieldMapper";
+import { GhlCustomFieldStore } from "../lifecycle/GhlCustomFieldStore";
+import { RealEstateApiDao } from "../../data/RealEstateApiDao";
+import { EnrichmentJobPayload } from "../../types/LeadEnrichment";
+import { EnrichmentCostPlan } from "../metering/CreditCosts";
+import { CreditService } from "../metering/CreditService";
+import { classifyFailure, logEnrichment, summarizeError } from "./EnrichmentFailure";
+import { buildEnrichmentNote } from "./EnrichmentNote";
+import {
+  EnrichmentEventStatus,
+  GhlEnrichmentEventStore,
+} from "./GhlEnrichmentEventStore";
+
+/** What one processed job resolved to (mirrors the recorded event status). */
+export interface EnrichmentOutcome {
+  status: EnrichmentEventStatus;
+  /** Short, secret-free reason — present for skips/failures. */
+  detail?: string;
+}
+
+/** Per-run metadata the queue threads in (BullMQ attempt bookkeeping). */
+export interface EnrichmentRunMeta {
+  /** 1-based attempt number for this job (BullMQ `attemptsMade + 1`). */
+  attempt?: number;
+}
+
+/** Log/record context for a single contact. Never carries a credential. */
+interface JobContext {
+  locationId: string;
+  contactId: string;
+  /** 1-based processing attempt, for structured logs + the event row. */
+  attempt: number;
+}
+
+/**
+ * The enrichment worker (JAK-107) — the keystone that ties the pipeline together.
+ *
+ * It consumes one BullMQ enrichment job (enqueued by the JAK-106 webhook) and,
+ * for that contact:
+ *   1. short-circuits if the contact is already enriched (idempotency, via the
+ *      JAK-107 events store) — safe under GHL webhook retries / re-delivery;
+ *   2. loads the per-location connection from the JAK-102 store, skipping an
+ *      unknown or inactive (uninstalled) location;
+ *   3. fetches the contact via the JAK-104 {@link GhlApiClient};
+ *   4. runs Jake's EXISTING enrichment engine ({@link RealEstateApiDao}) — the
+ *      parked MVP property/skip-trace logic, reused, not rebuilt;
+ *   5. maps the result with the JAK-108 field mapper against the location's
+ *      provisioned `ghl_custom_fields` id map;
+ *   6. writes the values back and drops a "Jake Enrichment" summary note;
+ *   7. records the outcome for idempotency + metering.
+ *
+ * SPEC §8 write-safety is enforced inside {@link GhlApiClient} (dev echoes/skips
+ * real writes; staging/prod write), so this worker never re-derives the stage.
+ *
+ * Failure handling (JAK-111) is centralized: {@link classifyFailure} is the one
+ * place that decides transient-vs-permanent. Transient failures (network / 429 /
+ * 5xx / DB blip) re-throw so BullMQ retries with exponential backoff + jitter;
+ * permanent failures (a GHL 4xx — bad payload, malformed request) throw
+ * {@link UnrecoverableError} to fail fast. Either way the per-record state is
+ * persisted on `ghl_enrichment_events` so nothing is silently lost, and when
+ * BullMQ gives up the queue calls {@link finalizeFailure} to mark the terminal
+ * `dead_letter` state AND refund any charge — we never bill for a failed
+ * enrichment. Expected non-error outcomes are recorded as `skipped`/`credit_blocked`
+ * and complete cleanly. All logs are structured + secret-free; the decrypted
+ * Bearer token is NEVER logged. Idempotent under retry: the credit charge is a
+ * no-op for an already-charged contact (JAK-109 ledger), so a reprocess never
+ * double-charges, and the events upsert never double-writes state.
+ */
+@injectable()
+export class GhlEnrichmentWorker {
+  constructor(
+    @inject(GhlApiClient) private readonly client: GhlApiClient,
+    @inject(GhlConnectionService) private readonly connections: GhlConnectionService,
+    @inject(GhlCustomFieldStore) private readonly fields: GhlCustomFieldStore,
+    @inject(RealEstateApiDao) private readonly realEstate: RealEstateApiDao,
+    @inject(GhlEnrichmentEventStore) private readonly events: GhlEnrichmentEventStore,
+    @inject(CreditService) private readonly credits: CreditService
+  ) {}
+
+  /**
+   * Process one enrichment job. Returns the outcome for `enriched`/`skipped`;
+   * throws (for BullMQ retry / dead-letter) on a real failure. `meta.attempt`
+   * (BullMQ `attemptsMade + 1`) is recorded on the event row for inspection.
+   */
+  async process(
+    payload: EnrichmentJobPayload,
+    meta: EnrichmentRunMeta = {}
+  ): Promise<EnrichmentOutcome> {
+    const { contact_id: contactId, location_id: locationId } = payload;
+
+    // This worker is the multi-tenant path — it requires a location. The queue
+    // routes single-tenant MVP jobs (no location) to the legacy service instead,
+    // so this is a guard, not an expected branch.
+    if (!locationId) {
+      throw new UnrecoverableError("enrichment job missing location_id");
+    }
+    const ctx: JobContext = { locationId, contactId, attempt: meta.attempt ?? 1 };
+
+    // 1. Idempotency. A prior `enriched` row means a duplicate / retried delivery
+    //    — do nothing. A prior `failed`/`skipped` row is allowed to reprocess.
+    const existing = await this.events.findByContact(locationId, contactId);
+    if (existing?.status === "enriched") {
+      this.log("info", "already_enriched_skip", ctx);
+      return { status: "skipped", detail: "already_enriched" };
+    }
+
+    // 2. Resolve the location. Unknown or inactive (uninstalled) → record + skip;
+    //    never an error, so the job completes and GHL/BullMQ stop retrying it.
+    const conn = await this.connections.getByLocationId(locationId);
+    if (!conn) {
+      return this.skip(ctx, "no_connection");
+    }
+    if (conn.status !== "active") {
+      return this.skip(ctx, "location_inactive");
+    }
+
+    // 3. Load the contact (JAK-104 client, per-location auth).
+    let contact: GhlContact | null;
+    try {
+      contact = await this.client.getContact(locationId, contactId);
+    } catch (err) {
+      return this.fail(err, ctx, "load contact");
+    }
+    if (!contact) {
+      return this.skip(ctx, "contact_not_found");
+    }
+
+    // 4. Resolve the address. Prefer the one the webhook carried; otherwise build
+    //    it from the contact GHL returned. No address → nothing to enrich.
+    const address = payload.full_address?.trim() || this.addressFromContact(contact);
+    if (!address) {
+      return this.skip(ctx, "no_address");
+    }
+
+    // 5. Metering gate (JAK-109). BEFORE any paid work, confirm the location has
+    //    enough credits. If not, record `credit_blocked` and skip — we never
+    //    enrich for free and never half-charge. `skipTrace` is false on this path
+    //    (the enrichment engine doesn't skip-trace yet); when it does, flipping
+    //    the flag applies the extra cost automatically via the config-driven
+    //    credit costs — no other change here.
+    const plan: EnrichmentCostPlan = { skipTrace: false };
+    if (!(await this.credits.hasSufficientCredits(locationId, plan))) {
+      return this.creditBlocked(ctx, plan);
+    }
+
+    // 6. Run Jake's existing enrichment engine (reuse, don't rebuild).
+    const result = await this.realEstate.getEnrichmentDataByAddress(address);
+    if (!result) {
+      // Nothing to write back — the customer gets no value, so we don't charge
+      // (the external lookup cost is ours to absorb). Recorded as a plain skip.
+      return this.skip(ctx, "no_property_match");
+    }
+
+    // 7. Map to the location's provisioned custom fields (JAK-108 × JAK-105).
+    const rows = await this.fields.listByLocation(locationId);
+    const customFields = mapEnrichmentToCustomFields(result, buildLocationFieldIdMap(rows));
+
+    // 8. Write back + summary note. Both go through the client's §8 write-safety
+    //    gate (dev echoes/skips). An empty payload means the location has no Jake
+    //    fields provisioned yet — note still goes out; nothing to update.
+    try {
+      if (customFields.length > 0) {
+        await this.client.updateContactCustomFields(locationId, contactId, customFields);
+      } else {
+        this.log("warn", "no_provisioned_fields", ctx);
+      }
+      await this.client.createNote(locationId, contactId, buildEnrichmentNote(result));
+    } catch (err) {
+      return this.fail(err, ctx, "write-back");
+    }
+
+    // 9. Charge for the delivered enrichment, atomically (JAK-109). The pre-check
+    //    (step 5) already confirmed funds; this deducts + writes the ledger.
+    //    IDEMPOTENT per contact: on a retry where a prior attempt already charged
+    //    this contact, the ledger returns ok without a second debit — no
+    //    double-charge. On the rare concurrent-drain race the pre-check can't
+    //    catch, we log loudly but still record the enrichment (value delivered)
+    //    and charge 0.
+    const charge = await this.credits.chargeForEnrichment({ locationId, contactId, plan });
+    const charged = charge.ok ? this.credits.costOf(plan) : 0;
+    if (!charge.ok) {
+      this.log(
+        "error",
+        "enriched_charge_shortfall",
+        ctx,
+        `insufficient credits at commit (had ${charge.balance}, needed ${charge.required})`
+      );
+    }
+
+    // 10. Record success for idempotency + metering. cost_estimate = credits
+    //     actually charged. If this write fails after a successful charge, the
+    //     charge's per-contact idempotency (step 9) makes the retry safe: it
+    //     re-records without charging again.
+    await this.events.record({
+      location_id: locationId,
+      contact_id: contactId,
+      status: "enriched",
+      cost_estimate: charged,
+      attempt_count: ctx.attempt,
+    });
+    this.log("info", "enriched", ctx, `charged ${charged} credits`);
+    return { status: "enriched" };
+  }
+
+  /**
+   * Finalize a job BullMQ has terminally failed (retries exhausted, or a
+   * permanent {@link UnrecoverableError}). Called from the queue's `failed`
+   * hook, NOT the hot path. It does the two things a dead-letter must guarantee:
+   *
+   *   1. CREDIT SAFETY — reverse any charge for this contact via a compensating
+   *      ledger entry (JAK-109). Idempotent + a no-op if nothing was charged, so
+   *      we never bill for an enrichment that ultimately failed.
+   *   2. Persist the terminal `dead_letter` state so the record is inspectable /
+   *      requeuable and never silently lost.
+   *
+   * Safe to call more than once for the same failure. It never re-throws — a
+   * dead-letter is already the terminal state; a bookkeeping error here is logged,
+   * not propagated.
+   */
+  async finalizeFailure(payload: EnrichmentJobPayload, summary: string): Promise<void> {
+    const { contact_id: contactId, location_id: locationId } = payload;
+    if (!locationId) return; // legacy single-tenant path has no dead-letter state
+    const ctx: JobContext = { locationId, contactId, attempt: 0 };
+    try {
+      const refund = await this.credits.refundEnrichment({ locationId, contactId });
+      if (refund) {
+        this.log("warn", "dead_letter_refund", ctx, `reversed ${refund.amount} credits`);
+      }
+      await this.events.markDeadLetter(locationId, contactId, summary);
+      this.log("error", "dead_letter", ctx, summary);
+    } catch (err) {
+      this.log("error", "dead_letter_finalize_error", ctx, summarizeError(err));
+    }
+  }
+
+  /**
+   * Record that the location can't afford this enrichment and complete the job
+   * cleanly (JAK-109). Not an error and not a plain skip: no paid work ran, and
+   * the row reprocesses once credits are granted. Never enriches for free.
+   */
+  private async creditBlocked(
+    ctx: JobContext,
+    plan: EnrichmentCostPlan
+  ): Promise<EnrichmentOutcome> {
+    const required = this.credits.costOf(plan);
+    await this.events.record({
+      location_id: ctx.locationId,
+      contact_id: ctx.contactId,
+      status: "credit_blocked",
+      detail: `insufficient_credits (needed ${required})`,
+      attempt_count: ctx.attempt,
+    });
+    this.log("warn", "credit_blocked", ctx, `needs ${required} credits`);
+    return { status: "credit_blocked", detail: "insufficient_credits" };
+  }
+
+  /** Record a permanent, non-error outcome and complete the job cleanly. */
+  private async skip(ctx: JobContext, reason: string): Promise<EnrichmentOutcome> {
+    await this.events.record({
+      location_id: ctx.locationId,
+      contact_id: ctx.contactId,
+      status: "skipped",
+      detail: reason,
+      attempt_count: ctx.attempt,
+    });
+    this.log("info", "skipped", ctx, reason);
+    return { status: "skipped", detail: reason };
+  }
+
+  /**
+   * Record a failing attempt and re-throw so BullMQ handles the retry policy.
+   * Classification is delegated to the single {@link classifyFailure} helper:
+   * transient failures throw as-is (retried with backoff + jitter, then
+   * dead-lettered by the queue's `failed` hook → {@link finalizeFailure});
+   * permanent ones throw {@link UnrecoverableError} to fail fast. `detail` is a
+   * short, secret-free summary — never the Bearer token. The row is recorded
+   * `failed` (transitional); the terminal `dead_letter` flip happens only once
+   * BullMQ actually gives up.
+   */
+  private async fail(err: unknown, ctx: JobContext, operation: string): Promise<never> {
+    const { kind, summary } = classifyFailure(err);
+    const detail = `${operation}: ${summary}`.slice(0, 500);
+    await this.events.record({
+      location_id: ctx.locationId,
+      contact_id: ctx.contactId,
+      status: "failed",
+      detail,
+      attempt_count: ctx.attempt,
+    });
+
+    if (kind === "transient") {
+      this.log("warn", "attempt_failed_transient", ctx, detail);
+      throw err instanceof Error ? err : new Error(summary);
+    }
+    this.log("error", "attempt_failed_permanent", ctx, detail);
+    throw new UnrecoverableError(`${operation} failed: ${summary}`);
+  }
+
+  /**
+   * Build a single-line address from a GHL contact, in the
+   * "street, city, STATE zip" shape the enrichment engine's parser expects.
+   * Returns undefined if there isn't enough to look up.
+   */
+  private addressFromContact(contact: GhlContact): string | undefined {
+    const street = (contact.address1 ?? "").trim();
+    const city = (contact.city ?? "").trim();
+    const state = (contact.state ?? "").trim();
+    const zip = (contact.postalCode ?? "").trim();
+
+    // Need at least a street line plus something to disambiguate it.
+    if (!street || (!zip && !city)) return undefined;
+
+    const locality = [city, [state, zip].filter(Boolean).join(" ").trim()]
+      .filter(Boolean)
+      .join(", ");
+    return locality ? `${street}, ${locality}` : street;
+  }
+
+  /**
+   * Structured, secret-free, queryable log line (JAK-111). `event` is a
+   * machine-readable name; `detail` is redacted at the {@link logEnrichment}
+   * boundary. The decrypted Bearer token never reaches here.
+   */
+  private log(
+    level: "info" | "warn" | "error",
+    event: string,
+    ctx: JobContext,
+    detail?: string
+  ): void {
+    logEnrichment(level, {
+      event,
+      locationId: ctx.locationId,
+      contactId: ctx.contactId,
+      attempt: ctx.attempt || undefined,
+      detail,
+    });
+  }
+}

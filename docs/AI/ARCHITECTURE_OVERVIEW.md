@@ -1,6 +1,6 @@
 # Architecture Overview
 
-This service follows a **Resource → Service → DAO** pattern, consistent with all AskZack/Chuck backend modules.
+This service follows a **Resource → Service → DAO** pattern, consistent with all AskZack backend modules.
 
 ## Request Flow
 

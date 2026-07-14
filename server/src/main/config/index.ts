@@ -3,10 +3,6 @@ import cors from "cors";
 import logger from "morgan";
 import cookieParser from "cookie-parser";
 
-const CLIENT_URL = process.env["VITE_ASKZACK_CLIENT_URL"];
-
-console.log("CLIENT_URL", CLIENT_URL);
-
 // Middleware configuration
 export const appConfig = (app: Express) => {
     app.set("trust proxy", 1);
