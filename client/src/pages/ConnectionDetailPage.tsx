@@ -32,6 +32,7 @@ import { api } from "../api";
 import { LocationStatusDetail } from "../types";
 import { StatusChip } from "../components/StatusChip";
 import { ConnectionFormDialog } from "../components/ConnectionFormDialog";
+import { RotateApiKeyDialog } from "../components/RotateApiKeyDialog";
 import { GrantCreditsDialog } from "../components/GrantCreditsDialog";
 import { ConfirmDialog } from "../components/ConfirmDialog";
 import { ADMIN_MOBILE_QUERY } from "./responsiveLayout";
@@ -51,6 +52,7 @@ export function ConnectionDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [rotateKeyOpen, setRotateKeyOpen] = useState(false);
   const [creditsOpen, setCreditsOpen] = useState(false);
   const [confirm, setConfirm] = useState<null | "deactivate" | "delete">(null);
   const [busy, setBusy] = useState(false);
@@ -184,7 +186,10 @@ export function ConnectionDetailPage() {
 
         <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap>
           <Button variant="outlined" onClick={() => setEditOpen(true)} disabled={busy}>
-            Edit / rotate key
+            Edit sub-account
+          </Button>
+          <Button variant="outlined" onClick={() => setRotateKeyOpen(true)} disabled={busy}>
+            Rotate API key
           </Button>
           <Button variant="outlined" onClick={() => setCreditsOpen(true)} disabled={busy}>
             Adjust credits
@@ -331,6 +336,12 @@ export function ConnectionDetailPage() {
           phoneNumbers: [],
         }}
         onClose={() => setEditOpen(false)}
+        onSaved={load}
+      />
+      <RotateApiKeyDialog
+        open={rotateKeyOpen}
+        locationId={connection.locationId}
+        onClose={() => setRotateKeyOpen(false)}
         onSaved={load}
       />
       <GrantCreditsDialog
