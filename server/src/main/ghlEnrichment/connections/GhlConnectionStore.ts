@@ -19,6 +19,9 @@ export interface GhlConnectionRow {
   text_mode: GhlTextMode;
   /** JAK-186 — per-location contact-created auto-enrichment toggle (opt-in). */
   auto_enrichment_enabled: boolean;
+  /** JAK-191 — when true, the enrichment credit gate never blocks and never
+   * decrements for this location. */
+  unlimited_credits: boolean;
   /** JAK-189 — SHA-256 (hex) of the per-location inbound webhook key; null until
    * backfilled. Unique + indexed for O(1) inbound lookup. */
   webhook_key_hash: string | null;
@@ -38,6 +41,7 @@ export interface InsertGhlConnectionRow {
   status: GhlConnectionStatus;
   text_mode: GhlTextMode;
   auto_enrichment_enabled: boolean;
+  unlimited_credits: boolean;
   webhook_key_hash: string;
   webhook_key_enc: string;
 }
@@ -52,6 +56,7 @@ export interface UpdateGhlConnectionRow {
   webhook_key_hash?: string;
   webhook_key_enc?: string;
   auto_enrichment_enabled?: boolean;
+  unlimited_credits?: boolean;
 }
 
 /**
@@ -69,8 +74,8 @@ export class GhlConnectionStore {
   async insert(row: InsertGhlConnectionRow): Promise<GhlConnectionRow> {
     const result = await this.db.query<GhlConnectionRow>(
       `INSERT INTO ghl_connections
-         (location_id, name, api_key_encrypted, base_url, phone_numbers, status, text_mode, auto_enrichment_enabled, webhook_key_hash, webhook_key_enc)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         (location_id, name, api_key_encrypted, base_url, phone_numbers, status, text_mode, auto_enrichment_enabled, unlimited_credits, webhook_key_hash, webhook_key_enc)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
        RETURNING *`,
       [
         row.location_id,
@@ -81,6 +86,7 @@ export class GhlConnectionStore {
         row.status,
         row.text_mode,
         row.auto_enrichment_enabled,
+        row.unlimited_credits,
         row.webhook_key_hash,
         row.webhook_key_enc,
       ]
@@ -171,6 +177,10 @@ export class GhlConnectionStore {
     if (patch.auto_enrichment_enabled !== undefined) {
       sets.push(`auto_enrichment_enabled = $${i++}`);
       values.push(patch.auto_enrichment_enabled);
+    }
+    if (patch.unlimited_credits !== undefined) {
+      sets.push(`unlimited_credits = $${i++}`);
+      values.push(patch.unlimited_credits);
     }
     if (patch.webhook_key_hash !== undefined) {
       sets.push(`webhook_key_hash = $${i++}`);

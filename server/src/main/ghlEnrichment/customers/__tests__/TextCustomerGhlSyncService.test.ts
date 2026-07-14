@@ -293,6 +293,7 @@ describe("TextCustomerGhlSyncService", () => {
         status: "active",
         textMode: "own_number",
         autoEnrichmentEnabled: false,
+        unlimitedCredits: false,
         createdAt: new Date(0),
         updatedAt: new Date(0),
       });

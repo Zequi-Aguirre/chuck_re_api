@@ -475,6 +475,12 @@ export class AdminResource {
         return res.status(400).json({ error: "autoEnrichmentEnabled must be a boolean" });
       }
 
+      // JAK-191 — the unlimited-credits toggle. Only a real boolean changes it.
+      const unlimitedRaw = req.body?.unlimitedCredits;
+      if (unlimitedRaw !== undefined && typeof unlimitedRaw !== "boolean") {
+        return res.status(400).json({ error: "unlimitedCredits must be a boolean" });
+      }
+
       const view = await this.connections.update(locationId, {
         // JAK-190 — edit the friendly name; provided-but-blank clears it (→ null).
         name: req.body?.name !== undefined ? str(req.body.name) || null : undefined,
@@ -483,6 +489,7 @@ export class AdminResource {
         phoneNumbers:
           req.body?.phoneNumbers !== undefined ? phoneList(req.body.phoneNumbers) : undefined,
         autoEnrichmentEnabled: autoEnrichRaw as boolean | undefined,
+        unlimitedCredits: unlimitedRaw as boolean | undefined,
       });
       if (!view) return res.status(404).json({ error: "unknown location" });
       return res.status(200).json({ connection: view });

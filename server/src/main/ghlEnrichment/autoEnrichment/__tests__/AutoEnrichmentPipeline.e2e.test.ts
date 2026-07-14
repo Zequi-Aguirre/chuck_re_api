@@ -49,6 +49,7 @@ const connection = (): GhlConnection => ({
   phoneNumbers: [],
   status: "active",
   autoEnrichmentEnabled: true, // JAK-186: enabled so the pipeline runs end-to-end
+  unlimitedCredits: false,
   createdAt: new Date("2026-07-01T00:00:00Z"),
   updatedAt: new Date("2026-07-01T00:00:00Z"),
 });

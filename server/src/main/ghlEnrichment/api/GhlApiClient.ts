@@ -301,6 +301,8 @@ export class GhlApiClient {
       textMode: "gateway",
       // JAK-186: the gateway is a text-routing identity, not an enrichment target.
       autoEnrichmentEnabled: false,
+      // JAK-191: not an enrichment target, so unlimited is meaningless here.
+      unlimitedCredits: false,
       createdAt: GATEWAY_CONNECTION_TIMESTAMP,
       updatedAt: GATEWAY_CONNECTION_TIMESTAMP,
     };

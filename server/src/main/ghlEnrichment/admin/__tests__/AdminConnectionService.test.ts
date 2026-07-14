@@ -14,6 +14,7 @@ const conn = (over: Partial<GhlConnection> = {}): GhlConnection => ({
   phoneNumbers: ["+15551234567"],
   status: "active",
   autoEnrichmentEnabled: false,
+  unlimitedCredits: false,
   createdAt: new Date("2026-07-01T00:00:00Z"),
   updatedAt: new Date("2026-07-01T00:00:00Z"),
   ...over,

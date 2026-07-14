@@ -223,14 +223,12 @@ export function ConnectionDetailPage() {
       {/* Credits + outcomes */}
       <Grid container spacing={3} sx={{ mt: 0 }}>
         <Grid item xs={12} md={4}>
-          <Paper sx={{ p: 3, height: "100%" }}>
-            <Typography variant="overline" color="text.secondary">
-              Credit balance
-            </Typography>
-            <Typography variant="h3" fontWeight={800}>
-              {credits.balance}
-            </Typography>
-          </Paper>
+          <CreditsCard
+            locationId={connection.locationId}
+            balance={credits.balance}
+            unlimited={connection.unlimitedCredits}
+            onChanged={load}
+          />
         </Grid>
         <Grid item xs={12} md={8}>
           <Paper sx={{ p: 3, height: "100%" }}>
@@ -378,6 +376,122 @@ function BackLink() {
     <Link component={RouterLink} to="/" sx={{ display: "inline-flex", alignItems: "center", gap: 0.5 }}>
       <ArrowBackIcon fontSize="small" /> All sub-accounts
     </Link>
+  );
+}
+
+/**
+ * JAK-191 — enrichment credit controls for one sub-account. Shows the balance (or
+ * "Unlimited" when the flag is on), an inline Add-credits control that calls the
+ * existing grant route (report bucket — the pool enrichment drains), and an
+ * Unlimited on/off toggle. When Unlimited is ON the gate never blocks and never
+ * decrements, so the number is irrelevant and we surface "Unlimited" instead.
+ *
+ * MOBILE-FIRST: the amount input + button wrap; nothing forces horizontal scroll.
+ */
+function CreditsCard({
+  locationId,
+  balance,
+  unlimited,
+  onChanged,
+}: {
+  locationId: string;
+  balance: number;
+  unlimited: boolean;
+  onChanged: () => Promise<void> | void;
+}) {
+  const [amount, setAmount] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function addCredits() {
+    const n = Number(amount);
+    if (!Number.isInteger(n) || n <= 0) {
+      setError("Enter a positive whole number of credits to add.");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.grantCredits(locationId, n, "manual_grant");
+      setAmount("");
+      setToast(`Added ${n} credit${n === 1 ? "" : "s"}.`);
+      await onChanged();
+    } catch {
+      setError("Couldn't add credits.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleUnlimited(next: boolean) {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.setUnlimitedCredits(locationId, next);
+      setToast(next ? "Unlimited credits ON." : "Unlimited credits OFF.");
+      await onChanged();
+    } catch {
+      setError("Couldn't update the unlimited setting.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Paper sx={{ p: 3, height: "100%" }}>
+      <Typography variant="overline" color="text.secondary">
+        Enrichment credits
+      </Typography>
+      <Typography variant="h3" fontWeight={800} sx={{ mb: 1 }}>
+        {unlimited ? "Unlimited" : balance}
+      </Typography>
+
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      )}
+
+      <FormControlLabel
+        sx={{ m: 0, mb: 2 }}
+        control={
+          <Switch
+            checked={unlimited}
+            disabled={busy}
+            onChange={(e) => toggleUnlimited(e.target.checked)}
+            inputProps={{ "aria-label": "Unlimited credits" }}
+          />
+        }
+        label={<Typography variant="body2">Unlimited credits</Typography>}
+      />
+
+      {/* Add-credits (report bucket — the pool enrichment charges against). Still
+          useful even when Unlimited is on, e.g. before turning it back off. */}
+      <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1 }}>
+        <TextField
+          label="Add credits"
+          type="number"
+          size="small"
+          value={amount}
+          onChange={(e) => setAmount(e.target.value)}
+          disabled={busy}
+          sx={{ width: 130 }}
+          inputProps={{ min: 1, "aria-label": "Credits to add" }}
+        />
+        <Button variant="contained" onClick={addCredits} disabled={busy}>
+          Add
+        </Button>
+      </Box>
+
+      <Snackbar
+        open={toast !== null}
+        autoHideDuration={3000}
+        onClose={() => setToast(null)}
+        message={toast ?? ""}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      />
+    </Paper>
   );
 }
 

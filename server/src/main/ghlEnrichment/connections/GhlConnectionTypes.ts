@@ -39,6 +39,11 @@ export interface GhlConnection {
    * enrichment job only when the connection is active AND this is true.
    */
   autoEnrichmentEnabled: boolean;
+  /**
+   * JAK-191 — when true, the enrichment credit gate never blocks this location and
+   * never decrements its balance; enrichment runs regardless of the numeric balance.
+   */
+  unlimitedCredits: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -63,6 +68,8 @@ export interface CreateGhlConnectionInput {
   textMode?: GhlTextMode;
   /** JAK-186 auto-enrichment toggle. Defaults to false (opt-in) when omitted. */
   autoEnrichmentEnabled?: boolean;
+  /** JAK-191 unlimited-credits flag. Defaults to false when omitted. */
+  unlimitedCredits?: boolean;
 }
 
 /**
@@ -80,4 +87,6 @@ export interface UpdateGhlConnectionInput {
   textMode?: GhlTextMode;
   /** Flip the JAK-186 per-location auto-enrichment toggle on/off. */
   autoEnrichmentEnabled?: boolean;
+  /** Flip the JAK-191 unlimited-credits flag on/off. */
+  unlimitedCredits?: boolean;
 }
