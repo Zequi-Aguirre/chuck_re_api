@@ -85,6 +85,8 @@ export interface AdminTokenPayload {
 export interface AdminConnectionView {
   id: string;
   locationId: string;
+  /** JAK-190 — friendly admin label; null → the UI shows the location id. */
+  name: string | null;
   baseUrl: string;
   phoneNumbers: string[];
   status: "active" | "inactive";

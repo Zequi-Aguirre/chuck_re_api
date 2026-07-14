@@ -428,6 +428,8 @@ export class AdminResource {
       const apiKey = typeof req.body?.apiKey === "string" ? req.body.apiKey.trim() : "";
       const baseUrl = str(req.body?.baseUrl);
       const phoneNumbers = phoneList(req.body?.phoneNumbers);
+      // JAK-190 — optional friendly name; blank/absent → null (UI shows the id).
+      const name = str(req.body?.name) || null;
 
       if (!locationId || !apiKey || !baseUrl) {
         return res
@@ -435,7 +437,7 @@ export class AdminResource {
           .json({ error: "locationId, apiKey and baseUrl are required" });
       }
 
-      const view = await this.connections.create({ locationId, apiKey, baseUrl, phoneNumbers });
+      const view = await this.connections.create({ locationId, name, apiKey, baseUrl, phoneNumbers });
       return res.status(201).json({ connection: view });
     } catch (err) {
       return this.handleWriteError(err, res, next);
@@ -474,6 +476,8 @@ export class AdminResource {
       }
 
       const view = await this.connections.update(locationId, {
+        // JAK-190 — edit the friendly name; provided-but-blank clears it (→ null).
+        name: req.body?.name !== undefined ? str(req.body.name) || null : undefined,
         apiKey: apiKeyRaw !== undefined ? String(apiKeyRaw).trim() : undefined,
         baseUrl: req.body?.baseUrl !== undefined ? str(req.body.baseUrl) : undefined,
         phoneNumbers:

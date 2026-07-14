@@ -67,13 +67,29 @@ export function ConnectionsPage() {
             <CardActionArea onClick={() => open(r.connection.locationId)}>
               <CardContent>
                 <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 1 }}>
-                  <Typography
-                    variant="subtitle1"
-                    fontWeight={700}
-                    sx={{ fontFamily: "monospace", minWidth: 0, wordBreak: "break-all" }}
-                  >
-                    {r.connection.locationId}
-                  </Typography>
+                  {/* JAK-190: friendly name is the heading; the id is small/secondary.
+                      No name → the id is the heading (monospace), as before. */}
+                  <Box sx={{ minWidth: 0 }}>
+                    <Typography
+                      variant="subtitle1"
+                      fontWeight={700}
+                      sx={{
+                        wordBreak: "break-word",
+                        fontFamily: r.connection.name ? undefined : "monospace",
+                      }}
+                    >
+                      {r.connection.name || r.connection.locationId}
+                    </Typography>
+                    {r.connection.name && (
+                      <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ fontFamily: "monospace", wordBreak: "break-all" }}
+                      >
+                        {r.connection.locationId}
+                      </Typography>
+                    )}
+                  </Box>
                   <Box sx={{ flexShrink: 0 }}>
                     <StatusChip status={r.connection.status} />
                   </Box>
@@ -103,7 +119,7 @@ export function ConnectionsPage() {
       <Table sx={{ minWidth: 640 }}>
         <TableHead>
           <TableRow>
-            <TableCell>Location ID</TableCell>
+            <TableCell>Sub-account</TableCell>
             <TableCell>Status</TableCell>
             <TableCell align="right">Credits</TableCell>
             <TableCell align="right">Enriched</TableCell>
@@ -119,7 +135,22 @@ export function ConnectionsPage() {
               sx={{ cursor: "pointer" }}
               onClick={() => open(r.connection.locationId)}
             >
-              <TableCell sx={{ fontFamily: "monospace" }}>{r.connection.locationId}</TableCell>
+              <TableCell>
+                {r.connection.name ? (
+                  <>
+                    <Typography variant="body2" fontWeight={600}>
+                      {r.connection.name}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary" sx={{ fontFamily: "monospace" }}>
+                      {r.connection.locationId}
+                    </Typography>
+                  </>
+                ) : (
+                  <Typography variant="body2" sx={{ fontFamily: "monospace" }}>
+                    {r.connection.locationId}
+                  </Typography>
+                )}
+              </TableCell>
               <TableCell>
                 <StatusChip status={r.connection.status} />
               </TableCell>

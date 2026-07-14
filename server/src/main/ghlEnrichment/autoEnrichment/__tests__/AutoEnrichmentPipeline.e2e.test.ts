@@ -43,6 +43,7 @@ const FAKE_MASTER_KEY = "test-master-api-key-e2e-0000";
 const connection = (): GhlConnection => ({
   id: "11111111-1111-1111-1111-111111111111",
   locationId: "loc_1",
+  name: null,
   apiKey: "unit-test-plaintext-key",
   baseUrl: "https://services.leadconnectorhq.com",
   phoneNumbers: [],

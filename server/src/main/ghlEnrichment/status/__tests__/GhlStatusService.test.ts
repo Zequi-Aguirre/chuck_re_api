@@ -11,6 +11,7 @@ import { GhlStatusService } from "../GhlStatusService";
 const connectionRow = (over: Partial<GhlConnectionRow> = {}): GhlConnectionRow => ({
   id: "11111111-1111-1111-1111-111111111111",
   location_id: "loc_1",
+  name: null,
   // A credential-shaped value the status view must NEVER echo back.
   api_key_encrypted: "v1:aead:ZmFrZS1jaXBoZXItYmxvYg==:not-a-real-secret",
   base_url: "https://services.leadconnectorhq.com",
@@ -75,6 +76,7 @@ describe("GhlStatusService", () => {
         connectionRow({ location_id: "loc_1" }),
         connectionRow({
           location_id: "loc_2",
+          name: "Second Co", // JAK-190: a friendly name surfaces in the status view.
           status: "inactive",
           phone_numbers: [],
           // JAK-186: the toggle maps independently of connection status.
@@ -100,6 +102,7 @@ describe("GhlStatusService", () => {
 
       expect(loc1.connection).toEqual({
         locationId: "loc_1",
+        name: null,
         status: "active",
         baseUrl: "https://services.leadconnectorhq.com",
         phoneNumberCount: 2,
@@ -124,6 +127,8 @@ describe("GhlStatusService", () => {
       // JAK-186: the service surfaces the per-location toggle it read from the row.
       expect(loc1.connection.autoEnrichmentEnabled).toBe(false);
       expect(loc2.connection.autoEnrichmentEnabled).toBe(true);
+      // JAK-190: the friendly name is surfaced when set.
+      expect(loc2.connection.name).toBe("Second Co");
       expect(loc2.creditBalance).toBe(0);
       expect(loc2.outcomes.total).toBe(0);
     });
