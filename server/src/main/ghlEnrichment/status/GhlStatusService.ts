@@ -139,6 +139,7 @@ export class GhlStatusService {
       phoneNumberCount: row.phone_numbers?.length ?? 0,
       provisionedFieldCount,
       autoEnrichmentEnabled: row.auto_enrichment_enabled ?? false,
+      unlimitedCredits: row.unlimited_credits ?? false,
       installedAt: row.created_at,
       updatedAt: row.updated_at,
     };

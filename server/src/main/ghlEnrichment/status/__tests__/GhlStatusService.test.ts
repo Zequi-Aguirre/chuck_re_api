@@ -19,6 +19,7 @@ const connectionRow = (over: Partial<GhlConnectionRow> = {}): GhlConnectionRow =
   status: "active",
   text_mode: "gateway",
   auto_enrichment_enabled: false,
+  unlimited_credits: false,
   webhook_key_hash: null,
   webhook_key_enc: null,
   created_at: new Date("2026-06-01T00:00:00Z"),
@@ -81,6 +82,7 @@ describe("GhlStatusService", () => {
           phone_numbers: [],
           // JAK-186: the toggle maps independently of connection status.
           auto_enrichment_enabled: true,
+          unlimited_credits: true, // JAK-191: unlimited flag surfaces in the status view.
         }),
       ]);
       customFields.countByLocationForAll.mockResolvedValue([
@@ -108,6 +110,7 @@ describe("GhlStatusService", () => {
         phoneNumberCount: 2,
         provisionedFieldCount: 7,
         autoEnrichmentEnabled: false,
+        unlimitedCredits: false,
         installedAt: new Date("2026-06-01T00:00:00Z"),
         updatedAt: new Date("2026-06-15T00:00:00Z"),
       });
@@ -129,6 +132,9 @@ describe("GhlStatusService", () => {
       expect(loc2.connection.autoEnrichmentEnabled).toBe(true);
       // JAK-190: the friendly name is surfaced when set.
       expect(loc2.connection.name).toBe("Second Co");
+      // JAK-191: the unlimited-credits flag is surfaced.
+      expect(loc1.connection.unlimitedCredits).toBe(false);
+      expect(loc2.connection.unlimitedCredits).toBe(true);
       expect(loc2.creditBalance).toBe(0);
       expect(loc2.outcomes.total).toBe(0);
     });

@@ -8,6 +8,7 @@ import { CreditService } from "../CreditService";
 import { CreditSettingsService } from "../CreditSettingsService";
 import { MonthlyCreditRestoreService } from "../MonthlyCreditRestoreService";
 import { TextJakeCustomerStore } from "../../customers/TextJakeCustomerStore";
+import { GhlConnectionStore } from "../../connections/GhlConnectionStore";
 import { GhlEnrichmentConfig } from "../../config/GhlEnrichmentConfig";
 import {
   EphemeralPostgres,
@@ -146,7 +147,12 @@ describe("Monthly credit restore (real Postgres integration) — JAK-monthly-cre
     store = new TextJakeCustomerStore(asDb(pool));
     const ledger = new CreditLedgerStore(asDb(pool));
     const settings = new CreditSettingsService(new AppSettingsStore(asDb(pool)));
-    credits = new CreditService(ledger, {} as unknown as GhlEnrichmentConfig, settings);
+    credits = new CreditService(
+      ledger,
+      {} as unknown as GhlEnrichmentConfig,
+      settings,
+      new GhlConnectionStore(asDb(pool))
+    );
     service = new MonthlyCreditRestoreService(store, credits);
   });
 

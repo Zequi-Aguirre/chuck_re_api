@@ -134,6 +134,13 @@ export const api = {
       body: JSON.stringify({ autoEnrichmentEnabled: enabled }),
     });
   },
+  /** JAK-191 — set the per-location unlimited-credits flag on/off. */
+  async setUnlimitedCredits(locationId: string, enabled: boolean): Promise<void> {
+    await request(`/connections/${encodeURIComponent(locationId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ unlimitedCredits: enabled }),
+    });
+  },
   async deactivate(locationId: string): Promise<void> {
     await request(`/connections/${encodeURIComponent(locationId)}/deactivate`, { method: "POST" });
   },

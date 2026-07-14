@@ -92,6 +92,8 @@ export interface AdminConnectionView {
   status: "active" | "inactive";
   /** JAK-186 — per-location auto-enrichment toggle (opt-in) as the admin sees it. */
   autoEnrichmentEnabled: boolean;
+  /** JAK-191 — unlimited-credits flag as the admin sees it. */
+  unlimitedCredits: boolean;
   /** Constant mask — proves a key is stored without ever revealing it. */
   apiKeyMasked: string;
   createdAt: Date;

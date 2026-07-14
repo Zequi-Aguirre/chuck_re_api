@@ -43,6 +43,8 @@ export class GhlConnectionService {
       text_mode: input.textMode ?? DEFAULT_TEXT_MODE,
       // JAK-186: opt-in — a new connection is NOT auto-enriched until turned on.
       auto_enrichment_enabled: input.autoEnrichmentEnabled ?? false,
+      // JAK-191: normal metering by default — unlimited is opt-in.
+      unlimited_credits: input.unlimitedCredits ?? false,
       webhook_key_hash: hashWebhookKey(webhookKey),
       webhook_key_enc: this.cipher.encrypt(webhookKey),
     });
@@ -138,6 +140,7 @@ export class GhlConnectionService {
       status: patch.status,
       text_mode: patch.textMode,
       auto_enrichment_enabled: patch.autoEnrichmentEnabled,
+      unlimited_credits: patch.unlimitedCredits,
     });
     return row ? this.toConnection(row) : null;
   }
@@ -159,6 +162,7 @@ export class GhlConnectionService {
       status: row.status,
       textMode: row.text_mode ?? DEFAULT_TEXT_MODE,
       autoEnrichmentEnabled: row.auto_enrichment_enabled ?? false,
+      unlimitedCredits: row.unlimited_credits ?? false,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };

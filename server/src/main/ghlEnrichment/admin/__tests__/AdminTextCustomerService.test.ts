@@ -7,6 +7,7 @@ import {
   CreditLedgerStore,
   LocationBalance,
 } from "../../metering/CreditLedgerStore";
+import { GhlConnectionStore } from "../../connections/GhlConnectionStore";
 import { TextJakeCustomerService } from "../../customers/TextJakeCustomerService";
 import { TextJakeCustomerStore, TextJakeCustomerRow } from "../../customers/TextJakeCustomerStore";
 import { TextJakeCustomer } from "../../customers/TextJakeCustomerTypes";
@@ -152,7 +153,9 @@ describe("AdminTextCustomerService", () => {
     creditSettings.defaultGrant.mockImplementation(async (type) =>
       ({ report: 50, skiptrace: 10, comps: 10 }[type])
     );
-    credits = new CreditService(ledger, config(), creditSettings);
+    // JAK-191: text-customer credit paths never consult the connection unlimited
+    // flag (they key on a customer account, not a location), so a bare stub is fine.
+    credits = new CreditService(ledger, config(), creditSettings, mock<GhlConnectionStore>());
     sync = mock<TextCustomerGhlSyncService>();
     // Default: the off-prod "skipped" outcome so create/update don't try to
     // persist a contact id unless a test opts into a live sync.

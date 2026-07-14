@@ -33,6 +33,7 @@ const view = (over: Partial<AdminConnectionView> = {}): AdminConnectionView => (
   phoneNumbers: ["+15551234567"],
   status: "active",
   autoEnrichmentEnabled: false,
+  unlimitedCredits: false,
   apiKeyMasked: API_KEY_MASK,
   createdAt: new Date("2026-07-01T00:00:00Z"),
   updatedAt: new Date("2026-07-01T00:00:00Z"),
@@ -227,6 +228,27 @@ describe("AdminResource", () => {
       connections.update.mockResolvedValue(view());
       await asAdmin(request(app).put("/api/admin/connections/loc_1").send({ baseUrl: "https://x.co" }));
       expect(connections.update).toHaveBeenCalledWith("loc_1", expect.objectContaining({ name: undefined }));
+    });
+
+    it("persists the JAK-191 unlimited-credits toggle and returns the updated view", async () => {
+      connections.update.mockResolvedValue(view({ unlimitedCredits: true }));
+      const res = await asAdmin(
+        request(app).put("/api/admin/connections/loc_1").send({ unlimitedCredits: true })
+      );
+      expect(res.status).toBe(200);
+      expect(connections.update).toHaveBeenCalledWith(
+        "loc_1",
+        expect.objectContaining({ unlimitedCredits: true })
+      );
+      expect(res.body.connection.unlimitedCredits).toBe(true);
+    });
+
+    it("rejects a non-boolean unlimitedCredits (400)", async () => {
+      const res = await asAdmin(
+        request(app).put("/api/admin/connections/loc_1").send({ unlimitedCredits: "yes" })
+      );
+      expect(res.status).toBe(400);
+      expect(connections.update).not.toHaveBeenCalled();
     });
 
     it("persists the JAK-186 auto-enrichment toggle and returns the updated view", async () => {
