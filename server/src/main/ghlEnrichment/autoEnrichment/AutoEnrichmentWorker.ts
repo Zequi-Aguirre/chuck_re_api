@@ -13,7 +13,8 @@
  * + write-back mocked (no real REAPI/GHL).
  *
  * Reuse, not reinvention:
- *   - address: {@link normalizeInboundAddress} (the SMS report path's normalizer).
+ *   - address: {@link partsFromFields} builds CLEAN structured parts (JAK-193 — bare
+ *     zip, state normalized/zip-derived) passed straight to REAPI (no lossy reparse).
  *   - REAPI: the EXISTING {@link RealEstateApiDao} (same paidPost chokepoint + the
  *     JAK-110 dev-no-spend gate) — no new REAPI client.
  *   - format: the merged JAK-184 {@link formatPropertyDetailEnrichment}.
@@ -33,12 +34,17 @@ import { UnrecoverableError } from "bullmq";
 import { inject, injectable } from "tsyringe";
 import { RealEstateApiDao } from "../../data/RealEstateApiDao";
 import { RealEstateApiPropertyDetail } from "../../types/RealEstateApi";
-import { normalizeInboundAddress } from "../../util/address";
 import { formatPropertyDetailEnrichment } from "./PropertyDetailEnrichmentFormatter";
 import { ReapiPropertyDetailSubject } from "./AutoEnrichmentTypes";
 import { EnrichmentFieldWriteBackService } from "./EnrichmentFieldWriteBackService";
-import { AutoEnrichmentJobPayload, AutoEnrichmentAddress } from "./AutoEnrichmentQueueTypes";
+import { AutoEnrichmentJobPayload } from "./AutoEnrichmentQueueTypes";
 import { AutoEnrichmentOutcome } from "./AutoEnrichmentWorkerTypes";
+import {
+  EnrichmentAddressParts,
+  displayAddress,
+  parseAddressLine,
+  partsFromFields,
+} from "./addressParts";
 
 /** Loose HTTP-error shape we read to classify transient vs permanent REAPI errors. */
 interface HttpLikeError {
@@ -61,20 +67,23 @@ export class AutoEnrichmentWorker {
   async process(payload: AutoEnrichmentJobPayload): Promise<AutoEnrichmentOutcome> {
     const { locationId, contactId } = payload;
 
-    // 1. Resolve + normalize the address (structured first, then rawContact).
-    const address = this.resolveAddress(payload);
-    if (!address) {
+    // 1. Resolve CLEAN, STRUCTURED address parts (structured fields first, then
+    //    rawContact). We pass fields straight to REAPI — no lossy flatten→reparse —
+    //    so a dirty zip ("z:85335") or a missing state can't defeat the lookup.
+    const parts = this.resolveAddressParts(payload);
+    if (!parts) {
       console.warn(
         `🏚️ [auto-enrichment] ${locationId}/${contactId}: no resolvable address — skipping`
       );
       return { status: "no_address", locationId, contactId };
     }
+    const address = displayAddress(parts); // for logs only
 
     // 2. REAPI PropertyDetail lookup. Transient errors propagate (retry); a valid
     //    no-match returns null (terminal).
     let subject: RealEstateApiPropertyDetail | null;
     try {
-      subject = await this.realEstate.getPropertyDetailSubjectByAddress(address);
+      subject = await this.realEstate.getPropertyDetailSubjectByParts(parts);
     } catch (err) {
       if (this.isTransient(err)) {
         console.warn(
@@ -116,51 +125,37 @@ export class AutoEnrichmentWorker {
   }
 
   /**
-   * Resolve a single-line, normalized address for the REAPI lookup. Prefers the
-   * job's structured `address`; falls back to fields on `rawContact`. Runs the
-   * candidate through {@link normalizeInboundAddress} (the shared normalizer),
-   * returning null when nothing address-like is present.
+   * Resolve CLEAN, STRUCTURED address parts for the REAPI lookup. Prefers the job's
+   * structured `address` fields; falls back to fields on `rawContact`, then to a
+   * single combined `rawContact.address` string. Delegates all sanitization to
+   * {@link partsFromFields} / {@link parseAddressLine} (bare-zip, state normalize +
+   * zip-derive), returning null when nothing address-like is present.
    */
-  private resolveAddress(payload: AutoEnrichmentJobPayload): string | null {
-    const fromStructured = this.addressFromParts(payload.address);
-    if (fromStructured) {
-      const normalized = normalizeInboundAddress(fromStructured);
-      if (normalized) return normalized;
-    }
+  private resolveAddressParts(payload: AutoEnrichmentJobPayload): EnrichmentAddressParts | null {
+    const fromStructured = partsFromFields({
+      line1: this.str(payload.address?.line1),
+      city: this.str(payload.address?.city),
+      state: this.str(payload.address?.state),
+      postal: this.str(payload.address?.postal),
+    });
+    if (fromStructured) return fromStructured;
 
     const raw = payload.rawContact;
     if (raw) {
-      const parts = this.addressFromRawContact(raw);
-      const candidate = this.addressFromParts(parts) ?? this.str(raw.address);
-      if (candidate) return normalizeInboundAddress(candidate);
+      const fromRawFields = partsFromFields({
+        line1: this.str(raw.address1) ?? this.str(raw.line1) ?? this.str(raw.street),
+        city: this.str(raw.city),
+        state: this.str(raw.state),
+        postal:
+          this.str(raw.postalCode) ??
+          this.str(raw.postal_code) ??
+          this.str(raw.zip) ??
+          this.str(raw.zipCode),
+      });
+      if (fromRawFields) return fromRawFields;
+      return parseAddressLine(this.str(raw.address));
     }
     return null;
-  }
-
-  /** Build "line1, city, ST zip" from address parts, or null when line1 is absent. */
-  private addressFromParts(address: AutoEnrichmentAddress | undefined): string | null {
-    if (!address) return null;
-    const line1 = this.str(address.line1);
-    if (!line1) return null; // no street → nothing REAPI can key on
-    const city = this.str(address.city);
-    const state = this.str(address.state);
-    const postal = this.str(address.postal);
-    const tail = [state, postal].filter(Boolean).join(" ");
-    return [line1, city, tail].filter((p) => p && p.length > 0).join(", ");
-  }
-
-  /** Pull address parts out of a loose GHL contact body (tolerant field names). */
-  private addressFromRawContact(raw: Record<string, unknown>): AutoEnrichmentAddress {
-    return {
-      line1: this.str(raw.address1) ?? this.str(raw.line1) ?? this.str(raw.street),
-      city: this.str(raw.city),
-      state: this.str(raw.state),
-      postal:
-        this.str(raw.postalCode) ??
-        this.str(raw.postal_code) ??
-        this.str(raw.zip) ??
-        this.str(raw.zipCode),
-    };
   }
 
   /**

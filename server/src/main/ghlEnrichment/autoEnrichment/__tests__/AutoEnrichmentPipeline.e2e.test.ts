@@ -107,7 +107,7 @@ describe("auto-enrichment pipeline (endpoint → queue → worker → write)", (
   afterEach(() => jest.restoreAllMocks());
 
   it("enqueues on POST, then the worker enriches the captured job end-to-end", async () => {
-    realEstate.getPropertyDetailSubjectByAddress.mockResolvedValue(subject());
+    realEstate.getPropertyDetailSubjectByParts.mockResolvedValue(subject());
 
     // 1. GHL workflow POSTs a new contact.
     const res = await request(app)
@@ -133,9 +133,13 @@ describe("auto-enrichment pipeline (endpoint → queue → worker → write)", (
     const outcome = await processor.process(enqueuedJobs[0]);
 
     // 3. The full chain resolved: REAPI → format → write-back.
-    expect(realEstate.getPropertyDetailSubjectByAddress).toHaveBeenCalledWith(
-      "742 Evergreen Terrace, Springfield, IL 62704"
-    );
+    expect(realEstate.getPropertyDetailSubjectByParts).toHaveBeenCalledWith({
+      house: "742",
+      street: "Evergreen Terrace",
+      city: "Springfield",
+      state: "IL",
+      zip: "62704",
+    });
     const [locationId, contactId, fields] = writeBack.writeEnrichmentFields.mock.calls[0];
     expect(locationId).toBe("loc_1");
     expect(contactId).toBe("contact_1");

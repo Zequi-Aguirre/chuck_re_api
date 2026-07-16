@@ -130,6 +130,35 @@ describe("RealEstateApiDao — paid-lookup dev safety (JAK-110)", () => {
       expect(detail?.mlsActive).toBe(true);
     });
 
+    it("JAK-193: posts structured parts to PropertyDetail, OMITTING empty fields", async () => {
+      post.mockResolvedValue({ data: { data: { mlsActive: false } } });
+      const dao = daoFor(true);
+
+      // State unresolved (empty) → it must NOT be sent as a blank value.
+      const detail = await dao.getPropertyDetailSubjectByParts({
+        house: "3165", street: "Tracy Rd", city: "atoka", state: "", zip: "38004",
+      });
+
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(post.mock.calls[0][0]).toBe("/v2/PropertyDetail");
+      expect(post.mock.calls[0][1]).toEqual({
+        house: "3165", street: "Tracy Rd", city: "atoka", zip: "38004",
+      });
+      expect(post.mock.calls[0][1]).not.toHaveProperty("state");
+      expect(detail).toEqual({ mlsActive: false });
+    });
+
+    it("JAK-193: does NOT swallow a transient REAPI error (lets the worker classify it)", async () => {
+      post.mockRejectedValue(Object.assign(new Error("HTTP 503"), { response: { status: 503 } }));
+      const dao = daoFor(true);
+
+      await expect(
+        dao.getPropertyDetailSubjectByParts({
+          house: "742", street: "Evergreen Terrace", city: "Springfield", state: "IL", zip: "62704",
+        })
+      ).rejects.toThrow("HTTP 503");
+    });
+
     it("hits the real PropertySearch endpoint in staging", async () => {
       post.mockResolvedValue({ data: { data: [{ id: "42" }] } });
       const dao = daoFor(true);

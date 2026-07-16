@@ -365,30 +365,42 @@ export class RealEstateApiDao {
   }
 
   /**
-   * PropertyDetail SUBJECT by a single address string, WITHOUT swallowing
-   * transient errors — for the JAK-183 auto-enrichment worker.
+   * PropertyDetail SUBJECT from CLEAN, STRUCTURED address parts, WITHOUT swallowing
+   * transient errors — for the JAK-183/JAK-193 auto-enrichment worker.
+   *
+   * JAK-193: the worker now assembles + sanitizes the parts itself (bare zip, state
+   * normalized/zip-derived) and passes them STRAIGHT through here — no lossy
+   * flatten→reparse — so a dirty GHL zip ("z:85335") or a missing state can no
+   * longer defeat the lookup at a regex before REAPI is ever called. Any field left
+   * empty (e.g. a state we couldn't resolve) is OMITTED from the request so REAPI
+   * decides on street + city + zip rather than seeing a blank value.
    *
    * The worker must tell a valid "no match" (→ `null`, a TERMINAL outcome it
    * finishes cleanly) apart from a transient REAPI 429/5xx (which must PROPAGATE
    * so BullMQ retries). The other PropertyDetail helpers here catch-and-return-null
    * on ANY error, collapsing those two cases; this one deliberately lets the
-   * {@link paidPost} error bubble so the caller can classify it. Existing callers
-   * are unaffected — this is a new method, not a behavior change.
+   * {@link paidPost} error bubble so the caller can classify it.
    *
    * Reuses the SAME {@link paidPost} chokepoint (JAK-110 dev-safety): off
    * prod/staging it returns the deterministic no-match dev mock and never spends /
    * hits real REAPI. Returns the raw subject (`data.data`) for the JAK-184
-   * formatter, or `null` when the address can't be parsed or REAPI has no match.
+   * formatter, or `null` when REAPI has no match.
    */
-  public async getPropertyDetailSubjectByAddress(
-    addressString: string
-  ): Promise<RealEstateApiPropertyDetail | null> {
-    const parts = this.parseAddress(addressString);
-    if (!parts) return null;
+  public async getPropertyDetailSubjectByParts(parts: {
+    house: string;
+    street: string;
+    city: string;
+    state: string;
+    zip: string;
+  }): Promise<RealEstateApiPropertyDetail | null> {
+    // Omit empty fields so REAPI never sees a blank state/city (JAK-193).
+    const body = Object.fromEntries(
+      Object.entries(parts).filter(([, v]) => typeof v === "string" && v.trim().length > 0)
+    );
 
     const data = await this.paidPost<RealEstateApiPropertyDetailResponse>(
       "/v2/PropertyDetail",
-      parts,
+      body,
       RealEstateApiDao.DEV_MOCK_DETAIL
     );
     return data.data ?? null;
