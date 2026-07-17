@@ -27,6 +27,7 @@ import { GhlCustomFieldValue } from "../api/GhlApiTypes";
 import { AutoEnrichmentFields } from "./AutoEnrichmentTypes";
 import {
   AUTO_ENRICHMENT_FIELDS,
+  normalizeFieldKey,
   normalizeFieldName,
 } from "./AutoEnrichmentFieldCatalog";
 import { GhlEnrichmentFieldResolver } from "./GhlEnrichmentFieldResolver";
@@ -80,7 +81,10 @@ export class EnrichmentFieldWriteBackService {
     const written: string[] = [];
     const skipped: string[] = [];
     for (const { def, value } of desired) {
-      const id = idsByName.get(normalizeFieldName(def.name));
+      // JAK-194: resolve by the stable fieldKey first (drift-proof), then by name.
+      const id =
+        (def.fieldKey ? idsByName.get(normalizeFieldKey(def.fieldKey)) : undefined) ??
+        idsByName.get(normalizeFieldName(def.name));
       if (!id) {
         skipped.push(def.name);
         console.warn(

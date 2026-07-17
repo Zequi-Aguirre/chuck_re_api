@@ -18,12 +18,20 @@ import { AutoEnrichmentFields } from "./AutoEnrichmentTypes";
  * all of them are written, including the always-present `mlsStatus`). */
 export type AutoEnrichmentFieldKey = keyof AutoEnrichmentFields;
 
-/** One catalog entry: a formatter key and the GHL display name it maps to. */
+/** One catalog entry: a formatter key and the GHL field it maps to. */
 export interface AutoEnrichmentFieldDef {
   /** Key on the JAK-184 formatter output. */
   key: AutoEnrichmentFieldKey;
   /** Exact GHL custom-field display name Eric's prompt creates. */
   name: string;
+  /**
+   * Optional GHL `fieldKey` (the merge-tag key, e.g. `owner_of_record` for
+   * `{{contact.owner_of_record}}`). When present the write-back resolves this
+   * field by its KEY first, falling back to {@link name} — a display name can be
+   * renamed in the GHL UI, but the fieldKey is stable (JAK-194). Entries without a
+   * fieldKey resolve by name exactly as before.
+   */
+  fieldKey?: string;
 }
 
 /**
@@ -39,7 +47,10 @@ export const AUTO_ENRICHMENT_FIELDS: readonly AutoEnrichmentFieldDef[] = [
   { key: "estimatedValue", name: "Estimated Value" },
   { key: "mortgageBalance", name: "Mortgage Balance" },
   { key: "monthlyMortgage", name: "Monthly Mortgage" },
-  { key: "ownerOfRecord", name: "Owner of Record" },
+  // JAK-194: Eric's field is DISPLAYED as "Owner on record" (note: "on", not "of")
+  // with merge-tag key `owner_of_record`. Match by the stable fieldKey first
+  // (name-drift-proof), with the display name as a fallback.
+  { key: "ownerOfRecord", name: "Owner on record", fieldKey: "owner_of_record" },
   { key: "yearsOwned", name: "Years Owned" },
   { key: "beds", name: "Beds" },
   { key: "baths", name: "Baths" },
@@ -60,3 +71,14 @@ export const AUTO_ENRICHMENT_FIELDS: readonly AutoEnrichmentFieldDef[] = [
  */
 export const normalizeFieldName = (name: string): string =>
   name.trim().toLowerCase().replace(/\s+/g, " ");
+
+/**
+ * Normalize a GHL `fieldKey` for matching (JAK-194). GHL returns the key prefixed
+ * with its model (e.g. `contact.owner_of_record`); strip that prefix and lowercase
+ * so our catalog's bare `owner_of_record` matches the location's field regardless of
+ * how its display name has been edited. Trims whitespace; no other rewriting.
+ */
+export const normalizeFieldKey = (fieldKey: string): string => {
+  const bare = fieldKey.includes(".") ? fieldKey.slice(fieldKey.lastIndexOf(".") + 1) : fieldKey;
+  return bare.trim().toLowerCase();
+};
