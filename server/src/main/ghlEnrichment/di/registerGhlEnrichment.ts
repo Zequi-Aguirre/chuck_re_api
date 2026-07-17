@@ -59,6 +59,7 @@ import { GhlEnrichmentFieldResolver } from "../autoEnrichment/GhlEnrichmentField
 import { EnrichmentFieldWriteBackService } from "../autoEnrichment/EnrichmentFieldWriteBackService";
 import { ContactCreatedResource } from "../autoEnrichment/ContactCreatedResource";
 import { AutoEnrichmentWorker } from "../autoEnrichment/AutoEnrichmentWorker";
+import { AddressLlmParser } from "../autoEnrichment/AddressLlmParser";
 import { FooterStore } from "../../services/footer/FooterStore";
 import { FooterService } from "../../services/footer/FooterService";
 
@@ -419,6 +420,13 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   // the JAK-072 monthly-restore worker. Singleton so its deps' caches are shared.
   if (!c.isRegistered(AutoEnrichmentWorker)) {
     c.registerSingleton(AutoEnrichmentWorker);
+  }
+
+  // JAK-196 — LLM address parser the worker falls back to when a line1 carries the
+  // whole address as a no-comma blob no heuristic can split. Reuses the JAK-141
+  // LlmClientResolver (registered above); degrades cleanly to no-op when no key.
+  if (!c.isRegistered(AddressLlmParser)) {
+    c.registerSingleton(AddressLlmParser);
   }
 
   // JAK-188 — admin-managed rotating reply footers. A global pool the sender draws

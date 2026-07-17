@@ -39,11 +39,12 @@ import { ReapiPropertyDetailSubject } from "./AutoEnrichmentTypes";
 import { EnrichmentFieldWriteBackService } from "./EnrichmentFieldWriteBackService";
 import { AutoEnrichmentJobPayload } from "./AutoEnrichmentQueueTypes";
 import { AutoEnrichmentOutcome } from "./AutoEnrichmentWorkerTypes";
+import { AddressLlmParser } from "./AddressLlmParser";
 import {
   EnrichmentAddressParts,
+  RawAddressFields,
   buildAddressParts,
   displayAddress,
-  parseAddressLine,
 } from "./addressParts";
 
 /** Loose HTTP-error shape we read to classify transient vs permanent REAPI errors. */
@@ -57,7 +58,8 @@ export class AutoEnrichmentWorker {
   constructor(
     @inject(RealEstateApiDao) private readonly realEstate: RealEstateApiDao,
     @inject(EnrichmentFieldWriteBackService)
-    private readonly writeBack: EnrichmentFieldWriteBackService
+    private readonly writeBack: EnrichmentFieldWriteBackService,
+    @inject(AddressLlmParser) private readonly addressLlm: AddressLlmParser
   ) {}
 
   /**
@@ -70,7 +72,7 @@ export class AutoEnrichmentWorker {
     // 1. Resolve CLEAN, STRUCTURED address parts (structured fields first, then
     //    rawContact). We pass fields straight to REAPI — no lossy flatten→reparse —
     //    so a dirty zip ("z:85335") or a missing state can't defeat the lookup.
-    const parts = this.resolveAddressParts(payload);
+    const parts = await this.resolveAddressParts(payload);
     if (!parts) {
       console.warn(
         `🏚️ [auto-enrichment] ${locationId}/${contactId}: no resolvable address — skipping`
@@ -126,29 +128,40 @@ export class AutoEnrichmentWorker {
 
   /**
    * Resolve CLEAN, STRUCTURED address parts for the REAPI lookup. Prefers the job's
-   * structured `address` fields; falls back to fields on `rawContact`, then to a
-   * single combined `rawContact.address` string. Delegates all sanitization to
-   * {@link buildAddressParts} / {@link parseAddressLine} (bare-zip, state normalize +
-   * zip-derive), returning null when nothing address-like is present.
+   * structured `address` fields; falls back to fields on `rawContact`. Delegates
+   * sanitization to {@link buildAddressParts} (bare-zip, state normalize/zip-derive)
+   * — which, since JAK-196, ALSO de-pollutes a line1 carrying the whole address
+   * (comma-split, or a known-field strip) so a "828 Pearson Oaks Dr, collierville,
+   * TN, 38017" street field yields the CLEAN "828 Pearson Oaks Dr" REGARDLESS of
+   * whether the structured city/state/zip are also filled.
    *
-   * JAK-195: {@link buildAddressParts} also handles the "full address crammed into
-   * line1, city/state/zip empty" case — it parses line1 as a combined string when
-   * the structured fields don't resolve — so those contacts enrich instead of
-   * failing as `no_address`.
+   * JAK-196: when EVERY deterministic path is exhausted but a line1 candidate
+   * exists (the no-comma blob "828 Pearson Oaks Dr collierville TN 38017" with the
+   * structured fields empty — which no heuristic can split), we ask the LLM parser
+   * to extract the parts, re-validated through the same JAK-193 rules. Only when
+   * that too yields nothing do we return null → `no_address`.
    */
-  private resolveAddressParts(payload: AutoEnrichmentJobPayload): EnrichmentAddressParts | null {
-    const fromStructured = buildAddressParts({
+  private async resolveAddressParts(
+    payload: AutoEnrichmentJobPayload
+  ): Promise<EnrichmentAddressParts | null> {
+    const structured: RawAddressFields = {
       line1: this.str(payload.address?.line1),
       city: this.str(payload.address?.city),
       state: this.str(payload.address?.state),
       postal: this.str(payload.address?.postal),
-    });
+    };
+    const fromStructured = buildAddressParts(structured);
     if (fromStructured) return fromStructured;
 
+    let rawFields: RawAddressFields | undefined;
     const raw = payload.rawContact;
     if (raw) {
-      const fromRawFields = buildAddressParts({
-        line1: this.str(raw.address1) ?? this.str(raw.line1) ?? this.str(raw.street),
+      rawFields = {
+        line1:
+          this.str(raw.address1) ??
+          this.str(raw.line1) ??
+          this.str(raw.street) ??
+          this.str(raw.address),
         city: this.str(raw.city),
         state: this.str(raw.state),
         postal:
@@ -156,9 +169,16 @@ export class AutoEnrichmentWorker {
           this.str(raw.postal_code) ??
           this.str(raw.zip) ??
           this.str(raw.zipCode),
-      });
+      };
+      const fromRawFields = buildAddressParts(rawFields);
       if (fromRawFields) return fromRawFields;
-      return parseAddressLine(this.str(raw.address));
+    }
+
+    // Deterministic paths exhausted — the LLM robustly parses a line1 blob no
+    // heuristic can split (structured hints, when present, stay authoritative).
+    const best = structured.line1 ? structured : rawFields;
+    if (best?.line1) {
+      return this.addressLlm.parse(best.line1, best);
     }
     return null;
   }
