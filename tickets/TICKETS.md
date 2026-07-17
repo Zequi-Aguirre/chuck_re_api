@@ -37,7 +37,7 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-152** (P3) [LATER] Onboarding: white-glove + self-serve field-mapping guide — depends: JAK-105
 - [ ] **JAK-153** (P3) [LATER] Privacy Policy + Terms pages for Jake
 
-## Done (40)
+## Done (41)
 - [x] **JAK-100** (P0) Project ticket store (SQLite in-repo)
 - [x] **JAK-101** (P0) GHL app scaffolding + Doppler config + env helper — depends: JAK-100
 - [x] **JAK-102** (P0) Encrypted connection/credential store — depends: JAK-101
@@ -78,3 +78,4 @@ Epic: `ghl-enrichment`
 - [x] **JAK-164** (P1) Comparable-sales SELECTION ENGINE with a real up-to-10-mile pool: pull a genuine sold-comp candidate pool via /v2/PropertySearch geo-radius (NOT the ~1mi PropertyDetail cluster, NOT paid v3), then select the strongest true comps (admin-editable LLM prompt + model picker, deterministic reject/score fallback; numeric fields code-derived). Addendum: kills subject-price/date bleed onto comps + renders days-on-market/PPSF — depends: JAK-160, JAK-137, JAK-144, JAK-143, JAK-161
 - [x] **JAK-165** (P1) Fix bare comps/skip running on an OLD address instead of the most-recent property: for a bare skip_trace/comps (no inline address, no ordinal, no 'last') the router LLM's history-derived targetAddress guess no longer overrides the deterministic most-recent fallback (JAK-154) — resolveTarget only honors targetAddress for skip/comps when corroborated (ordinal/'last') or unambiguous (0-1 addresses). Inline-address (JAK-156), ordinals (JAK-135/138), 'last' (JAK-159) and property_report disambiguation unchanged — depends: JAK-154, JAK-156, JAK-159, JAK-135, JAK-138, JAK-137, JAK-136
 - [x] **JAK-193** (P0) Fix auto-enrichment address bug: build clean STRUCTURED address parts for the REAPI PropertyDetail lookup instead of flatten->reparse. Bare-zip sanitize as a hard invariant (z:85335 -> 85335), new non-swallowing DAO getPropertyDetailSubjectByParts, missing-state derived from zip (ZIP3 table); empty fields omitted so REAPI decides. SMS/text-Jake path + Eric's LLM prompts untouched.
+- [x] **JAK-195** (P2) Enrich contacts with the FULL address crammed into address1 (city/state/zip empty). New buildAddressParts = partsFromFields(fields) ?? parseAddressLine(line1): structured fields win when present; otherwise line1 is parsed as a combined address string (JAK-193 partial-tolerant rules: bare-zip, state-from-zip, structured REAPI pass-through). SMS path untouched. — depends: JAK-193
