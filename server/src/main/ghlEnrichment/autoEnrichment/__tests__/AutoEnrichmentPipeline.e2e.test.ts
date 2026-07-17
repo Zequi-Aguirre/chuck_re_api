@@ -87,7 +87,7 @@ describe("auto-enrichment pipeline (endpoint → queue → worker → write)", (
     realEstate = mock<RealEstateApiDao>();
     writeBack = mock<EnrichmentFieldWriteBackService>();
     writeBack.writeEnrichmentFields.mockResolvedValue({
-      written: ["MLS Status", "Property Type", "Owner of Record"],
+      written: ["MLS Status", "Property Type", "Owner on record"],
       skipped: [],
       didWrite: true,
     });

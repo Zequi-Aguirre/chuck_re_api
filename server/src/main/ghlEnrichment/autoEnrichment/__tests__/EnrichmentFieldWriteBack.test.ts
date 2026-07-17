@@ -18,9 +18,16 @@ import { AutoEnrichmentFields } from "../AutoEnrichmentTypes";
 import { GhlApiClient } from "../../api/GhlApiClient";
 import { GhlCustomField } from "../../api/GhlApiTypes";
 
-/** Build a fake GHL custom-field catalog: one field per catalog entry, id = `id-<name>`. */
+/**
+ * Build a fake GHL custom-field catalog: one field per catalog entry, id = `id-<name>`.
+ * Entries with a catalog fieldKey also carry the GHL-shaped `contact.<key>` fieldKey.
+ */
 const fullCatalog = (): GhlCustomField[] =>
-  AUTO_ENRICHMENT_FIELDS.map((def) => ({ id: `id-${def.name}`, name: def.name }));
+  AUTO_ENRICHMENT_FIELDS.map((def) => ({
+    id: `id-${def.name}`,
+    name: def.name,
+    ...(def.fieldKey ? { fieldKey: `contact.${def.fieldKey}` } : {}),
+  }));
 
 /** A mock GhlApiClient exposing just the two methods the write-back path uses. */
 const makeApi = (catalog: GhlCustomField[] = fullCatalog()) => {
@@ -84,7 +91,7 @@ describe("catalog", () => {
       "Estimated Value",
       "Mortgage Balance",
       "Monthly Mortgage",
-      "Owner of Record",
+      "Owner on record",
       "Years Owned",
       "Beds",
       "Baths",
@@ -164,6 +171,59 @@ describe("writeEnrichmentFields — name→id matching + overwrite payload", () 
     });
     const [, , customFields] = updateContactCustomFields.mock.calls[0];
     expect(customFields).toContainEqual({ id: "id-Estimated Equity", value: 0 });
+  });
+});
+
+describe("writeEnrichmentFields — fieldKey-preferred resolution (JAK-194)", () => {
+  it("resolves the owner field by its GHL fieldKey", async () => {
+    // The location's owner field carries the merge-tag key GHL returns.
+    const { service, updateContactCustomFields } = makeService();
+    const result = await service.writeEnrichmentFields("loc_1", "c1", {
+      mlsStatus: "Off Market",
+      ownerOfRecord: "Jane Q. Homeowner",
+    });
+
+    expect(result.skipped).toEqual([]);
+    expect(result.written).toContain("Owner on record");
+    const [, , customFields] = updateContactCustomFields.mock.calls[0];
+    expect(customFields).toContainEqual({ id: "id-Owner on record", value: "Jane Q. Homeowner" });
+  });
+
+  it("resolves owner by fieldKey EVEN WHEN the display name has drifted", async () => {
+    // GHL field renamed in the UI ("Property Owner") but the fieldKey is stable.
+    const drifted: GhlCustomField[] = fullCatalog().map((f) =>
+      f.name === "Owner on record"
+        ? { id: "id-owner", name: "Property Owner", fieldKey: "contact.owner_of_record" }
+        : f
+    );
+    const { service, updateContactCustomFields } = makeService(drifted);
+
+    const result = await service.writeEnrichmentFields("loc_1", "c1", {
+      mlsStatus: "Off Market",
+      ownerOfRecord: "Jane Q. Homeowner",
+    });
+
+    expect(result.skipped).toEqual([]);
+    const [, , customFields] = updateContactCustomFields.mock.calls[0];
+    // Matched by owner_of_record key despite the display-name mismatch.
+    expect(customFields).toContainEqual({ id: "id-owner", value: "Jane Q. Homeowner" });
+  });
+
+  it("falls back to the display name when the field has no fieldKey", async () => {
+    // Older location: owner field exists by name only (no fieldKey on the record).
+    const nameOnly: GhlCustomField[] = fullCatalog().map((f) =>
+      f.name === "Owner on record" ? { id: "id-owner", name: "Owner on record" } : f
+    );
+    const { service, updateContactCustomFields } = makeService(nameOnly);
+
+    const result = await service.writeEnrichmentFields("loc_1", "c1", {
+      mlsStatus: "Off Market",
+      ownerOfRecord: "Jane Q. Homeowner",
+    });
+
+    expect(result.skipped).toEqual([]);
+    const [, , customFields] = updateContactCustomFields.mock.calls[0];
+    expect(customFields).toContainEqual({ id: "id-owner", value: "Jane Q. Homeowner" });
   });
 });
 

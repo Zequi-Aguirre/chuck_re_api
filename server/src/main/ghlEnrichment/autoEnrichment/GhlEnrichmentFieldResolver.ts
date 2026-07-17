@@ -17,7 +17,7 @@
  */
 import { inject, injectable } from "tsyringe";
 import { GhlApiClient } from "../api/GhlApiClient";
-import { normalizeFieldName } from "./AutoEnrichmentFieldCatalog";
+import { normalizeFieldKey, normalizeFieldName } from "./AutoEnrichmentFieldCatalog";
 
 /** Normalized GHL field name → GHL field id, for one location. */
 export type FieldIdMap = ReadonlyMap<string, string>;
@@ -56,13 +56,23 @@ export class GhlEnrichmentFieldResolver {
     this.cacheByLocation.delete(locationId);
   }
 
-  /** Fetch the location's custom-field catalog, (re)build + cache the name→id map. */
+  /**
+   * Fetch the location's custom-field catalog, (re)build + cache the lookup map.
+   * Indexes each field by BOTH its normalized fieldKey (JAK-194, stable) AND its
+   * normalized display name, so the write-back can resolve by either. The name is
+   * set LAST so a name always wins any (astronomically unlikely) collision with a
+   * different field's key — the name path is the long-standing behavior.
+   */
   private async fetchAndCache(locationId: string): Promise<FieldIdMap> {
     const fields = await this.api.listCustomFields(locationId);
     const map = new Map<string, string>();
     for (const field of fields) {
-      const name = typeof field?.name === "string" ? normalizeFieldName(field.name) : "";
-      if (name && field.id) map.set(name, field.id); // later duplicate wins
+      if (!field?.id) continue;
+      if (typeof field.fieldKey === "string" && field.fieldKey.trim()) {
+        map.set(normalizeFieldKey(field.fieldKey), field.id);
+      }
+      const name = typeof field.name === "string" ? normalizeFieldName(field.name) : "";
+      if (name) map.set(name, field.id); // later duplicate wins
     }
     this.cacheByLocation.set(locationId, map);
     return map;
