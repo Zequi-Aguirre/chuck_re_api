@@ -174,6 +174,22 @@ export function parseAddressLine(line: string | undefined | null): EnrichmentAdd
   return partsFromFields({ line1, city, state, postal: zip });
 }
 
+/**
+ * Resolve address parts from GHL fields, tolerating the case where the WHOLE
+ * address is crammed into `line1` and the structured city/state/postal fields are
+ * empty (JAK-195 — "full address in the street field").
+ *
+ * Structured fields win when present: {@link partsFromFields} runs first, so a
+ * normal payload (street in line1, city/state/zip in their own fields) is
+ * unchanged. Only when that yields nothing do we treat `line1` itself as a single
+ * combined address string and {@link parseAddressLine} it — same partial-tolerant
+ * rules as JAK-193 (bare zip, state-from-zip). A bare street with no embedded
+ * city/state/zip (no commas / no zip) still resolves to `null`, exactly as before.
+ */
+export function buildAddressParts(fields: RawAddressFields): EnrichmentAddressParts | null {
+  return partsFromFields(fields) ?? parseAddressLine(fields.line1);
+}
+
 /** Human-readable one-line rendering of the parts, for logs. */
 export function displayAddress(parts: EnrichmentAddressParts): string {
   const tail = [parts.state, parts.zip].filter(Boolean).join(" ");

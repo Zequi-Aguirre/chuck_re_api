@@ -7,6 +7,7 @@
  *   - a clean payload is unchanged.
  */
 import {
+  buildAddressParts,
   displayAddress,
   normalizeStateCode,
   parseAddressLine,
@@ -147,6 +148,40 @@ describe("parseAddressLine — combined rawContact.address string fallback", () 
 
   it.each([undefined, "", "just a name", "no, zip, here"])("returns null for %p", (line) => {
     expect(parseAddressLine(line as string | undefined)).toBeNull();
+  });
+});
+
+describe("buildAddressParts — structured fields, or full-address-in-line1 (JAK-195)", () => {
+  it("Eric's case: full address in line1, city/state/zip empty → parsed", () => {
+    expect(
+      buildAddressParts({ line1: "14001 N 127th Ln, El Mirage, AZ 85335" })
+    ).toEqual({ house: "14001", street: "N 127th Ln", city: "El Mirage", state: "AZ", zip: "85335" });
+  });
+
+  it("full address in line1 with the state omitted → state derived from zip", () => {
+    expect(
+      buildAddressParts({ line1: "3165 Tracy Rd, atoka, 38004" })
+    ).toEqual({ house: "3165", street: "Tracy Rd", city: "atoka", state: "TN", zip: "38004" });
+  });
+
+  it("STRUCTURED fields still win — a normal payload is unchanged (no regression)", () => {
+    expect(
+      buildAddressParts({ line1: "742 Evergreen Terrace", city: "Springfield", state: "IL", postal: "62704" })
+    ).toEqual({ house: "742", street: "Evergreen Terrace", city: "Springfield", state: "IL", zip: "62704" });
+  });
+
+  it("does NOT mistake a comma-laden line1 for the street when the zip IS a field", () => {
+    // postal present → structured path wins; line1 is treated as-is (pre-existing).
+    const parts = buildAddressParts({ line1: "742 Evergreen Terrace", city: "Springfield", state: "IL", postal: "62704" });
+    expect(parts?.street).toBe("Evergreen Terrace");
+  });
+
+  it.each([
+    ["bare street, no zip anywhere", { line1: "742 Evergreen Terrace" }],
+    ["street + city only, no zip", { line1: "742 Evergreen Terrace, Springfield" }],
+    ["empty", {}],
+  ])("returns null when there's no zip to key on (%s)", (_label, fields) => {
+    expect(buildAddressParts(fields)).toBeNull();
   });
 });
 

@@ -41,9 +41,9 @@ import { AutoEnrichmentJobPayload } from "./AutoEnrichmentQueueTypes";
 import { AutoEnrichmentOutcome } from "./AutoEnrichmentWorkerTypes";
 import {
   EnrichmentAddressParts,
+  buildAddressParts,
   displayAddress,
   parseAddressLine,
-  partsFromFields,
 } from "./addressParts";
 
 /** Loose HTTP-error shape we read to classify transient vs permanent REAPI errors. */
@@ -128,11 +128,16 @@ export class AutoEnrichmentWorker {
    * Resolve CLEAN, STRUCTURED address parts for the REAPI lookup. Prefers the job's
    * structured `address` fields; falls back to fields on `rawContact`, then to a
    * single combined `rawContact.address` string. Delegates all sanitization to
-   * {@link partsFromFields} / {@link parseAddressLine} (bare-zip, state normalize +
+   * {@link buildAddressParts} / {@link parseAddressLine} (bare-zip, state normalize +
    * zip-derive), returning null when nothing address-like is present.
+   *
+   * JAK-195: {@link buildAddressParts} also handles the "full address crammed into
+   * line1, city/state/zip empty" case — it parses line1 as a combined string when
+   * the structured fields don't resolve — so those contacts enrich instead of
+   * failing as `no_address`.
    */
   private resolveAddressParts(payload: AutoEnrichmentJobPayload): EnrichmentAddressParts | null {
-    const fromStructured = partsFromFields({
+    const fromStructured = buildAddressParts({
       line1: this.str(payload.address?.line1),
       city: this.str(payload.address?.city),
       state: this.str(payload.address?.state),
@@ -142,7 +147,7 @@ export class AutoEnrichmentWorker {
 
     const raw = payload.rawContact;
     if (raw) {
-      const fromRawFields = partsFromFields({
+      const fromRawFields = buildAddressParts({
         line1: this.str(raw.address1) ?? this.str(raw.line1) ?? this.str(raw.street),
         city: this.str(raw.city),
         state: this.str(raw.state),

@@ -237,6 +237,56 @@ describe("AutoEnrichmentWorker", () => {
     });
   });
 
+  // JAK-195 — GHL sometimes crams the WHOLE address into address1 with the
+  // structured city/state/zip fields empty. Those must still enrich (Eric).
+  describe("full address in the street field (JAK-195)", () => {
+    it("parses a full address in the structured line1 (city/state/zip empty)", async () => {
+      realEstate.getPropertyDetailSubjectByParts.mockResolvedValue(subject());
+
+      const outcome = await worker.process(
+        structuredJob({ address: { line1: "14001 N 127th Ln, El Mirage, AZ 85335" } })
+      );
+
+      expect(realEstate.getPropertyDetailSubjectByParts).toHaveBeenCalledWith({
+        house: "14001",
+        street: "N 127th Ln",
+        city: "El Mirage",
+        state: "AZ",
+        zip: "85335",
+      });
+      expect(outcome.status).toBe("enriched");
+    });
+
+    it("parses a full address in rawContact.address1 (city/state/zip empty)", async () => {
+      realEstate.getPropertyDetailSubjectByParts.mockResolvedValue(subject());
+      const job: AutoEnrichmentJobPayload = {
+        locationId: "loc_1",
+        contactId: "contact_raw_full",
+        rawContact: { address1: "3165 Tracy Rd, atoka, 38004", firstName: "Jane" },
+      };
+
+      const outcome = await worker.process(job);
+
+      // state derived from the embedded zip (38004 → TN).
+      expect(realEstate.getPropertyDetailSubjectByParts).toHaveBeenCalledWith({
+        house: "3165",
+        street: "Tracy Rd",
+        city: "atoka",
+        state: "TN",
+        zip: "38004",
+      });
+      expect(outcome.status).toBe("enriched");
+    });
+
+    it("still no_address for a bare street with no zip anywhere (no regression)", async () => {
+      const outcome = await worker.process(
+        structuredJob({ address: { line1: "742 Evergreen Terrace" } })
+      );
+      expect(outcome.status).toBe("no_address");
+      expect(realEstate.getPropertyDetailSubjectByParts).not.toHaveBeenCalled();
+    });
+  });
+
   describe("overwrite semantics", () => {
     it("re-processing the same contact just calls the (overwriting) write-back again", async () => {
       realEstate.getPropertyDetailSubjectByParts.mockResolvedValue(subject());
