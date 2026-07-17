@@ -132,6 +132,9 @@ const str = (v: string | undefined | null): string | undefined => {
   return t.length > 0 ? t : undefined;
 };
 
+/** Escape a string for literal use inside a RegExp. */
+const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 /**
  * Build clean structured parts from GHL address FIELDS, or null when there's not
  * enough to key a lookup (no street number, or no zip). The zip is always bared;
@@ -146,21 +149,21 @@ export function partsFromFields(fields: RawAddressFields): EnrichmentAddressPart
 }
 
 /**
- * Fallback for a rawContact carrying a single combined address STRING
- * ("3165 Tracy Rd, atoka, 38004"). Split on commas, isolate an optional trailing
- * state token + the zip, then reuse {@link partsFromFields} so the same sanitize +
- * state-derivation applies. Null when it doesn't parse to a usable address.
+ * Parse a locality TAIL ("collierville, TN, 38017" / "El Mirage AZ z:85335" /
+ * "atoka 38004") into its {city, state, zip} pieces: commas are flattened to
+ * spaces, the bare zip is isolated (JAK-193), and an optional trailing state token
+ * is normalized. Any piece may be undefined. Shared engine behind both the
+ * combined-string fallback and the dirty-line1 street extraction (JAK-196).
  */
-export function parseAddressLine(line: string | undefined | null): EnrichmentAddressParts | null {
-  if (typeof line !== "string") return null;
-  const parts = line.split(",").map((s) => s.trim()).filter(Boolean);
-  if (parts.length < 2) return null;
-  const line1 = parts[0];
-  const tail = parts.slice(1).join(" "); // "atoka TN 38004" / "El Mirage AZ z:85335"
-  const zip = sanitizeZip(tail);
-  if (!zip) return null;
+export function parseLocalityTail(
+  tail: string | undefined | null
+): { city?: string; state?: string; zip?: string } {
+  if (typeof tail !== "string") return {};
+  const flat = tail.replace(/,/g, " ").replace(/\s+/g, " ").trim();
+  if (!flat) return {};
+  const zip = sanitizeZip(flat);
   // Strip the zip (and any label glued to it) off the tail to isolate city [+ state].
-  const beforeZip = tail.replace(/\S*\d{5}(?:-\d{4})?\S*\s*$/, "").trim();
+  const beforeZip = zip ? flat.replace(/\S*\d{5}(?:-\d{4})?\S*\s*$/, "").trim() : flat;
   const tokens = beforeZip.split(/\s+/).filter(Boolean);
   let state: string | undefined;
   let city = beforeZip;
@@ -171,23 +174,108 @@ export function parseAddressLine(line: string | undefined | null): EnrichmentAdd
       city = tokens.slice(0, -1).join(" ");
     }
   }
-  return partsFromFields({ line1, city, state, postal: zip });
+  return { city: str(city), state, zip };
 }
 
 /**
- * Resolve address parts from GHL fields, tolerating the case where the WHOLE
- * address is crammed into `line1` and the structured city/state/postal fields are
- * empty (JAK-195 — "full address in the street field").
+ * Fallback for a rawContact carrying a single combined address STRING
+ * ("3165 Tracy Rd, atoka, 38004"). The street is everything before the FIRST
+ * comma; the remainder is parsed as a locality tail, then reused through
+ * {@link partsFromFields} so the same sanitize + state-derivation applies. Null
+ * when there's no comma or it doesn't parse to a usable address.
+ */
+export function parseAddressLine(line: string | undefined | null): EnrichmentAddressParts | null {
+  if (typeof line !== "string") return null;
+  const comma = line.indexOf(",");
+  if (comma < 0) return null;
+  const line1 = line.slice(0, comma).trim();
+  const loc = parseLocalityTail(line.slice(comma + 1));
+  if (!loc.zip) return null;
+  return partsFromFields({ line1, city: loc.city, state: loc.state, postal: loc.zip });
+}
+
+/**
+ * Peel a trailing city/state/zip run off a NO-COMMA line1 using the KNOWN
+ * structured values as anchors: strip the zip, then the state (raw or normalized),
+ * then the city — each only when it sits at the very end. Returns the recovered
+ * street, or the input unchanged when nothing matches (a normal "742 Evergreen
+ * Terrace" is untouched).
+ */
+function stripKnownTail(
+  line1: string,
+  known: { city?: string; state?: string; zip?: string }
+): string {
+  let s = line1.trim();
+  const peel = (token: string | undefined): void => {
+    if (!token) return;
+    const re = new RegExp(`[\\s,]+${escapeRegExp(token)}\\s*$`, "i");
+    if (re.test(s)) s = s.replace(re, "").trim();
+  };
+  peel(known.zip);
+  peel(known.state);
+  peel(known.state ? normalizeStateCode(known.state) : undefined);
+  peel(known.city);
+  const cleaned = s.replace(/[\s,]+$/, "").trim();
+  return cleaned.length > 0 ? cleaned : line1.trim();
+}
+
+/**
+ * De-pollute a dirty line1 that carries the WHOLE address (JAK-196). GHL stores
+ * some contacts' entire address in the street field —
+ * "828 Pearson Oaks Dr, collierville, TN, 38017" — sometimes WITH the structured
+ * city/state/zip ALSO filled. Passed straight to REAPI as `street`, that value
+ * never matches. Recover the CLEAN street and merge locality:
  *
- * Structured fields win when present: {@link partsFromFields} runs first, so a
- * normal payload (street in line1, city/state/zip in their own fields) is
- * unchanged. Only when that yields nothing do we treat `line1` itself as a single
- * combined address string and {@link parseAddressLine} it — same partial-tolerant
- * rules as JAK-193 (bare zip, state-from-zip). A bare street with no embedded
- * city/state/zip (no commas / no zip) still resolves to `null`, exactly as before.
+ *   1. COMMA — the street is everything before the first comma; the tail carries
+ *      the embedded city/state/zip.
+ *   2. KNOWN-FIELDS strip — no commas but structured city/state/zip are present:
+ *      peel a trailing run matching them off line1 ("…Dr collierville TN 38017").
+ *
+ * Structured fields are AUTHORITATIVE: when present they win over anything parsed
+ * out of line1. A no-comma blob with NO structured locality to anchor on is left
+ * untouched ({@link partsFromFields} then fails → the worker's LLM parser handles
+ * it). A plain street with no embedded locality is returned unchanged (no
+ * regression for normal payloads).
+ */
+function mergeDirtyLine1(fields: RawAddressFields): RawAddressFields {
+  const line1 = str(fields.line1);
+  if (!line1) return fields;
+
+  const sCity = str(fields.city);
+  const sState = str(fields.state);
+  const sZip = sanitizeZip(fields.postal);
+
+  // 1. COMMA — split off the clean street; parse the tail for embedded locality.
+  const comma = line1.indexOf(",");
+  if (comma >= 0) {
+    const loc = parseLocalityTail(line1.slice(comma + 1));
+    return {
+      line1: line1.slice(0, comma).trim(),
+      city: sCity ?? loc.city,
+      state: sState ?? loc.state,
+      postal: str(fields.postal) ?? loc.zip,
+    };
+  }
+
+  // 2. KNOWN-FIELDS strip — no commas, but we know the locality: peel it off.
+  if (sCity || sState || sZip) {
+    return { ...fields, line1: stripKnownTail(line1, { city: sCity, state: sState, zip: sZip }) };
+  }
+
+  // Plain street, or an unanchored no-comma blob — leave it for partsFromFields /
+  // the LLM parser. Unchanged, so normal payloads never regress.
+  return fields;
+}
+
+/**
+ * Resolve clean structured parts from GHL fields. First de-pollutes a dirty line1
+ * that carries the whole address ({@link mergeDirtyLine1} — comma-split or
+ * known-field strip, structured fields authoritative), then builds via
+ * {@link partsFromFields} (JAK-193 bare-zip + state-from-zip). Null when nothing
+ * address-like resolves — the worker then falls back to the LLM parser.
  */
 export function buildAddressParts(fields: RawAddressFields): EnrichmentAddressParts | null {
-  return partsFromFields(fields) ?? parseAddressLine(fields.line1);
+  return partsFromFields(mergeDirtyLine1(fields));
 }
 
 /** Human-readable one-line rendering of the parts, for logs. */

@@ -12,6 +12,7 @@
 import { UnrecoverableError } from "bullmq";
 import { mock, MockProxy } from "jest-mock-extended";
 import { AutoEnrichmentWorker } from "../AutoEnrichmentWorker";
+import { AddressLlmParser } from "../AddressLlmParser";
 import { RealEstateApiDao } from "../../../data/RealEstateApiDao";
 import { EnrichmentFieldWriteBackService } from "../EnrichmentFieldWriteBackService";
 import { AutoEnrichmentJobPayload } from "../AutoEnrichmentQueueTypes";
@@ -44,6 +45,7 @@ const httpError = (status: number) =>
 describe("AutoEnrichmentWorker", () => {
   let realEstate: MockProxy<RealEstateApiDao>;
   let writeBack: MockProxy<EnrichmentFieldWriteBackService>;
+  let addressLlm: MockProxy<AddressLlmParser>;
   let worker: AutoEnrichmentWorker;
 
   beforeEach(() => {
@@ -54,7 +56,9 @@ describe("AutoEnrichmentWorker", () => {
       skipped: [],
       didWrite: true,
     });
-    worker = new AutoEnrichmentWorker(realEstate, writeBack);
+    addressLlm = mock<AddressLlmParser>();
+    addressLlm.parse.mockResolvedValue(null); // off by default; overridden per test.
+    worker = new AutoEnrichmentWorker(realEstate, writeBack, addressLlm);
     jest.spyOn(console, "log").mockImplementation(() => undefined);
     jest.spyOn(console, "warn").mockImplementation(() => undefined);
   });
@@ -284,6 +288,96 @@ describe("AutoEnrichmentWorker", () => {
       );
       expect(outcome.status).toBe("no_address");
       expect(realEstate.getPropertyDetailSubjectByParts).not.toHaveBeenCalled();
+    });
+  });
+
+  // JAK-196 — GHL crams the WHOLE address into the street field, sometimes WITH
+  // the structured city/state/zip ALSO filled. Before, splitStreet swallowed the
+  // comma-laden line1 as `street`, so REAPI saw "Pearson Oaks Dr, collierville, TN,
+  // 38017" and never matched. Now the street is de-polluted deterministically; the
+  // no-comma blob (nothing to anchor on) falls back to the LLM parser.
+  describe("dirty full-address-in-line1 (JAK-196)", () => {
+    const CLEAN = {
+      house: "828",
+      street: "Pearson Oaks Dr",
+      city: "collierville",
+      state: "TN",
+      zip: "38017",
+    };
+
+    it("CASE 1: full address in line1 AND structured city/state/zip also filled → clean street, no LLM", async () => {
+      realEstate.getPropertyDetailSubjectByParts.mockResolvedValue(subject());
+
+      const outcome = await worker.process(
+        structuredJob({
+          address: {
+            line1: "828 Pearson Oaks Dr, collierville, TN, 38017",
+            city: "collierville",
+            state: "TN",
+            postal: "38017",
+          },
+        })
+      );
+
+      // REAPI receives the CLEAN street, not the polluted comma string.
+      expect(realEstate.getPropertyDetailSubjectByParts).toHaveBeenCalledWith(CLEAN);
+      expect(outcome.status).toBe("enriched");
+      expect(addressLlm.parse).not.toHaveBeenCalled(); // deterministic handled it.
+    });
+
+    it("no-comma blob WITH structured city/state/zip → stripped clean, no LLM", async () => {
+      realEstate.getPropertyDetailSubjectByParts.mockResolvedValue(subject());
+
+      const outcome = await worker.process(
+        structuredJob({
+          address: {
+            line1: "828 Pearson Oaks Dr collierville TN 38017",
+            city: "collierville",
+            state: "TN",
+            postal: "38017",
+          },
+        })
+      );
+
+      expect(realEstate.getPropertyDetailSubjectByParts).toHaveBeenCalledWith(CLEAN);
+      expect(outcome.status).toBe("enriched");
+      expect(addressLlm.parse).not.toHaveBeenCalled();
+    });
+
+    it("CASE 2 (no-comma blob, structured EMPTY) → deterministic fails → LLM parses → enriched", async () => {
+      realEstate.getPropertyDetailSubjectByParts.mockResolvedValue(subject());
+      addressLlm.parse.mockResolvedValue(CLEAN); // the model splits the blob.
+
+      const outcome = await worker.process(
+        structuredJob({ address: { line1: "828 Pearson Oaks Dr collierville TN 38017" } })
+      );
+
+      // LLM was consulted with the raw blob; hints carried the (empty) structured fields.
+      expect(addressLlm.parse).toHaveBeenCalledTimes(1);
+      expect(addressLlm.parse.mock.calls[0][0]).toBe("828 Pearson Oaks Dr collierville TN 38017");
+      expect(realEstate.getPropertyDetailSubjectByParts).toHaveBeenCalledWith(CLEAN);
+      expect(outcome.status).toBe("enriched");
+    });
+
+    it("no-comma blob, structured EMPTY, LLM unavailable (null) → no_address", async () => {
+      addressLlm.parse.mockResolvedValue(null); // no key / parse failure.
+
+      const outcome = await worker.process(
+        structuredJob({ address: { line1: "828 Pearson Oaks Dr collierville TN 38017" } })
+      );
+
+      expect(outcome.status).toBe("no_address");
+      expect(realEstate.getPropertyDetailSubjectByParts).not.toHaveBeenCalled();
+    });
+
+    it("does NOT invoke the LLM when the deterministic parse already succeeds (comma case)", async () => {
+      realEstate.getPropertyDetailSubjectByParts.mockResolvedValue(subject());
+
+      await worker.process(
+        structuredJob({ address: { line1: "828 Pearson Oaks Dr, collierville, TN, 38017" } })
+      );
+
+      expect(addressLlm.parse).not.toHaveBeenCalled();
     });
   });
 

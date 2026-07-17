@@ -19,6 +19,7 @@ import { GhlConnection } from "../../connections/GhlConnectionTypes";
 import { RedisContainer } from "../../../config/RedisContainer";
 import { AutoEnrichmentQueueService } from "../AutoEnrichmentQueueService";
 import { AutoEnrichmentWorker } from "../AutoEnrichmentWorker";
+import { AddressLlmParser } from "../AddressLlmParser";
 import { ContactCreatedResource } from "../ContactCreatedResource";
 import { AutoEnrichmentJobPayload } from "../AutoEnrichmentQueueTypes";
 import { RealEstateApiDao } from "../../../data/RealEstateApiDao";
@@ -91,7 +92,9 @@ describe("auto-enrichment pipeline (endpoint → queue → worker → write)", (
       skipped: [],
       didWrite: true,
     });
-    processor = new AutoEnrichmentWorker(realEstate, writeBack);
+    const addressLlm = mock<AddressLlmParser>();
+    addressLlm.parse.mockResolvedValue(null); // deterministic covers the e2e fixtures.
+    processor = new AutoEnrichmentWorker(realEstate, writeBack, addressLlm);
 
     // The real producer (BullMQ stubbed) + the real endpoint on top of it.
     queue = new AutoEnrichmentQueueService(env, redis, processor);

@@ -11,6 +11,7 @@ import {
   displayAddress,
   normalizeStateCode,
   parseAddressLine,
+  parseLocalityTail,
   partsFromFields,
   sanitizeZip,
   splitStreet,
@@ -182,6 +183,86 @@ describe("buildAddressParts — structured fields, or full-address-in-line1 (JAK
     ["empty", {}],
   ])("returns null when there's no zip to key on (%s)", (_label, fields) => {
     expect(buildAddressParts(fields)).toBeNull();
+  });
+});
+
+// JAK-196 — a dirty line1 carrying the WHOLE address must yield a CLEAN street,
+// whether or not the structured city/state/zip are also present.
+describe("buildAddressParts — dirty full-address-in-line1 (JAK-196)", () => {
+  const CLEAN = { house: "828", street: "Pearson Oaks Dr", city: "collierville", state: "TN", zip: "38017" };
+
+  it("CASE 1: comma line1 + structured city/state/zip ALSO filled → clean street (was polluted)", () => {
+    expect(
+      buildAddressParts({
+        line1: "828 Pearson Oaks Dr, collierville, TN, 38017",
+        city: "collierville",
+        state: "TN",
+        postal: "38017",
+      })
+    ).toEqual(CLEAN);
+  });
+
+  it("comma line1, structured EMPTY → still clean (JAK-195 shape, state as its own comma part)", () => {
+    expect(buildAddressParts({ line1: "828 Pearson Oaks Dr, collierville, TN, 38017" })).toEqual(CLEAN);
+  });
+
+  it("no-comma blob + structured city/state/zip → trailing locality stripped off the street", () => {
+    expect(
+      buildAddressParts({
+        line1: "828 Pearson Oaks Dr collierville TN 38017",
+        city: "collierville",
+        state: "TN",
+        postal: "38017",
+      })
+    ).toEqual(CLEAN);
+  });
+
+  it("no-comma blob with structured EMPTY → null (nothing to anchor on; worker's LLM handles it)", () => {
+    expect(buildAddressParts({ line1: "828 Pearson Oaks Dr collierville TN 38017" })).toBeNull();
+  });
+
+  it("strips a trailing full state NAME using the structured code as the anchor", () => {
+    expect(
+      buildAddressParts({
+        line1: "742 Evergreen Terrace Springfield IL 62704",
+        city: "Springfield",
+        state: "IL",
+        postal: "62704",
+      })
+    ).toEqual({ house: "742", street: "Evergreen Terrace", city: "Springfield", state: "IL", zip: "62704" });
+  });
+
+  it("NO REGRESSION: a plain street + structured fields is untouched (no over-strip)", () => {
+    expect(
+      buildAddressParts({ line1: "500 Main St", city: "Dallas", state: "TX", postal: "75001" })
+    ).toEqual({ house: "500", street: "Main St", city: "Dallas", state: "TX", zip: "75001" });
+  });
+});
+
+describe("parseLocalityTail (JAK-196)", () => {
+  it("parses 'city, ST, zip' with the zip as its own comma segment", () => {
+    expect(parseLocalityTail("collierville, TN, 38017")).toEqual({
+      city: "collierville",
+      state: "TN",
+      zip: "38017",
+    });
+  });
+
+  it("parses a space-delimited tail and strips a z: label off the zip", () => {
+    expect(parseLocalityTail("El Mirage AZ z:85335")).toEqual({
+      city: "El Mirage",
+      state: "AZ",
+      zip: "85335",
+    });
+  });
+
+  it("leaves state undefined when the last token isn't a state", () => {
+    expect(parseLocalityTail("atoka 38004")).toEqual({ city: "atoka", state: undefined, zip: "38004" });
+  });
+
+  it("returns an empty object for a blank tail", () => {
+    expect(parseLocalityTail("")).toEqual({});
+    expect(parseLocalityTail(undefined)).toEqual({});
   });
 });
 
