@@ -1,6 +1,8 @@
 import express, { Request, Response, Router } from "express";
 import { inject, injectable } from "tsyringe";
-import { LeadEnrichmentQueueService } from "../../services/LeadEnrichmentQueueService";
+import { InProcessEnrichmentRunner } from "../runtime/InProcessEnrichmentRunner";
+import { GhlEnrichmentWorker } from "../worker/GhlEnrichmentWorker";
+import { EnrichmentJobPayload } from "../../types/LeadEnrichment";
 import { GhlConnectionService } from "../connections/GhlConnectionService";
 import { GhlWebhookVerifier } from "./GhlWebhookVerifier";
 import {
@@ -14,23 +16,24 @@ import {
  *
  * One endpoint — `POST /webhooks/ghl` — that GHL calls when a new contact is
  * created in an installed sub-account. It does the least possible synchronously
- * so the response is fast, and hands the real work to the enrichment worker
- * (JAK-107) via the queue:
+ * so the response is fast, and hands the real work to the JAK-107 enrichment
+ * worker via the JAK-197 in-process runner:
  *
  *   1. Verify the webhook signature ({@link GhlWebhookVerifier}) — the shared
  *      GHL_WEBHOOK_SECRET, NOT the MASTER_API_KEY (that guards the text path).
  *   2. Validate the payload (location id + contact id present).
  *   3. Resolve the location from the JAK-102 connection store; drop it if the
  *      location is unknown or inactive (uninstalled).
- *   4. ENQUEUE an enrichment job on the reused BullMQ queue — never enrich inline.
+ *   4. SUBMIT an enrichment job to the in-process runner — never enrich inline.
  *
- * Idempotent: the BullMQ job id is derived from `location:contact`, so GHL's
- * webhook retries (or duplicate deliveries) collapse onto the same job instead
- * of double-enqueuing. Enrichment itself (loading the contact, running the Jake
- * engine, write-back) is JAK-107 — this endpoint only enqueues.
+ * Idempotent: the dedupe key is derived from `location:contact`, so GHL's webhook
+ * retries (or duplicate deliveries) collapse onto the in-flight job; the worker's
+ * own event-store idempotency is the backstop. Enrichment itself (loading the
+ * contact, running the Jake engine, write-back) is JAK-107.
  *
- * It REUSES the parked MVP queue plumbing ({@link LeadEnrichmentQueueService} →
- * BullMQ/Redis) rather than standing up a second queue.
+ * JAK-197: this used to enqueue onto an always-on BullMQ worker that polled Redis
+ * 24/7. It now runs in-process via {@link InProcessEnrichmentRunner} — zero Redis
+ * when idle — reusing the SAME {@link GhlEnrichmentWorker} process/finalizeFailure.
  */
 @injectable()
 export class GhlEnrichmentWebhookResource {
@@ -39,7 +42,8 @@ export class GhlEnrichmentWebhookResource {
   constructor(
     private readonly verifier: GhlWebhookVerifier,
     @inject(GhlConnectionService) private readonly connections: GhlConnectionService,
-    @inject(LeadEnrichmentQueueService) private readonly queue: LeadEnrichmentQueueService
+    @inject(InProcessEnrichmentRunner) private readonly runner: InProcessEnrichmentRunner,
+    @inject(GhlEnrichmentWorker) private readonly worker: GhlEnrichmentWorker
   ) {
     this.router = Router();
     this.configureRoutes();
@@ -101,17 +105,27 @@ export class GhlEnrichmentWebhookResource {
         return res.status(200).json({ status: "ignored", reason: "location inactive" });
       }
 
-      // 4. Enqueue. The deterministic job id makes retries idempotent — a repeat
-      //    delivery for the same contact collapses onto the existing job.
+      // 4. Hand off to the in-process runner (JAK-197 — was a BullMQ enqueue). The
+      //    dedupe key collapses a repeat delivery for the same contact onto the
+      //    in-flight job; the worker's own event-store idempotency is the backstop.
+      //    On terminal failure we run the SAME dead-letter finalize the BullMQ
+      //    `failed` hook used (mark dead_letter + refund).
       const jobId = this.jobId(parsed.locationId, parsed.contactId);
-      await this.queue.enqueue(
-        {
-          contact_id: parsed.contactId,
-          location_id: parsed.locationId,
-          ...(parsed.fullAddress ? { full_address: parsed.fullAddress } : {}),
-        },
-        { jobId }
-      );
+      const payload: EnrichmentJobPayload = {
+        contact_id: parsed.contactId,
+        location_id: parsed.locationId,
+        ...(parsed.fullAddress ? { full_address: parsed.fullAddress } : {}),
+      };
+      this.runner.submit({
+        label: `lead-enrichment ${jobId}`,
+        dedupeKey: jobId,
+        run: (attempt) => this.worker.process(payload, { attempt }),
+        onExhausted: (err) =>
+          this.worker.finalizeFailure(
+            payload,
+            err instanceof Error ? err.message : String(err)
+          ),
+      });
 
       return res.status(202).json({ status: "queued", jobId });
     } catch (err) {

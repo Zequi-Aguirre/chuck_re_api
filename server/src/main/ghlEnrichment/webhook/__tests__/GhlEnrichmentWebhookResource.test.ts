@@ -1,3 +1,12 @@
+/**
+ * JAK-106 + JAK-197 — GhlEnrichmentWebhookResource route tests.
+ *
+ * The worker is mocked (NO real REAPI/GHL); the runner is REAL and fire-and-forget:
+ * the endpoint responds 202 first, then the runner synchronously invokes
+ * worker.process(payload, { attempt }). JAK-197: enrichment runs IN-PROCESS — no
+ * BullMQ/Redis — so we assert on worker.process, and the idempotency contract is the
+ * shared dedupe key (location:contact) the runner collapses on.
+ */
 import { createHmac } from "crypto";
 import express, { Express } from "express";
 import request from "supertest";
@@ -5,7 +14,9 @@ import { mock, MockProxy } from "jest-mock-extended";
 import { GhlEnrichmentConfig } from "../../config/GhlEnrichmentConfig";
 import { GhlConnectionService } from "../../connections/GhlConnectionService";
 import { GhlConnection } from "../../connections/GhlConnectionTypes";
-import { LeadEnrichmentQueueService } from "../../../services/LeadEnrichmentQueueService";
+import { EnvConfig } from "../../../config/envConfig";
+import { InProcessEnrichmentRunner, EnrichmentTask } from "../../runtime/InProcessEnrichmentRunner";
+import { GhlEnrichmentWorker } from "../../worker/GhlEnrichmentWorker";
 import { GhlEnrichmentWebhookResource } from "../GhlEnrichmentWebhookResource";
 import { GhlWebhookVerifier } from "../GhlWebhookVerifier";
 
@@ -32,12 +43,17 @@ const connection = (over: Partial<GhlConnection> = {}): GhlConnection => ({
 
 describe("GhlEnrichmentWebhookResource", () => {
   let connections: MockProxy<GhlConnectionService>;
-  let queue: MockProxy<LeadEnrichmentQueueService>;
+  let worker: MockProxy<GhlEnrichmentWorker>;
+  let runner: InProcessEnrichmentRunner;
   let app: Express;
 
   beforeEach(() => {
+    jest.spyOn(console, "log").mockImplementation(() => undefined);
+    jest.spyOn(console, "warn").mockImplementation(() => undefined);
+
     connections = mock<GhlConnectionService>();
-    queue = mock<LeadEnrichmentQueueService>();
+    worker = mock<GhlEnrichmentWorker>();
+    worker.process.mockResolvedValue({ status: "enriched" } as never);
 
     // Real verifier with an off-prod fake-secret config so signatures verify for real.
     const verifier = new GhlWebhookVerifier({
@@ -46,12 +62,20 @@ describe("GhlEnrichmentWebhookResource", () => {
     } as unknown as GhlEnrichmentConfig);
 
     connections.getByLocationId.mockResolvedValue(connection());
-    queue.enqueue.mockResolvedValue({ id: "ghl:loc_1:ct_1" } as never);
 
-    const resource = new GhlEnrichmentWebhookResource(verifier, connections, queue);
+    const env = {
+      autoEnrichConcurrency: 5,
+      autoEnrichMaxAttempts: 3,
+      autoEnrichBackoffMs: 2000,
+    } as unknown as EnvConfig;
+    runner = new InProcessEnrichmentRunner(env);
+
+    const resource = new GhlEnrichmentWebhookResource(verifier, connections, runner, worker);
     app = express();
     app.use("/webhooks/ghl", resource.router);
   });
+
+  afterEach(() => jest.restoreAllMocks());
 
   /** POST a signed JSON body to the receiver. */
   const post = (bodyObj: unknown, signature?: string) => {
@@ -63,7 +87,7 @@ describe("GhlEnrichmentWebhookResource", () => {
     return req.send(raw);
   };
 
-  it("enqueues an enrichment job for a valid signed ContactCreate", async () => {
+  it("runs an enrichment job for a valid signed ContactCreate", async () => {
     const body = {
       type: "ContactCreate",
       locationId: "loc_1",
@@ -78,14 +102,14 @@ describe("GhlEnrichmentWebhookResource", () => {
 
     expect(res.status).toBe(202);
     expect(res.body).toEqual({ status: "queued", jobId: "ghl:loc_1:ct_1" });
-    expect(queue.enqueue).toHaveBeenCalledTimes(1);
-    expect(queue.enqueue).toHaveBeenCalledWith(
+    expect(worker.process).toHaveBeenCalledTimes(1);
+    expect(worker.process).toHaveBeenCalledWith(
       {
         contact_id: "ct_1",
         location_id: "loc_1",
         full_address: "742 Evergreen Terrace, Springfield, IL, 62704",
       },
-      { jobId: "ghl:loc_1:ct_1" }
+      { attempt: 1 }
     );
   });
 
@@ -94,22 +118,27 @@ describe("GhlEnrichmentWebhookResource", () => {
 
     await post(body, sign(JSON.stringify(body)));
 
-    expect(queue.enqueue).toHaveBeenCalledWith(
+    expect(worker.process).toHaveBeenCalledWith(
       { contact_id: "ct_1", location_id: "loc_1" },
-      { jobId: "ghl:loc_1:ct_1" }
+      { attempt: 1 }
     );
   });
 
-  it("derives the same job id for a duplicate delivery (idempotent enqueue)", async () => {
+  it("derives the same dedupe key for a duplicate delivery (idempotent handoff)", async () => {
+    // Capture the submitted tasks WITHOUT running them, to inspect the dedupe key.
+    const tasks: EnrichmentTask[] = [];
+    jest.spyOn(runner, "submit").mockImplementation((task) => {
+      tasks.push(task);
+      return true;
+    });
     const body = { type: "ContactCreate", locationId: "loc_1", id: "ct_1" };
     const sig = sign(JSON.stringify(body));
 
     await post(body, sig);
     await post(body, sig);
 
-    // Both deliveries target the SAME job id — BullMQ collapses them onto one job.
-    const jobIds = queue.enqueue.mock.calls.map(([, opts]) => opts?.jobId);
-    expect(jobIds).toEqual(["ghl:loc_1:ct_1", "ghl:loc_1:ct_1"]);
+    // Both deliveries carry the SAME dedupe key — the runner collapses concurrent ones.
+    expect(tasks.map((t) => t.dedupeKey)).toEqual(["ghl:loc_1:ct_1", "ghl:loc_1:ct_1"]);
   });
 
   it("accepts the alternate id/casing variants GHL uses", async () => {
@@ -118,19 +147,19 @@ describe("GhlEnrichmentWebhookResource", () => {
     const res = await post(body, sign(JSON.stringify(body)));
 
     expect(res.status).toBe(202);
-    expect(queue.enqueue).toHaveBeenCalledWith(
+    expect(worker.process).toHaveBeenCalledWith(
       { contact_id: "ct_9", location_id: "loc_1" },
-      { jobId: "ghl:loc_1:ct_9" }
+      { attempt: 1 }
     );
   });
 
-  it("rejects an invalid signature with 401 and does not enqueue", async () => {
+  it("rejects an invalid signature with 401 and does not run enrichment", async () => {
     const body = { type: "ContactCreate", locationId: "loc_1", id: "ct_1" };
 
     const res = await post(body, sign("a different body"));
 
     expect(res.status).toBe(401);
-    expect(queue.enqueue).not.toHaveBeenCalled();
+    expect(worker.process).not.toHaveBeenCalled();
   });
 
   it("rejects a missing signature with 401", async () => {
@@ -139,7 +168,7 @@ describe("GhlEnrichmentWebhookResource", () => {
     const res = await post(body); // no signature header
 
     expect(res.status).toBe(401);
-    expect(queue.enqueue).not.toHaveBeenCalled();
+    expect(worker.process).not.toHaveBeenCalled();
   });
 
   it("returns 400 when the payload lacks a location or contact id", async () => {
@@ -148,7 +177,7 @@ describe("GhlEnrichmentWebhookResource", () => {
     const res = await post(body, sign(JSON.stringify(body)));
 
     expect(res.status).toBe(400);
-    expect(queue.enqueue).not.toHaveBeenCalled();
+    expect(worker.process).not.toHaveBeenCalled();
   });
 
   it("ignores non-ContactCreate events (ContactUpdate is off for MVP)", async () => {
@@ -158,7 +187,7 @@ describe("GhlEnrichmentWebhookResource", () => {
 
     expect(res.status).toBe(200);
     expect(res.body.status).toBe("ignored");
-    expect(queue.enqueue).not.toHaveBeenCalled();
+    expect(worker.process).not.toHaveBeenCalled();
     // Unknown location was never even consulted — event dropped first.
     expect(connections.getByLocationId).not.toHaveBeenCalled();
   });
@@ -171,7 +200,7 @@ describe("GhlEnrichmentWebhookResource", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: "ignored", reason: "unknown location" });
-    expect(queue.enqueue).not.toHaveBeenCalled();
+    expect(worker.process).not.toHaveBeenCalled();
   });
 
   it("ignores webhooks for an inactive (uninstalled) location", async () => {
@@ -182,6 +211,6 @@ describe("GhlEnrichmentWebhookResource", () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: "ignored", reason: "location inactive" });
-    expect(queue.enqueue).not.toHaveBeenCalled();
+    expect(worker.process).not.toHaveBeenCalled();
   });
 });

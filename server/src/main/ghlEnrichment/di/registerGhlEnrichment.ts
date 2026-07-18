@@ -35,7 +35,7 @@ import { CompsStore } from "../../services/comps/CompsStore";
 import { CompsMemoryService } from "../../services/comps/CompsMemoryService";
 import { GhlCustomFieldStore } from "../lifecycle/GhlCustomFieldStore";
 import { GhlInstallLifecycleService } from "../lifecycle/GhlInstallLifecycleService";
-import { LeadEnrichmentQueueService } from "../../services/LeadEnrichmentQueueService";
+import { InProcessEnrichmentRunner } from "../runtime/InProcessEnrichmentRunner";
 import { GhlWebhookVerifier } from "../webhook/GhlWebhookVerifier";
 import { GhlEnrichmentWebhookResource } from "../webhook/GhlEnrichmentWebhookResource";
 import { GhlEnrichmentEventStore } from "../worker/GhlEnrichmentEventStore";
@@ -44,7 +44,7 @@ import { CreditLedgerStore } from "../metering/CreditLedgerStore";
 import { CreditService } from "../metering/CreditService";
 import { CreditSettingsService } from "../metering/CreditSettingsService";
 import { MonthlyCreditRestoreService } from "../metering/MonthlyCreditRestoreService";
-import { MonthlyCreditRestoreQueueService } from "../../services/MonthlyCreditRestoreQueueService";
+import { MonthlyCreditRestoreScheduler } from "../../services/MonthlyCreditRestoreScheduler";
 import { GhlStatusService } from "../status/GhlStatusService";
 import { GhlStatusResource } from "../status/GhlStatusResource";
 import { AdminUserStore } from "../admin/AdminUserStore";
@@ -53,8 +53,6 @@ import { AdminConnectionService } from "../admin/AdminConnectionService";
 import { AdminTextCustomerService } from "../admin/AdminTextCustomerService";
 import { AdminAuthResource } from "../admin/AdminAuthResource";
 import { AdminResource } from "../admin/AdminResource";
-import { RedisContainer } from "../../config/RedisContainer";
-import { AutoEnrichmentQueueService } from "../autoEnrichment/AutoEnrichmentQueueService";
 import { GhlEnrichmentFieldResolver } from "../autoEnrichment/GhlEnrichmentFieldResolver";
 import { EnrichmentFieldWriteBackService } from "../autoEnrichment/EnrichmentFieldWriteBackService";
 import { ContactCreatedResource } from "../autoEnrichment/ContactCreatedResource";
@@ -143,15 +141,19 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
     c.registerSingleton(GhlInstallLifecycleService);
   }
 
+  // JAK-197 — the in-process enrichment runner that REPLACED the always-on BullMQ
+  // workers. A single shared, bounded-concurrency + transient-retry runner both
+  // webhook paths (/webhooks/ghl and /ghl/contact-created) hand work to AFTER their
+  // fast 200. Purely reactive: zero Redis, zero polling when idle. Singleton so the
+  // concurrency budget is shared across both paths.
+  if (!c.isRegistered(InProcessEnrichmentRunner)) {
+    c.registerSingleton(InProcessEnrichmentRunner);
+  }
+
   // JAK-106 — inbound ContactCreate webhook receiver. Verifies the shared
   // GHL_WEBHOOK_SECRET signature (NOT the MASTER_API_KEY text path), resolves the
-  // location from the JAK-102 store, and enqueues an enrichment job on the parked
-  // MVP BullMQ queue — it never enriches inline (that's JAK-107). The queue
-  // service is registered as a shared singleton so the receiver and the
-  // worker-starter in JakeServer add to / consume the SAME queue instance.
-  if (!c.isRegistered(LeadEnrichmentQueueService)) {
-    c.registerSingleton(LeadEnrichmentQueueService);
-  }
+  // location from the JAK-102 store, and hands the enrichment job to the JAK-197
+  // in-process runner — it never enriches inline (that's JAK-107's worker).
   if (!c.isRegistered(GhlWebhookVerifier)) {
     c.registerSingleton(GhlWebhookVerifier);
   }
@@ -200,8 +202,9 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   if (!c.isRegistered(MonthlyCreditRestoreService)) {
     c.registerSingleton(MonthlyCreditRestoreService);
   }
-  if (!c.isRegistered(MonthlyCreditRestoreQueueService)) {
-    c.registerSingleton(MonthlyCreditRestoreQueueService);
+  // JAK-197 — the sweep runs on a plain in-process setInterval (no BullMQ / Redis).
+  if (!c.isRegistered(MonthlyCreditRestoreScheduler)) {
+    c.registerSingleton(MonthlyCreditRestoreScheduler);
   }
 
   if (!c.isRegistered(GhlEnrichmentWorker)) {
@@ -376,19 +379,6 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
     c.registerSingleton(AdminResource);
   }
 
-  // JAK-181 — GHL auto-enrichment queue (epic JAK-180). A BullMQ queue on the
-  // SAME Upstash Redis as the monthly-restore worker (shared RedisContainer, NO
-  // new provider) with the injectable enqueue() producer for bulk uploads. Lazy
-  // singletons: the queue connects to Redis only when first resolved (JAK-182's
-  // producer), so a queue-less boot stays clean. The worker processor (JAK-183)
-  // and the intake endpoint (JAK-182) are separate tickets.
-  if (!c.isRegistered(RedisContainer)) {
-    c.registerSingleton(RedisContainer);
-  }
-  if (!c.isRegistered(AutoEnrichmentQueueService)) {
-    c.registerSingleton(AutoEnrichmentQueueService);
-  }
-
   // JAK-185 — GHL custom-field write-back (epic JAK-180). Writes a JAK-184
   // formatter result onto a contact's custom fields, overwriting each so the
   // contact stays current. The resolver auto-discovers field ids BY NAME (Eric's
@@ -404,20 +394,18 @@ export const registerGhlEnrichment = (c: DependencyContainer): void => {
   }
 
   // JAK-182 — inbound "contact created" webhook receiver (epic JAK-180). The GHL
-  // workflow POSTs here on a new contact; the resource authenticates
-  // (MASTER_API_KEY, like the SMS inbound route), resolves the location via the
-  // JAK-102 store, and enqueues onto the JAK-181 queue — never enriching inline.
-  // Mounted (Redis-gated) in JakeServer; the worker (JAK-183) drains the queue.
+  // workflow POSTs here on a new contact; the resource authenticates (per-location
+  // webhook key, JAK-189), resolves the location via the JAK-102 store, and hands
+  // the job to the JAK-197 in-process runner — never enriching inline.
   if (!c.isRegistered(ContactCreatedResource)) {
     c.registerSingleton(ContactCreatedResource);
   }
 
   // JAK-183 — auto-enrichment worker/processor (epic JAK-180). The integration
-  // piece: consumes the JAK-181 queue and runs job → address → REAPI PropertyDetail
-  // (the EXISTING RealEstateApiDao, auto-resolved) → JAK-184 formatter → JAK-185
-  // write-back. AutoEnrichmentQueueService.startWorker() owns the BullMQ Worker
-  // lifecycle and delegates each job here; JakeServer starts it (Redis-gated) like
-  // the JAK-072 monthly-restore worker. Singleton so its deps' caches are shared.
+  // piece: runs job → address → REAPI PropertyDetail (the EXISTING RealEstateApiDao,
+  // auto-resolved) → JAK-184 formatter → JAK-185 write-back. A pure processor: the
+  // JAK-197 in-process runner drives one job per contact-created webhook. Singleton
+  // so its deps' caches are shared.
   if (!c.isRegistered(AutoEnrichmentWorker)) {
     c.registerSingleton(AutoEnrichmentWorker);
   }

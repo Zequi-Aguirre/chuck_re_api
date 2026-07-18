@@ -18,8 +18,8 @@
  *      stays tolerant.
  *   3. Gate — unknown (master path) / inactive / not-yet-enabled → 200 ACK but SKIP
  *      enqueue, so GHL's workflow never errors.
- *   4. Enqueue on {@link AutoEnrichmentQueueService} and return 200 immediately.
- *      Dedupe (jobId = contactId) is handled inside the queue.
+ *   4. Hand off to the JAK-197 {@link InProcessEnrichmentRunner} and return 200
+ *      immediately. Dedupe (by contactId) is handled inside the runner.
  *
  * The REAPI lookup + custom-field write-back are the worker's job (JAK-183) — this
  * endpoint only enqueues.
@@ -29,7 +29,8 @@ import { inject, injectable } from "tsyringe";
 import { EnvConfig } from "../../config/envConfig";
 import { GhlConnectionService } from "../connections/GhlConnectionService";
 import { GhlConnection } from "../connections/GhlConnectionTypes";
-import { AutoEnrichmentQueueService } from "./AutoEnrichmentQueueService";
+import { InProcessEnrichmentRunner } from "../runtime/InProcessEnrichmentRunner";
+import { AutoEnrichmentWorker } from "./AutoEnrichmentWorker";
 import { AutoEnrichmentJobPayload } from "./AutoEnrichmentQueueTypes";
 import { ParsedContactCreated, RawContactCreatedBody } from "./ContactCreatedTypes";
 
@@ -40,7 +41,8 @@ export class ContactCreatedResource {
   constructor(
     private readonly env: EnvConfig,
     @inject(GhlConnectionService) private readonly connections: GhlConnectionService,
-    @inject(AutoEnrichmentQueueService) private readonly queue: AutoEnrichmentQueueService
+    @inject(InProcessEnrichmentRunner) private readonly runner: InProcessEnrichmentRunner,
+    @inject(AutoEnrichmentWorker) private readonly worker: AutoEnrichmentWorker
   ) {
     this.router = Router();
     this.configureRoutes();
@@ -125,9 +127,16 @@ export class ContactCreatedResource {
         return res.status(200).json({ status: "skipped", reason });
       }
 
-      // 4. Enqueue and respond immediately. The KEY's location is authoritative for
-      //    the job (never the body). The queue dedupes on contactId (jobId=contactId).
-      await this.queue.enqueue(this.toJobPayload(parsed, connection.locationId, body));
+      // 4. Hand off to the in-process runner and respond immediately (fast 200) —
+      //    enrichment runs AFTER this response, never blocking GHL's workflow. The
+      //    KEY's location is authoritative for the job (never the body). The runner
+      //    dedupes on contactId (a re-fired contact collapses onto the in-flight one).
+      const payload = this.toJobPayload(parsed, connection.locationId, body);
+      this.runner.submit({
+        label: `auto-enrichment ${payload.locationId}/${payload.contactId}`,
+        dedupeKey: payload.contactId,
+        run: () => this.worker.process(payload),
+      });
 
       return res.status(200).json({ status: "queued", contactId: parsed.contactId });
     } catch (err) {

@@ -1,18 +1,18 @@
 /**
- * GHL auto-enrichment queue payload types (JAK-181, epic JAK-180).
+ * GHL auto-enrichment job payload types (JAK-181, epic JAK-180).
  *
- * The typed contract for a single auto-enrichment job as it travels through the
- * Redis/BullMQ queue:
+ * The typed contract for a single auto-enrichment job:
  *
- *   (JAK-182) bulk upload / endpoint  ──enqueue──▶  [ queue ]  ──(JAK-183) worker──▶
- *     builds AutoEnrichmentJobPayload                              runs the JAK-184
- *                                                                  formatter + write-back
+ *   (JAK-182) contact-created webhook  ──submit──▶  [ InProcessEnrichmentRunner ]
+ *     builds AutoEnrichmentJobPayload      ──▶  (JAK-183) worker: JAK-184 format + write-back
  *
  * One payload = one GHL contact to enrich. It carries the tenant (`locationId`)
- * and the contact (`contactId`, also the BullMQ dedupe key) plus EITHER a parsed
+ * and the contact (`contactId`, also the runner's dedupe key) plus EITHER a parsed
  * `address` OR the `rawContact` body the producer received — whichever JAK-182 has
- * on hand. This module owns ONLY the shape; the queue wiring lives in
- * {@link import("./AutoEnrichmentQueueService").AutoEnrichmentQueueService}.
+ * on hand. This module owns ONLY the shape.
+ *
+ * JAK-197: enrichment runs IN-PROCESS (no BullMQ/Redis); the payload shape is
+ * unchanged — only the transport moved from a queue to the in-process runner.
  */
 
 /**
