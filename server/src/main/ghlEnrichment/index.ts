@@ -153,16 +153,15 @@ export {
   extractEnrichmentSubject,
 } from "./autoEnrichment/PropertyDetailEnrichmentFormatter";
 export type { FormatEnrichmentOptions } from "./autoEnrichment/PropertyDetailEnrichmentFormatter";
-// JAK-181 — GHL auto-enrichment job queue (epic JAK-180). The Redis/BullMQ
-// foundation for bulk enrichment: an injectable enqueue() producer on the SAME
-// Upstash Redis as the monthly-restore worker, with a concurrency cap,
-// exponential-backoff retries, and dedupe by contactId. Producer endpoint
-// (JAK-182) and worker processor (JAK-183) build on this.
-export { AutoEnrichmentQueueService } from "./autoEnrichment/AutoEnrichmentQueueService";
+// JAK-197 — the auto-enrichment job payload shape. Enrichment runs IN-PROCESS via
+// InProcessEnrichmentRunner (no BullMQ/Redis); the payload is still the contract a
+// contact-created webhook builds and the worker consumes.
 export type {
   AutoEnrichmentJobPayload,
   AutoEnrichmentAddress,
 } from "./autoEnrichment/AutoEnrichmentQueueTypes";
+export { InProcessEnrichmentRunner } from "./runtime/InProcessEnrichmentRunner";
+export type { EnrichmentTask } from "./runtime/InProcessEnrichmentRunner";
 
 // JAK-185 — GHL custom-field write-back (epic JAK-180). Writes a JAK-184 formatter
 // result onto a contact's custom fields, overwriting each; auto-discovers field
@@ -174,18 +173,17 @@ export { GhlEnrichmentFieldResolver } from "./autoEnrichment/GhlEnrichmentFieldR
 export type { FieldIdMap } from "./autoEnrichment/GhlEnrichmentFieldResolver";
 
 // JAK-182 — inbound "contact created" webhook receiver (epic JAK-180). Auth +
-// validate + normalize + enqueue onto the JAK-181 queue; the worker (JAK-183)
-// does the REAPI lookup + write-back.
+// validate + normalize + hand off to the JAK-197 in-process runner; the worker
+// (JAK-183) does the REAPI lookup + write-back.
 export { ContactCreatedResource } from "./autoEnrichment/ContactCreatedResource";
 export type {
   RawContactCreatedBody,
   ParsedContactCreated,
 } from "./autoEnrichment/ContactCreatedTypes";
 
-// JAK-183 — auto-enrichment worker/processor (epic JAK-180). Consumes the JAK-181
-// queue and runs the full pipeline (address → REAPI → JAK-184 format → JAK-185
-// write). AutoEnrichmentQueueService.startWorker() (JAK-181, extended here) owns
-// the BullMQ Worker lifecycle; JakeServer starts it Redis-gated.
+// JAK-183 — auto-enrichment worker/processor (epic JAK-180). Runs the full pipeline
+// (address → REAPI → JAK-184 format → JAK-185 write). A pure processor the JAK-197
+// InProcessEnrichmentRunner drives per contact-created webhook (no BullMQ).
 export { AutoEnrichmentWorker } from "./autoEnrichment/AutoEnrichmentWorker";
 export type {
   AutoEnrichmentOutcome,

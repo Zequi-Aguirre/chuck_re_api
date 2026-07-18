@@ -22,12 +22,10 @@ import {
     AdminResource,
     AdminAuthService,
     ContactCreatedResource,
-    AutoEnrichmentQueueService,
     GhlConnectionService,
 } from "./ghlEnrichment/index.ts";
 // Services
-import { LeadEnrichmentQueueService } from "./services/LeadEnrichmentQueueService.ts";
-import { MonthlyCreditRestoreQueueService } from "./services/MonthlyCreditRestoreQueueService.ts";
+import { MonthlyCreditRestoreScheduler } from "./services/MonthlyCreditRestoreScheduler.ts";
 
 dotenv.config();
 
@@ -58,23 +56,15 @@ export class JakeServer {
         // 🌐 Middleware
         this.app.use(cors());
 
-        // The lead-enrichment pipeline (Redis queue + worker) is parked legacy
-        // functionality — it is only wired up when Redis is actually configured,
-        // so the MVP server boots cleanly on environments without Redis secrets.
-        const redisConfigured = Boolean(this.config.upstashRedisTcpUrl?.trim());
-
         // 🪝 JAK-106 — inbound GHL ContactCreate webhook. Mounted BEFORE the
         // app-wide express.json() so its route-scoped parser can capture the RAW
         // request body for signature verification (the global parser then no-ops
-        // for this path). Gated on Redis, since it enqueues onto the BullMQ queue.
-        if (redisConfigured) {
-            this.app.use(
-                "/webhooks/ghl",
-                container.resolve(GhlEnrichmentWebhookResource).router
-            );
-        } else {
-            console.log("ℹ️ Redis not configured — skipping /webhooks/ghl enrichment webhook.");
-        }
+        // for this path). JAK-197: enrichment now runs IN-PROCESS (no Redis/BullMQ),
+        // so this is no longer gated on Redis — it works on any boot.
+        this.app.use(
+            "/webhooks/ghl",
+            container.resolve(GhlEnrichmentWebhookResource).router
+        );
 
         this.app.use(express.json());
 
@@ -85,15 +75,10 @@ export class JakeServer {
         this.app.use("/api/ghl/status", container.resolve(GhlStatusResource).router);
 
         // 🪝 JAK-182 — inbound auto-enrichment "contact created" webhook. A GHL
-        // workflow POSTs here on a new contact; the resource enqueues onto the
-        // JAK-181 BullMQ queue, so it's gated on Redis (like /webhooks/ghl). Uses
-        // the app-wide express.json() (no raw-body/HMAC needed — it's MASTER_API_KEY
-        // guarded, mirroring the SMS inbound route).
-        if (redisConfigured) {
-            this.app.use("/ghl", container.resolve(ContactCreatedResource).router);
-        } else {
-            console.log("ℹ️ Redis not configured — skipping /ghl/contact-created enrichment webhook.");
-        }
+        // workflow POSTs here on a new contact; the resource hands the job to the
+        // JAK-197 in-process runner (no Redis). Uses the app-wide express.json()
+        // (auth is the per-location webhook key, JAK-189).
+        this.app.use("/ghl", container.resolve(ContactCreatedResource).router);
 
         // 🧠 API Routes
         this.app.use("/api/mailer", container.resolve(MailerResource).router);
@@ -118,44 +103,20 @@ export class JakeServer {
         // app cipher). Idempotent — a no-op once every row has a key.
         await this.backfillWebhookKeys();
 
-        // 🚀 Start Lead Enrichment Worker (but NOT the HTTP server)
-        if (redisConfigured) {
+        // 💳 JAK-197 — start the in-process monthly credit-restore sweep. Replaces the
+        // JAK-072 BullMQ worker + cron, which polled Redis 24/7. This is a plain
+        // setInterval (no Redis); the sweep touches only Postgres, so it's gated on
+        // the DB being configured, not Redis. Enrichment itself no longer needs a
+        // background worker at all — the /webhooks/ghl and /ghl/contact-created
+        // resources run it in-process via InProcessEnrichmentRunner, on demand.
+        if (this.config.dbHost?.trim()) {
             try {
-                const queueService = container.resolve(LeadEnrichmentQueueService);
-                await queueService.startWorker();
-                console.log("🧠 Lead Enrichment Worker started successfully.");
+                container.resolve(MonthlyCreditRestoreScheduler).start();
             } catch (err) {
-                console.error("❌ Failed to start Lead Enrichment Worker:", err);
-            }
-
-            // 💳 JAK-monthly-credit-restore — start the repeatable cron sweep that
-            // restores each customer's credits to the effective default on their
-            // monthly signup anniversary. Gated on Redis (BullMQ), like the
-            // enrichment worker; the per-customer next_reset_at guard makes the
-            // frequent cadence a cheap no-op for anyone not yet due.
-            try {
-                const restoreQueue = container.resolve(MonthlyCreditRestoreQueueService);
-                await restoreQueue.startWorker();
-                console.log("💳 Monthly Credit-Restore Worker started successfully.");
-            } catch (err) {
-                console.error("❌ Failed to start Monthly Credit-Restore Worker:", err);
-            }
-
-            // 🏠 JAK-183 — auto-enrichment worker (epic JAK-180). Drains the JAK-181
-            // queue the /ghl/contact-created endpoint enqueues onto and runs the
-            // pipeline (REAPI → JAK-184 format → JAK-185 write-back). Gated on Redis
-            // (BullMQ), same lifecycle as the workers above.
-            try {
-                const autoEnrichQueue = container.resolve(AutoEnrichmentQueueService);
-                await autoEnrichQueue.startWorker();
-                console.log("🏠 Auto-Enrichment Worker started successfully.");
-            } catch (err) {
-                console.error("❌ Failed to start Auto-Enrichment Worker:", err);
+                console.error("❌ Failed to start Monthly Credit-Restore scheduler:", err);
             }
         } else {
-            console.log(
-                "ℹ️ Redis not configured — Lead Enrichment + Monthly Credit-Restore Workers not started."
-            );
+            console.log("ℹ️ Postgres (DB_HOST) not set — Monthly Credit-Restore scheduler not started.");
         }
 
         // Global error handling

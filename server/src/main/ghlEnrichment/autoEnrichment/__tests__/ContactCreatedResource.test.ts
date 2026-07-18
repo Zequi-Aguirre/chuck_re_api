@@ -1,14 +1,17 @@
 /**
- * JAK-182 + JAK-189 — ContactCreatedResource route tests.
+ * JAK-182 + JAK-189 + JAK-197 — ContactCreatedResource route tests.
  *
- * The queue + connection service are mocked — NO real Redis / GHL / REAPI. Covers:
+ * The worker + connection service are mocked — NO real Redis / GHL / REAPI. The
+ * runner is REAL but its work is fire-and-forget: the endpoint responds first, then
+ * the runner synchronously invokes worker.process(payload), so we assert on that.
+ * Covers:
  *   - per-location webhook-key auth (x-api-key): valid key → resolves the location;
  *     unknown / absent key → 401
  *   - body locationId mismatch vs the key's location → 401
- *   - missing contactId → 400; locationId now OPTIONAL (the key identifies it)
- *   - active + toggle-on → queued; inactive / toggle-off → skipped 200
+ *   - missing contactId → 400; locationId OPTIONAL (the key identifies it)
+ *   - active + toggle-on → submitted; inactive / toggle-off → skipped 200
  *   - MASTER_API_KEY internal override still resolves a location from the body
- *   - responds fast, never enriching in-request
+ *   - responds fast, never enriching in-request; JAK-197: no BullMQ/queue
  */
 import express, { Express } from "express";
 import request from "supertest";
@@ -16,7 +19,8 @@ import { mock, MockProxy } from "jest-mock-extended";
 import { EnvConfig } from "../../../config/envConfig";
 import { GhlConnectionService } from "../../connections/GhlConnectionService";
 import { GhlConnection } from "../../connections/GhlConnectionTypes";
-import { AutoEnrichmentQueueService } from "../AutoEnrichmentQueueService";
+import { InProcessEnrichmentRunner } from "../../runtime/InProcessEnrichmentRunner";
+import { AutoEnrichmentWorker } from "../AutoEnrichmentWorker";
 import { ContactCreatedResource } from "../ContactCreatedResource";
 
 // Obviously-fake, generated-looking values. NOT real credentials.
@@ -40,24 +44,36 @@ const connection = (over: Partial<GhlConnection> = {}): GhlConnection => ({
 
 describe("ContactCreatedResource", () => {
   let connections: MockProxy<GhlConnectionService>;
-  let queue: MockProxy<AutoEnrichmentQueueService>;
+  let worker: MockProxy<AutoEnrichmentWorker>;
+  let runner: InProcessEnrichmentRunner;
   let app: Express;
 
   beforeEach(() => {
+    jest.spyOn(console, "log").mockImplementation(() => undefined);
+    jest.spyOn(console, "warn").mockImplementation(() => undefined);
+
     connections = mock<GhlConnectionService>();
-    queue = mock<AutoEnrichmentQueueService>();
+    worker = mock<AutoEnrichmentWorker>();
+    worker.process.mockResolvedValue({ status: "enriched" } as never);
 
     // The webhook key resolves loc_1 by default; the master path resolves by id.
     connections.getByWebhookKey.mockResolvedValue(connection());
     connections.getByLocationId.mockResolvedValue(connection());
-    queue.enqueue.mockResolvedValue({ id: "contact_1" } as never);
 
-    const env = { masterApiKey: FAKE_MASTER_KEY } as unknown as EnvConfig;
-    const resource = new ContactCreatedResource(env, connections, queue);
+    const env = {
+      masterApiKey: FAKE_MASTER_KEY,
+      autoEnrichConcurrency: 5,
+      autoEnrichMaxAttempts: 3,
+      autoEnrichBackoffMs: 2000,
+    } as unknown as EnvConfig;
+    runner = new InProcessEnrichmentRunner(env);
+    const resource = new ContactCreatedResource(env, connections, runner, worker);
     app = express();
     app.use(express.json());
     app.use("/ghl", resource.router);
   });
+
+  afterEach(() => jest.restoreAllMocks());
 
   /** POST with the per-location webhook key in x-api-key (unless overridden). */
   const post = (body: unknown, opts: { auth?: boolean; key?: string; header?: string } = {}) => {
@@ -79,31 +95,31 @@ describe("ContactCreatedResource", () => {
     it("rejects a request with NO key header (401)", async () => {
       const res = await post(validBody, { auth: false });
       expect(res.status).toBe(401);
-      expect(queue.enqueue).not.toHaveBeenCalled();
+      expect(worker.process).not.toHaveBeenCalled();
     });
 
     it("rejects a key no location owns (401)", async () => {
       connections.getByWebhookKey.mockResolvedValue(null);
       const res = await post(validBody, { key: "jakewh_unknownkey" });
       expect(res.status).toBe(401);
-      expect(queue.enqueue).not.toHaveBeenCalled();
+      expect(worker.process).not.toHaveBeenCalled();
     });
 
     it("resolves the location BY the presented key (never by body locationId)", async () => {
       await post(validBody);
       expect(connections.getByWebhookKey).toHaveBeenCalledWith(FAKE_WEBHOOK_KEY);
-      expect(queue.enqueue).toHaveBeenCalledTimes(1);
+      expect(worker.process).toHaveBeenCalledTimes(1);
     });
   });
 
-  describe("valid key → enqueue", () => {
-    it("enqueues a normalized job with the KEY's location and responds 200 fast", async () => {
+  describe("valid key → submit to runner", () => {
+    it("runs enrichment with the KEY's location and responds 200 fast", async () => {
       const res = await post(validBody);
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ status: "queued", contactId: "contact_1" });
-      expect(queue.enqueue).toHaveBeenCalledTimes(1);
-      expect(queue.enqueue).toHaveBeenCalledWith({
+      expect(worker.process).toHaveBeenCalledTimes(1);
+      expect(worker.process).toHaveBeenCalledWith({
         locationId: "loc_1",
         contactId: "contact_1",
         address: { line1: "742 Evergreen Terrace", city: "Springfield", state: "IL", postal: "62704" },
@@ -113,7 +129,7 @@ describe("ContactCreatedResource", () => {
     it("tolerates snake_case + alias field names (id / zip / address)", async () => {
       const res = await post({ id: "contact_9", address: "500 Main St", city: "Dallas", state: "TX", zip: "75001" });
       expect(res.status).toBe(200);
-      expect(queue.enqueue).toHaveBeenCalledWith({
+      expect(worker.process).toHaveBeenCalledWith({
         locationId: "loc_1",
         contactId: "contact_9",
         address: { line1: "500 Main St", city: "Dallas", state: "TX", postal: "75001" },
@@ -124,21 +140,21 @@ describe("ContactCreatedResource", () => {
       const body = { contactId: "contact_1", firstName: "Jane" };
       const res = await post(body);
       expect(res.status).toBe(200);
-      expect(queue.enqueue).toHaveBeenCalledWith({
+      expect(worker.process).toHaveBeenCalledWith({
         locationId: "loc_1",
         contactId: "contact_1",
         rawContact: body,
       });
     });
 
-    it("does not pass a jobId — queue owns dedupe (jobId = contactId)", async () => {
+    it("passes only the payload to the worker (runner owns dedupe by contactId)", async () => {
       await post(validBody);
-      expect(queue.enqueue.mock.calls[0]).toHaveLength(1);
+      expect(worker.process.mock.calls[0]).toHaveLength(1);
     });
   });
 
   describe("body locationId cross-check", () => {
-    it("enqueues when a body locationId MATCHES the key's location", async () => {
+    it("submits when a body locationId MATCHES the key's location", async () => {
       const res = await post({ ...validBody, locationId: "loc_1" });
       expect(res.status).toBe(200);
       expect(res.body.status).toBe("queued");
@@ -148,7 +164,7 @@ describe("ContactCreatedResource", () => {
       const res = await post({ ...validBody, locationId: "loc_OTHER" });
       expect(res.status).toBe(401);
       expect(res.body).toEqual({ status: "unauthorized", error: "location mismatch" });
-      expect(queue.enqueue).not.toHaveBeenCalled();
+      expect(worker.process).not.toHaveBeenCalled();
     });
   });
 
@@ -157,19 +173,19 @@ describe("ContactCreatedResource", () => {
       const res = await post({ city: "Springfield" });
       expect(res.status).toBe(400);
       expect(res.body).toEqual({ status: "rejected", error: "missing contactId" });
-      expect(queue.enqueue).not.toHaveBeenCalled();
+      expect(worker.process).not.toHaveBeenCalled();
     });
 
     it("rejects an empty body (400)", async () => {
       const res = await post({});
       expect(res.status).toBe(400);
-      expect(queue.enqueue).not.toHaveBeenCalled();
+      expect(worker.process).not.toHaveBeenCalled();
     });
 
     it("rejects a blank / whitespace-only contactId (400)", async () => {
       const res = await post({ contactId: "  " });
       expect(res.status).toBe(400);
-      expect(queue.enqueue).not.toHaveBeenCalled();
+      expect(worker.process).not.toHaveBeenCalled();
     });
 
     it("authenticates BEFORE validating — no key + bad body is still 401", async () => {
@@ -178,29 +194,29 @@ describe("ContactCreatedResource", () => {
     });
   });
 
-  describe("not-enabled location → 200 ack, no enqueue", () => {
-    it("acks without enqueuing when the connection is inactive", async () => {
+  describe("not-enabled location → 200 ack, no submit", () => {
+    it("acks without submitting when the connection is inactive", async () => {
       connections.getByWebhookKey.mockResolvedValue(connection({ status: "inactive" }));
       const res = await post(validBody);
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ status: "skipped", reason: "enrichment not enabled" });
-      expect(queue.enqueue).not.toHaveBeenCalled();
+      expect(worker.process).not.toHaveBeenCalled();
     });
 
-    it("acks without enqueuing when the JAK-186 toggle is OFF", async () => {
+    it("acks without submitting when the JAK-186 toggle is OFF", async () => {
       connections.getByWebhookKey.mockResolvedValue(connection({ autoEnrichmentEnabled: false }));
       const res = await post(validBody);
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ status: "skipped", reason: "enrichment not enabled" });
-      expect(queue.enqueue).not.toHaveBeenCalled();
+      expect(worker.process).not.toHaveBeenCalled();
     });
 
-    it("enqueues when active AND toggle ON", async () => {
+    it("submits when active AND toggle ON", async () => {
       connections.getByWebhookKey.mockResolvedValue(connection({ status: "active", autoEnrichmentEnabled: true }));
       const res = await post(validBody);
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ status: "queued", contactId: "contact_1" });
-      expect(queue.enqueue).toHaveBeenCalledTimes(1);
+      expect(worker.process).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -220,7 +236,7 @@ describe("ContactCreatedResource", () => {
     it("401s when the master key is presented WITHOUT a body locationId", async () => {
       const res = await post({ contactId: "contact_1" }, { key: FAKE_MASTER_KEY, header: "x-master-api-key" });
       expect(res.status).toBe(401);
-      expect(queue.enqueue).not.toHaveBeenCalled();
+      expect(worker.process).not.toHaveBeenCalled();
     });
 
     it("acks 200 skipped when the master key targets an unknown location", async () => {
@@ -235,8 +251,10 @@ describe("ContactCreatedResource", () => {
   });
 
   describe("resilience", () => {
-    it("returns 500 (not a crash) if the queue throws", async () => {
-      queue.enqueue.mockRejectedValue(new Error("redis down"));
+    it("returns 500 (not a crash) if the handoff throws", async () => {
+      jest.spyOn(runner, "submit").mockImplementation(() => {
+        throw new Error("boom");
+      });
       const res = await post(validBody);
       expect(res.status).toBe(500);
       expect(res.body).toEqual({ status: "error", error: "Internal Server Error" });

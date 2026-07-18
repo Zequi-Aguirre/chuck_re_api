@@ -1,14 +1,15 @@
 /**
- * JAK-183 — end-to-end (fully mocked) pipeline test.
+ * JAK-183 / JAK-197 — end-to-end (fully mocked) pipeline test.
  *
  * Exercises the whole chain with NO real Redis / REAPI / GHL:
- *   POST /ghl/contact-created  →  AutoEnrichmentQueueService.enqueue()
- *     →  (drain the captured job)  →  AutoEnrichmentWorker.process()
+ *   POST /ghl/contact-created  →  InProcessEnrichmentRunner.submit()
+ *     →  (run the captured task)  →  AutoEnrichmentWorker.process()
  *       →  REAPI DAO (mock)  →  JAK-184 formatter  →  writeEnrichmentFields (mock)
  *
- * BullMQ is stubbed so `enqueue` hands us the job payload, which we feed straight
- * into the real worker — proving the endpoint's payload shape is exactly what the
- * worker consumes (the JAK-182 ↔ JAK-181 ↔ JAK-183 contract holds).
+ * JAK-197: there is NO queue/BullMQ any more — the endpoint hands the job to the
+ * in-process runner. We spy on `submit` to capture the task, then run it through
+ * the REAL worker, proving the endpoint's payload shape is exactly what the worker
+ * consumes (the JAK-182 ↔ JAK-183 contract holds).
  */
 import express, { Express } from "express";
 import request from "supertest";
@@ -16,28 +17,13 @@ import { mock, MockProxy } from "jest-mock-extended";
 import { EnvConfig } from "../../../config/envConfig";
 import { GhlConnectionService } from "../../connections/GhlConnectionService";
 import { GhlConnection } from "../../connections/GhlConnectionTypes";
-import { RedisContainer } from "../../../config/RedisContainer";
-import { AutoEnrichmentQueueService } from "../AutoEnrichmentQueueService";
+import { InProcessEnrichmentRunner, EnrichmentTask } from "../../runtime/InProcessEnrichmentRunner";
 import { AutoEnrichmentWorker } from "../AutoEnrichmentWorker";
 import { AddressLlmParser } from "../AddressLlmParser";
 import { ContactCreatedResource } from "../ContactCreatedResource";
-import { AutoEnrichmentJobPayload } from "../AutoEnrichmentQueueTypes";
 import { RealEstateApiDao } from "../../../data/RealEstateApiDao";
 import { EnrichmentFieldWriteBackService } from "../EnrichmentFieldWriteBackService";
 import { RealEstateApiPropertyDetail } from "../../../types/RealEstateApi";
-
-// Capture what the producer enqueues; Worker is unused in this chain.
-const enqueuedJobs: AutoEnrichmentJobPayload[] = [];
-jest.mock("bullmq", () => ({
-  Queue: jest.fn().mockImplementation(() => ({
-    add: jest.fn(async (_name: string, data: AutoEnrichmentJobPayload) => {
-      enqueuedJobs.push(data);
-      return { id: data.contactId };
-    }),
-    close: jest.fn(),
-  })),
-  Worker: jest.fn(),
-}));
 
 const FAKE_MASTER_KEY = "test-master-api-key-e2e-0000";
 
@@ -63,27 +49,25 @@ const subject = (): RealEstateApiPropertyDetail =>
     propertyInfo: { address: { label: "742 Evergreen Terrace, Springfield, IL 62704" } },
   } as unknown as RealEstateApiPropertyDetail);
 
-describe("auto-enrichment pipeline (endpoint → queue → worker → write)", () => {
+describe("auto-enrichment pipeline (endpoint → runner → worker → write)", () => {
   let connections: MockProxy<GhlConnectionService>;
   let realEstate: MockProxy<RealEstateApiDao>;
   let writeBack: MockProxy<EnrichmentFieldWriteBackService>;
-  let queue: AutoEnrichmentQueueService;
   let processor: AutoEnrichmentWorker;
+  let submitted: EnrichmentTask[];
   let app: Express;
 
   beforeEach(() => {
-    enqueuedJobs.length = 0;
+    submitted = [];
     jest.spyOn(console, "log").mockImplementation(() => undefined);
     jest.spyOn(console, "warn").mockImplementation(() => undefined);
 
     const env = {
       masterApiKey: FAKE_MASTER_KEY,
-      autoEnrichQueueName: "e2e-queue",
       autoEnrichConcurrency: 5,
       autoEnrichMaxAttempts: 3,
       autoEnrichBackoffMs: 2000,
     } as unknown as EnvConfig;
-    const redis = { redis: { options: {} } } as unknown as RedisContainer;
 
     realEstate = mock<RealEstateApiDao>();
     writeBack = mock<EnrichmentFieldWriteBackService>();
@@ -96,11 +80,17 @@ describe("auto-enrichment pipeline (endpoint → queue → worker → write)", (
     addressLlm.parse.mockResolvedValue(null); // deterministic covers the e2e fixtures.
     processor = new AutoEnrichmentWorker(realEstate, writeBack, addressLlm);
 
-    // The real producer (BullMQ stubbed) + the real endpoint on top of it.
-    queue = new AutoEnrichmentQueueService(env, redis, processor);
+    // Real runner, but capture the task instead of auto-running it, so we can drive
+    // the real worker deterministically (mirrors the old "capture then drain").
+    const runner = new InProcessEnrichmentRunner(env);
+    jest.spyOn(runner, "submit").mockImplementation((task) => {
+      submitted.push(task);
+      return true;
+    });
+
     connections = mock<GhlConnectionService>();
     connections.getByLocationId.mockResolvedValue(connection());
-    const resource = new ContactCreatedResource(env, connections, queue);
+    const resource = new ContactCreatedResource(env, connections, runner, processor);
 
     app = express();
     app.use(express.json());
@@ -109,7 +99,7 @@ describe("auto-enrichment pipeline (endpoint → queue → worker → write)", (
 
   afterEach(() => jest.restoreAllMocks());
 
-  it("enqueues on POST, then the worker enriches the captured job end-to-end", async () => {
+  it("submits on POST, then the worker enriches the captured job end-to-end", async () => {
     realEstate.getPropertyDetailSubjectByParts.mockResolvedValue(subject());
 
     // 1. GHL workflow POSTs a new contact.
@@ -130,10 +120,11 @@ describe("auto-enrichment pipeline (endpoint → queue → worker → write)", (
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: "queued", contactId: "contact_1" });
-    expect(enqueuedJobs).toHaveLength(1);
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0].dedupeKey).toBe("contact_1");
 
-    // 2. Drain the captured job through the real worker.
-    const outcome = await processor.process(enqueuedJobs[0]);
+    // 2. Run the captured task through the real worker.
+    const outcome = (await submitted[0].run(1)) as { status: string };
 
     // 3. The full chain resolved: REAPI → format → write-back.
     expect(realEstate.getPropertyDetailSubjectByParts).toHaveBeenCalledWith({
@@ -150,7 +141,7 @@ describe("auto-enrichment pipeline (endpoint → queue → worker → write)", (
     expect(outcome.status).toBe("enriched");
   });
 
-  it("unknown location acks 200 without enqueuing — nothing reaches the worker", async () => {
+  it("unknown location acks 200 without submitting — nothing reaches the worker", async () => {
     connections.getByLocationId.mockResolvedValue(null);
 
     const res = await request(app)
@@ -161,6 +152,6 @@ describe("auto-enrichment pipeline (endpoint → queue → worker → write)", (
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ status: "skipped", reason: "unknown location" });
-    expect(enqueuedJobs).toHaveLength(0);
+    expect(submitted).toHaveLength(0);
   });
 });

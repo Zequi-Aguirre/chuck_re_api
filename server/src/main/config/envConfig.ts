@@ -34,6 +34,12 @@ export class EnvConfig {
     // that at once a month — so a frequent, cheap cadence is safe. Default hourly.
     public readonly monthlyRestoreQueueName: string;
     public readonly monthlyRestoreCron: string;
+    /**
+     * JAK-197 — how often the in-process {@link import("../services/MonthlyCreditRestoreScheduler").MonthlyCreditRestoreScheduler}
+     * sweeps for due customers (ms). Replaces the BullMQ cron cadence; the sweep is a
+     * cheap no-op when nobody is due, so the default is hourly.
+     */
+    public readonly monthlyRestoreIntervalMs: number;
     // GHL auto-enrichment queue (JAK-181, epic JAK-180). Its OWN BullMQ queue on
     // the SAME Upstash Redis, sized so a bulk upload (e.g. a 500-lead file) drains
     // without hammering REAPI/GHL. `concurrency` caps how many jobs the JAK-183
@@ -141,6 +147,11 @@ export class EnvConfig {
         // per-customer guard makes a frequent cadence a no-op for anyone not due.
         this.monthlyRestoreQueueName = process.env.MONTHLY_RESTORE_QUEUE_NAME ?? "monthly-credit-restore";
         this.monthlyRestoreCron = process.env.MONTHLY_RESTORE_CRON ?? "0 * * * *";
+        // JAK-197 — in-process sweep cadence (ms). Default hourly, mirroring the old cron.
+        this.monthlyRestoreIntervalMs = positiveIntFromEnv(
+            process.env.MONTHLY_RESTORE_INTERVAL_MS,
+            60 * 60 * 1000
+        );
         // GHL auto-enrichment queue (JAK-181). Sensible defaults: a modest
         // concurrency cap that respects REAPI + GHL rate limits, bounded retries
         // with a 2s exponential-backoff base. `positiveIntFromEnv` rejects a

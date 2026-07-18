@@ -7,10 +7,10 @@
  *   job → resolve+normalize the property address → REAPI PropertyDetail lookup
  *       → PropertyDetailEnrichmentFormatter (JAK-184) → writeEnrichmentFields (JAK-185)
  *
- * It is a pure processor: {@link AutoEnrichmentQueueService} owns the BullMQ Worker
- * lifecycle (concurrency, retry/backoff, Redis) and calls {@link process} per job.
- * Keeping the pipeline here — free of BullMQ — makes it unit-testable with the DAO
- * + write-back mocked (no real REAPI/GHL).
+ * It is a pure processor: the JAK-197 {@link InProcessEnrichmentRunner} owns the
+ * concurrency + retry/backoff lifecycle and calls {@link process} per job. Keeping
+ * the pipeline here — free of any queue — makes it unit-testable with the DAO +
+ * write-back mocked (no real REAPI/GHL).
  *
  * Reuse, not reinvention:
  *   - address: {@link partsFromFields} builds CLEAN structured parts (JAK-193 — bare
