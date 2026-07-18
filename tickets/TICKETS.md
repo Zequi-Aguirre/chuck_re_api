@@ -24,12 +24,13 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-132** (P1) Feed FULL PropertySearch response to AI report writer; guarantee mortgage/foreclosure/lien flags surface — depends: JAK-130, JAK-131
 - [ ] **JAK-133** (P0) HOTFIX: restore edited-in-place applied migration (unbreak staging deploy) + adopt real-timestamp migration tooling — depends: JAK-132
 
-## Open (5)
+## Open (6)
 - [ ] **JAK-103** (P0) Token refresh service — depends: JAK-102
 - [ ] **JAK-117** (P1) Align DB config to house pattern (discrete DB_* vars, mirror Automator/Northstar)
 - [ ] **JAK-119** (P1) Retire legacy single-tenant GHL_API_KEY + GHL_BASE_URL path (chuck_re_api MVP leftovers)
 - [ ] **JAK-124** (P1) Admin management: logged-in admin can create another admin — depends: JAK-113
 - [ ] **JAK-149** (P1) Mobile-first admin pages: cards on mobile for all data tables, no horizontal scroll — depends: JAK-146
+- [ ] **JAK-198** (P3) Cleanup: remove stale Redis/BullMQ mentions in ghlEnrichment/README.md + dead redisUrl/upstash* fields in envConfig.ts — depends: JAK-197
 
 ## Deferred / blocked (4)
 - [ ] **JAK-150** (P3) [LATER] GHL Marketplace listing + approval requirements
@@ -37,7 +38,7 @@ Epic: `ghl-enrichment`
 - [ ] **JAK-152** (P3) [LATER] Onboarding: white-glove + self-serve field-mapping guide — depends: JAK-105
 - [ ] **JAK-153** (P3) [LATER] Privacy Policy + Terms pages for Jake
 
-## Done (43)
+## Done (44)
 - [x] **JAK-100** (P0) Project ticket store (SQLite in-repo)
 - [x] **JAK-101** (P0) GHL app scaffolding + Doppler config + env helper — depends: JAK-100
 - [x] **JAK-102** (P0) Encrypted connection/credential store — depends: JAK-101
@@ -81,3 +82,4 @@ Epic: `ghl-enrichment`
 - [x] **JAK-194** (P2) Fix owner-name enrichment write-back: catalog display name did not match Eric's GHL field. Set ownerOfRecord name to "Owner on record" (on, not of) + add fieldKey-first matching (fieldKey owner_of_record). Resolver indexes each field by both normalized fieldKey and display name; write-back resolves by stable fieldKey first, then name. Other 17 fields resolve by name unchanged; SMS path + Eric prompts untouched.
 - [x] **JAK-195** (P2) Enrich contacts with the FULL address crammed into address1 (city/state/zip empty). New buildAddressParts = partsFromFields(fields) ?? parseAddressLine(line1): structured fields win when present; otherwise line1 is parsed as a combined address string (JAK-193 partial-tolerant rules: bare-zip, state-from-zip, structured REAPI pass-through). SMS path untouched. — depends: JAK-193
 - [x] **JAK-196** (P2) Enrich contacts whose street field holds the WHOLE address (LLM + heuristic) — depends: JAK-195
+- [x] **JAK-197** (P0) Webhook-triggered in-process enrichment (kill always-on BullMQ Redis polling)
